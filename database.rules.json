@@ -1,0 +1,161 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "admin_settings": {
+      ".read": true,
+      ".write": "auth != null && (auth.token.role === 'master_admin' || root.child('master_admins').child(auth.uid).val() === true)",
+      ".validate": "newData.hasChildren(['appName', 'maintenanceMode', 'minDeposit', 'minWithdrawal', 'signupBonusAmount', 'firstDepositBonusPercent', 'referralBonusAmount', 'referralRequiredDays', 'referralDailyBetRequirement'])"
+    },
+
+    "master_admins": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      ".write": false
+    },
+
+    "users": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid === $uid || root.child('master_admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && (auth.uid === $uid || root.child('master_admins').child(auth.uid).val() === true)",
+        
+        "balance": {
+          ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+        },
+        "signupBonusStatus": {
+          ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+        },
+        "signupBonusAmount": {
+          ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+        },
+        "firstDepositBonusStatus": {
+          ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+        },
+        "firstDepositBonusAmount": {
+          ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+        },
+        "firstDepositApprovedAt": {
+          ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+        },
+        "status": {
+          ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+        },
+        "devices": {
+          "$deviceId": {
+            ".write": "auth != null && (auth.uid === $uid || root.child('master_admins').child(auth.uid).val() === true)",
+            "status": {
+              ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+            }
+          }
+        }
+      }
+    },
+
+    "transactions": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      "$txId": {
+        ".read": "auth != null && (data.child('uid').val() === auth.uid || root.child('master_admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+        ".validate": "newData.hasChildren(['uid', 'type', 'category', 'amount', 'balanceBefore', 'balanceAfter', 'timestamp', 'status']) && newData.child('amount').isNumber() && newData.child('amount').val() > 0"
+      }
+    },
+
+    "referrals": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      "$refId": {
+        ".read": "auth != null && (data.child('referrerUid').val() === auth.uid || root.child('master_admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+        ".validate": "newData.hasChildren(['referrerUid', 'referredUid', 'status', 'bonusAmount', 'registeredAt'])"
+      }
+    },
+
+    "deleted_uids": {
+      ".read": "auth != null",
+      ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+    },
+
+    "live_bets": {
+      ".read": "auth != null",
+      "$betId": {
+        ".write": "auth != null && (root.child('master_admins').child(auth.uid).val() === true || (newData.child('uid').val() === auth.uid && !data.exists() && newData.child('status').val() === 'pending'))",
+        ".validate": "newData.hasChildren(['uid', 'roundPeriod', 'amount', 'betValue', 'status']) && newData.child('amount').isNumber() && newData.child('amount').val() > 0"
+      }
+    },
+
+    "current_round": {
+      ".read": true,
+      ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+    },
+
+    "past_rounds": {
+      ".read": true,
+      ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+    },
+
+    "deposits": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      "$depositId": {
+        ".read": "auth != null && (data.child('uid').val() === auth.uid || root.child('master_admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && ((!data.exists() && newData.child('uid').val() === auth.uid && newData.child('status').val() === 'pending') || root.child('master_admins').child(auth.uid).val() === true)",
+        ".validate": "newData.hasChildren(['uid', 'amount', 'paymentMethod', 'referenceId', 'status']) && newData.child('amount').isNumber() && newData.child('amount').val() >= 100"
+      }
+    },
+
+    "withdrawals": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      "$withdrawalId": {
+        ".read": "auth != null && (data.child('uid').val() === auth.uid || root.child('master_admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && ((!data.exists() && newData.child('uid').val() === auth.uid && newData.child('status').val() === 'pending') || root.child('master_admins').child(auth.uid).val() === true)",
+        ".validate": "newData.hasChildren(['uid', 'amount', 'status', 'payoutMethod']) && newData.child('amount').isNumber() && newData.child('amount').val() >= 100"
+      }
+    },
+
+    "gift_codes": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      "$code": {
+        ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true && (newData.exists() || data.child('usedCount').val() === 0)",
+        "claimedBy": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": "auth != null && auth.uid === $uid && !data.exists()"
+          }
+        }
+      }
+    },
+
+    "feature_modules": {
+      ".read": true,
+      "$moduleId": {
+        ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+        ".validate": "newData.hasChildren(['id', 'name', 'category', 'enabled', 'visibleInUserApp', 'status'])"
+      }
+    },
+
+    "deleted_features_backup": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+    },
+
+    "deleted_users_backup": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+    },
+
+    "support_chat": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid === $uid || root.child('master_admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && (auth.uid === $uid || root.child('master_admins').child(auth.uid).val() === true)"
+      }
+    },
+
+    "audit_logs": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+    },
+
+    "admin_commands": {
+      ".read": "auth != null && root.child('master_admins').child(auth.uid).val() === true",
+      ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+    }
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "updatedAt": 1792899777141,
+  "users": {
+    "usr_9012634797": {
+      "uid": "usr_9012634797",
+      "phone": "9012634797",
+      "username": "Player_4797",
+      "balance": 0,
+      "vipLevel": 1,
+      "status": "active",
+      "createdAt": 1792895613227,
+      "lastActive": 1792898179585,
+      "isOnline": true,
+      "totalBetsCount": 0,
+      "totalWonAmount": 118.8,
+      "totalLostAmount": 0,
+      "referralCode": "PLAYE484",
+      "signupBonusStatus": "pending",
+      "signupBonusAmount": 120,
+      "firstDepositBonusStatus": "pending",
+      "firstDepositBonusAmount": 0,
+      "dailyBettingActivity": {
+        "2026-10-25": 2490
+      },
+      "devices": {
+        "dev_acw7e5m2_ja54": {
+          "deviceId": "dev_acw7e5m2_ja54",
+          "deviceName": "Linux Device (Chrome)",
+          "deviceModel": "Linux Device (Chrome)",
+          "osVersion": "Linux",
+          "browser": "Chrome",
+          "os": "Linux",
+          "registeredAt": 1792895613212,
+          "requestedAt": 1792895613212,
+          "lastUsedAt": 1792895613212,
+          "status": "approved"
+        }
+      },
+      "passwordHash": "123456",
+      "role": "user"
+    }
+  },
+  "referrals": [],
+  "deposits": [],
+  "withdrawals": [],
+  "transactions": [],
+  "deletedUserUids": [],
+  "approvedDepositReferences": [],
+  "adminSettings": {
+    "maintenanceMode": false,
+    "maintenanceMessage": "System Upgrade & Maintenance in Progress. Betting is temporarily paused. Your funds are 100% safe.",
+    "maintenanceEstimatedResumeTime": "",
+    "minDeposit": 250,
+    "maxDeposit": 100000,
+    "minWithdrawal": 500,
+    "maxWithdrawal": 50000,
+    "usdtErc20Address": "0xF600F72A9d4b9B0D6F6972a9037767ca7A9f3d45",
+    "usdtNetwork": "ERC20",
+    "minUsdtDeposit": 5,
+    "minUsdtWithdrawal": 10,
+    "usdtExchangeRate": 90,
+    "signupBonusAmount": 120,
+    "firstDepositBonusPercent": 100,
+    "firstDepositBonusMaxCap": 50000,
+    "referralBonusAmount": 120,
+    "referralRequiredDays": 10,
+    "referralDailyBetRequirement": 100,
+    "checkInBonuses": [
+      10,
+      25,
+      50,
+      80,
+      150,
+      250,
+      500
+    ],
+    "supportTelegram": "@colourWinAdmin",
+    "featureSignupBonus": true,
+    "featureFirstDepositBonus": true,
+    "featureReferrals": true,
+    "featureDeposits": true,
+    "featureWithdrawals": true,
+    "featureUsdtDeposit": true,
+    "featureUsdtWithdrawal": true,
+    "featureGiftCodes": true
+  }
+}

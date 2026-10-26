@@ -1,0 +1,6 @@
+{
+  "name": "Bingo777 — Pro App & Master Admin Suite",
+  "description": "Bingo777 independent high-performance gaming and color prediction platform featuring an authorized Master Admin console, real-time live bets, device approval workflows, bidirectional support chat, and Firebase synchronization.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

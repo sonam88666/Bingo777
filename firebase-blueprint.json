@@ -1,0 +1,248 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public and operational gaming profile for an authenticated player.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "balance": { "type": "number" },
+        "vipLevel": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "suspended", "banned", "deactivated"] },
+        "referralCode": { "type": "string", "maxLength": 32 },
+        "totalDeposited": { "type": "number" },
+        "totalWithdrawn": { "type": "number" },
+        "totalBetsCount": { "type": "number" },
+        "totalWonAmount": { "type": "number" },
+        "totalLostAmount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "username", "balance", "vipLevel", "status", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII document containing phone number and email for a user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "phone": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "phone", "createdAt", "updatedAt"]
+    },
+    "WalletTransaction": {
+      "title": "WalletTransaction",
+      "description": "Immutable financial ledger record for deposits, withdrawals, bets, payouts, and bonuses.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": {
+          "type": "string",
+          "enum": [
+            "deposit",
+            "withdrawal",
+            "withdrawal_refund",
+            "bet_placement",
+            "bet_cancel_refund",
+            "game_payout",
+            "gift_code",
+            "signup_bonus",
+            "first_deposit_bonus",
+            "referral_bonus",
+            "admin_credit",
+            "admin_debit",
+            "reconciliation_adjustment"
+          ]
+        },
+        "category": { "type": "string", "enum": ["credit", "debit"] },
+        "amount": { "type": "number" },
+        "balanceBefore": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "description": { "type": "string", "maxLength": 256 },
+        "status": { "type": "string", "enum": ["completed", "pending", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "type", "category", "amount", "balanceBefore", "balanceAfter", "description", "status", "createdAt"]
+    },
+    "DepositRequest": {
+      "title": "DepositRequest",
+      "description": "Player deposit request requiring Master Admin approval.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "maxLength": 64 },
+        "amount": { "type": "number" },
+        "method": { "type": "string", "enum": ["UPI", "USDT", "BANK"] },
+        "utrOrRef": { "type": "string", "minLength": 4, "maxLength": 64 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "username", "amount", "method", "utrOrRef", "status", "createdAt", "updatedAt"]
+    },
+    "WithdrawalRequest": {
+      "title": "WithdrawalRequest",
+      "description": "Player withdrawal request requiring Master Admin verification and payout.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "maxLength": 64 },
+        "amount": { "type": "number" },
+        "method": { "type": "string", "enum": ["UPI", "BANK"] },
+        "destination": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "username", "amount", "method", "destination", "status", "createdAt", "updatedAt"]
+    },
+    "LiveBet": {
+      "title": "LiveBet",
+      "description": "Player bet placed on an active game round.",
+      "type": "object",
+      "properties": {
+        "betId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "maxLength": 64 },
+        "roundPeriod": { "type": "string", "maxLength": 64 },
+        "gameType": { "type": "string", "enum": ["30s", "1min", "3min", "5min"] },
+        "betType": { "type": "string", "enum": ["color", "number", "size", "k3_sum", "k3_dice"] },
+        "betValue": { "type": "string", "maxLength": 32 },
+        "amount": { "type": "number" },
+        "multiplier": { "type": "number" },
+        "potentialPayout": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "won", "lost"] },
+        "actualPayout": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["betId", "uid", "username", "roundPeriod", "gameType", "betType", "betValue", "amount", "multiplier", "potentialPayout", "status", "actualPayout", "createdAt", "updatedAt"]
+    },
+    "GameRound": {
+      "title": "GameRound",
+      "description": "Official provably fair game round state and resolved result.",
+      "type": "object",
+      "properties": {
+        "period": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "gameType": { "type": "string", "enum": ["30s", "1min", "3min", "5min"] },
+        "winningNumber": { "type": "number" },
+        "winningSize": { "type": "string", "enum": ["big", "small"] },
+        "hash": { "type": "string", "maxLength": 128 },
+        "isResolved": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["period", "gameType", "winningNumber", "winningSize", "hash", "isResolved", "createdAt", "updatedAt"]
+    },
+    "GiftCode": {
+      "title": "GiftCode",
+      "description": "Promotional gift voucher configured by Master Admin.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "amount": { "type": "number" },
+        "maxUses": { "type": "number" },
+        "usedCount": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "amount", "maxUses", "usedCount", "isActive", "createdBy", "createdAt", "updatedAt"]
+    },
+    "PlatformSettings": {
+      "title": "PlatformSettings",
+      "description": "Global platform configuration, feature toggles, bonus rules, and multipliers.",
+      "type": "object",
+      "properties": {
+        "appName": { "type": "string", "maxLength": 64 },
+        "maintenanceMode": { "type": "boolean" },
+        "announcement": { "type": "string", "maxLength": 512 },
+        "zeroPlatformLossMode": { "type": "boolean" },
+        "signupBonusAmount": { "type": "number" },
+        "firstDepositBonusPercent": { "type": "number" },
+        "referralBonusAmount": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["appName", "maintenanceMode", "announcement", "zeroPlatformLossMode", "signupBonusAmount", "firstDepositBonusPercent", "referralBonusAmount", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable Master Admin security and financial audit log entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actor": { "type": "string", "maxLength": 128 },
+        "category": { "type": "string", "enum": ["AUTH", "FINANCIAL", "BALANCE", "DEVICE", "GAME_CONTROL", "SETTINGS", "FEATURE", "GIFT_CODE"] },
+        "action": { "type": "string", "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 512 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "actor", "category", "action", "details", "createdAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted Master Admin role registry document.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["master_admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public operational gaming profile per user."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Isolated PII document (phone, email) accessible strictly by owner or Master Admin."
+    },
+    "/transactions/{txId}": {
+      "schema": { "$ref": "#/entities/WalletTransaction" },
+      "description": "Immutable wallet transaction ledger."
+    },
+    "/deposits/{depositId}": {
+      "schema": { "$ref": "#/entities/DepositRequest" },
+      "description": "Deposit requests submitted by users and settled by Master Admin."
+    },
+    "/withdrawals/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/WithdrawalRequest" },
+      "description": "Withdrawal requests submitted by users and settled by Master Admin."
+    },
+    "/live_bets/{betId}": {
+      "schema": { "$ref": "#/entities/LiveBet" },
+      "description": "Player bets placed on game rounds."
+    },
+    "/rounds/{periodId}": {
+      "schema": { "$ref": "#/entities/GameRound" },
+      "description": "Official game rounds and outcomes."
+    },
+    "/gift_codes/{codeId}": {
+      "schema": { "$ref": "#/entities/GiftCode" },
+      "description": "Gift codes managed by Master Admin."
+    },
+    "/settings/{configId}": {
+      "schema": { "$ref": "#/entities/PlatformSettings" },
+      "description": "Global platform configuration and feature flags."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable Master Admin audit trail."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Trusted Master Admin registry."
+    }
+  }
+}
