@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { GameId, UserRecord } from '../../types';
 import { store } from '../../services/store';
+import { firebaseSync } from '../../services/firebaseSync';
 import { useToast } from '../common/Toast';
 
 interface GameLobbyProps {
@@ -46,6 +47,25 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<'all' | 'lottery' | 'crash' | 'cards' | 'mines'>('all');
   const [activeBannerIndex, setActiveBannerIndex] = useState(0);
   const [, setStoreTick] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatusText, setSyncStatusText] = useState('Live Synced');
+
+  const handleForceRefresh = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await firebaseSync.forceSyncFromFirebase();
+      if (res.success) {
+        setSyncStatusText(`Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+        showToast('Live Results & Wallet Balance Synchronized with Firebase!', 'success');
+      } else {
+        showToast('Synchronized with local cache', 'info');
+      }
+    } catch {
+      showToast('Sync attempt failed', 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Subscribe to store so lobby immediately reflects games being enabled/disabled in real time
   useEffect(() => {
@@ -298,6 +318,31 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
 
   return (
     <div className="max-w-xl mx-auto px-3 sm:px-4 py-3 space-y-4">
+      {/* Real-time Cloud Sync & Force Refresh Quick Bar */}
+      <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-slate-900/90 border border-amber-500/30 backdrop-blur-md shadow-md text-xs">
+        <div className="flex items-center space-x-2 min-w-0">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          <span className="text-[11px] font-bold text-slate-300 truncate">
+            Cloud Sync: <span className="text-emerald-400 font-semibold">{syncStatusText}</span>
+          </span>
+          {store.currentRound?.period && (
+            <span className="hidden sm:inline text-[10px] font-mono text-amber-400/90 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 shrink-0">
+              P: {store.currentRound.period.slice(-4)}
+            </span>
+          )}
+        </div>
+
+        <button
+          onClick={handleForceRefresh}
+          disabled={isSyncing}
+          className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 hover:text-amber-200 border border-amber-500/30 text-[11px] font-bold active:scale-95 transition disabled:opacity-50 shrink-0"
+          title="Force refresh game results and wallet balance from Firebase cloud"
+        >
+          <RotateCw className={`w-3 h-3 ${isSyncing ? 'animate-spin text-amber-400' : ''}`} />
+          <span>{isSyncing ? 'Refreshing...' : 'Force Refresh'}</span>
+        </button>
+      </div>
+
       {/* 1. Grand Progressive Jackpot Live Ticker Box */}
       {showJackpotBanner && (
         <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-amber-950/80 via-slate-900 to-amber-950/80 border border-amber-500/40 p-3 sm:p-4 shadow-xl flex items-center justify-between">

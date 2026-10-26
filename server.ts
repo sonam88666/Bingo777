@@ -538,6 +538,46 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' }));
 
+  // CORS middleware to ensure PWABuilder, external tools, and clients can fetch manifests & assets
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+
+  // Explicit PWA Manifest & Service Worker Endpoints with CORS
+  app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
+    res.setHeader('Content-Type', 'application/manifest+json');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const manifestPath = path.resolve(__dirname, 'public', 'manifest.json');
+    if (fs.existsSync(manifestPath)) {
+      return res.sendFile(manifestPath);
+    }
+    return res.json({
+      name: "Bingo777 — Pro Gaming & Admin Suite",
+      short_name: "Bingo777",
+      description: "Bingo777 independent high-performance gaming and color prediction platform with Ludo 1v1, Live Quiz Battle, Aviator Crash, MLM Affiliate & Master Admin Suite.",
+      start_url: "/",
+      display: "standalone",
+      background_color: "#020617",
+      theme_color: "#020617"
+    });
+  });
+
+  app.get('/sw.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const swPath = path.resolve(__dirname, 'public', 'sw.js');
+    if (fs.existsSync(swPath)) {
+      return res.sendFile(swPath);
+    }
+    return res.send('self.addEventListener("fetch", () => {});');
+  });
+
   // ----------------------------------------------------
   // BACKEND API ROUTES: AUTHENTICATION & FINANCIALS
   // ----------------------------------------------------

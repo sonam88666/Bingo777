@@ -1,1 +1,50 @@
-{"name":"Bingo777 — Pro Gaming & Admin Suite","short_name":"Bingo777","description":"Bingo777 independent high-performance gaming and color prediction platform with Ludo 1v1, Live Quiz Battle, Aviator Crash, MLM Affiliate & Master Admin Suite.","start_url":"/","display":"standalone","background_color":"#020617","theme_color":"#020617","lang":"en","scope":"/","id":"/","orientation":"portrait","categories":["games","entertainment","finance"],"icons":[{"src":"/pwa-192x192.png","sizes":"192x192","type":"image/png","purpose":"any"},{"src":"/pwa-512x512.png","sizes":"512x512","type":"image/png","purpose":"any"},{"src":"/pwa-maskable-512x512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}]}
+{
+  "name": "Bingo777 — Pro Gaming & Admin Suite",
+  "short_name": "Bingo777",
+  "description": "Bingo777 independent high-performance gaming and color prediction platform with Ludo 1v1, Live Quiz Battle, Aviator Crash, MLM Affiliate & Master Admin Suite.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "lang": "en",
+  "scope": "/",
+  "id": "/",
+  "orientation": "portrait",
+  "categories": ["games", "entertainment", "finance"],
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Bingo777 Gaming Arena"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Bingo777 Mobile"
+    }
+  ]
+}

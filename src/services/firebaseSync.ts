@@ -12,7 +12,7 @@ import {
   rtdbUpdate
 } from '../firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { UserRecord, WalletTransaction, DepositRecord, WithdrawalRecord, LiveBet, AdminSettings } from '../types';
+import { UserRecord, WalletTransaction, DepositRecord, WithdrawalRecord, LiveBet, AdminSettings, GameRound } from '../types';
 import { store } from './store';
 
 class FirebaseSyncService {
@@ -25,6 +25,8 @@ class FirebaseSyncService {
     this.initAuthListener();
     this.bindStoreHooks();
     this.attachRealtimeAdminSettingsSync();
+    this.attachRealtimeGameRoundsSync();
+    this.attachRealtimeGlobalEntitiesSync();
   }
 
   private bindStoreHooks() {
@@ -46,9 +48,111 @@ class FirebaseSyncService {
     store.onAdminSettingsSaved = (settings) => {
       this.pushAdminSettingsToRtdb(settings);
     };
+    store.onRoundSynced = (round) => {
+      this.pushRoundToRtdb(round);
+    };
     store.onAviatorRoundSynced = (round, liveMult) => {
       this.pushAviatorRoundToFirestore(round, liveMult);
     };
+  }
+
+  public async pushRoundToRtdb(round: GameRound): Promise<void> {
+    if (!round || !round.period || !round.gameType) return;
+    try {
+      await rtdbSet(rtdbRef(rtdb, `wingo_rounds/${round.gameType}`), {
+        period: round.period,
+        gameType: round.gameType,
+        startTime: round.startTime,
+        endTime: round.endTime,
+        winningNumber: round.winningNumber,
+        winningColor: round.winningColor || [],
+        winningSize: round.winningSize || 'small',
+        totalBetVolume: round.totalBetVolume || 0,
+        totalPayout: round.totalPayout || 0,
+        hash: round.hash || '',
+        isResolved: Boolean(round.isResolved),
+        manualOverrideNumber: round.manualOverrideNumber ?? null,
+        updatedAt: Date.now()
+      });
+    } catch (e) {
+      console.warn('pushRoundToRtdb error:', e);
+    }
+  }
+
+  public attachRealtimeGameRoundsSync() {
+    if (typeof window === 'undefined') return;
+    const modes: Array<'30s' | '1min' | '3min'> = ['30s', '1min', '3min'];
+    modes.forEach((mode) => {
+      try {
+        rtdbOnValue(rtdbRef(rtdb, `wingo_rounds/${mode}`), (snapshot) => {
+          if (snapshot.exists()) {
+            const data = snapshot.val();
+            if (data && typeof data === 'object') {
+              store.ingestCloudRound(data);
+            }
+          }
+        });
+      } catch (err) {
+        console.warn('attachRealtimeGameRoundsSync error:', err);
+      }
+    });
+  }
+
+  public attachRealtimeGlobalEntitiesSync() {
+    if (typeof window === 'undefined') return;
+    try {
+      rtdbOnValue(rtdbRef(rtdb, 'deposits'), (snapshot) => {
+        if (snapshot.exists()) {
+          const val = snapshot.val();
+          if (val && typeof val === 'object') {
+            Object.values(val).forEach((d: unknown) => {
+              const dep = d as DepositRecord;
+              if (dep && dep.id) store.ingestCloudDeposit(dep);
+            });
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('deposits listener error:', e);
+    }
+
+    try {
+      rtdbOnValue(rtdbRef(rtdb, 'withdrawals'), (snapshot) => {
+        if (snapshot.exists()) {
+          const val = snapshot.val();
+          if (val && typeof val === 'object') {
+            Object.values(val).forEach((w: unknown) => {
+              const item = w as WithdrawalRecord;
+              if (item && item.id) store.ingestCloudWithdrawal(item);
+            });
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('withdrawals listener error:', e);
+    }
+
+    try {
+      rtdbOnValue(rtdbRef(rtdb, 'live_bets'), (snapshot) => {
+        if (snapshot.exists()) {
+          const val = snapshot.val();
+          if (val && typeof val === 'object') {
+            Object.values(val).forEach((b: unknown) => {
+              const bet = b as LiveBet;
+              if (bet && bet.betId) {
+                const existing = store.liveBets.find((item) => item.betId === bet.betId);
+                if (!existing) {
+                  store.liveBets.unshift(bet);
+                  store.notifyLightweight();
+                }
+              }
+            });
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('live_bets listener error:', e);
+    }
   }
 
   private lastSyncedAviatorRoundKey: string = '';
@@ -490,6 +594,121 @@ class FirebaseSyncService {
       });
     } catch {
       // Non-blocking
+    }
+  }
+
+  /**
+   * Manually triggers an immediate force re-sync with Firebase Realtime Database
+   * and Firestore, bypassing cached states and updating balance, game results, and transactions.
+   */
+  public async forceSyncFromFirebase(): Promise<{ success: boolean; message: string; balance?: number; period?: string }> {
+    const currentUser = store.currentUser;
+    let newBalance = currentUser?.balance;
+    let latestPeriod = store.currentRound?.period;
+
+    try {
+      // 1. Force sync active user balance & profile from RTDB
+      if (currentUser?.uid) {
+        try {
+          const userSnapshot = await rtdbGet(rtdbRef(rtdb, `users/${currentUser.uid}`));
+          if (userSnapshot.exists()) {
+            const data = userSnapshot.val();
+            if (data && typeof data === 'object') {
+              store.updateUserFromFirestore({
+                uid: currentUser.uid,
+                phone: data.phone || currentUser.phone,
+                username: data.username || currentUser.username,
+                balance: typeof data.balance === 'number' ? data.balance : undefined,
+                vipLevel: typeof data.vipLevel === 'number' ? data.vipLevel : undefined,
+                status: data.status || 'active',
+                totalBetsCount: data.totalBetsCount,
+                totalWonAmount: data.totalWonAmount,
+                totalLostAmount: data.totalLostAmount
+              });
+              if (typeof data.balance === 'number') {
+                newBalance = data.balance;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Force sync user error:', e);
+        }
+      }
+
+      // 2. Force sync latest WinGo active rounds for all modes
+      const modes: Array<'30s' | '1min' | '3min'> = ['30s', '1min', '3min'];
+      await Promise.all(
+        modes.map(async (mode) => {
+          try {
+            const roundSnap = await rtdbGet(rtdbRef(rtdb, `wingo_rounds/${mode}`));
+            if (roundSnap.exists()) {
+              const val = roundSnap.val();
+              if (val && typeof val === 'object') {
+                store.ingestCloudRound(val);
+                if (val.period) latestPeriod = val.period;
+              }
+            }
+          } catch (e) {
+            console.warn(`Force sync round ${mode} error:`, e);
+          }
+        })
+      );
+
+      // 3. Force sync latest Admin Settings
+      try {
+        const settingsSnap = await rtdbGet(rtdbRef(rtdb, 'admin_settings'));
+        if (settingsSnap.exists()) {
+          const settingsVal = settingsSnap.val();
+          if (settingsVal && typeof settingsVal === 'object') {
+            store.ingestCloudAdminSettings(settingsVal);
+          }
+        }
+      } catch (e) {
+        console.warn('Force sync settings error:', e);
+      }
+
+      // 4. Force sync deposits & withdrawals
+      try {
+        const depSnap = await rtdbGet(rtdbRef(rtdb, 'deposits'));
+        if (depSnap.exists()) {
+          const deps = depSnap.val();
+          if (deps && typeof deps === 'object') {
+            Object.values(deps).forEach((d: unknown) => {
+              const dep = d as DepositRecord;
+              if (dep && dep.id) store.ingestCloudDeposit(dep);
+            });
+          }
+        }
+      } catch {}
+
+      try {
+        const wSnap = await rtdbGet(rtdbRef(rtdb, 'withdrawals'));
+        if (wSnap.exists()) {
+          const wData = wSnap.val();
+          if (wData && typeof wData === 'object') {
+            Object.values(wData).forEach((w: unknown) => {
+              const item = w as WithdrawalRecord;
+              if (item && item.id) store.ingestCloudWithdrawal(item);
+            });
+          }
+        }
+      } catch {}
+
+      // Refresh store notification
+      store.safeNotifyListeners();
+
+      return {
+        success: true,
+        message: 'Live state synchronized successfully with Firebase!',
+        balance: newBalance,
+        period: latestPeriod
+      };
+    } catch (err) {
+      console.error('Force sync error:', err);
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : 'Sync failed'
+      };
     }
   }
 }

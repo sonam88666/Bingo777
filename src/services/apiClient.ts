@@ -15,6 +15,18 @@ export interface ApiResponse<T = unknown> {
 export class FinancialApiClient {
   private baseUrl = '';
 
+  constructor() {
+    if (typeof window !== 'undefined') {
+      const isMobileNative =
+        Boolean((window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } })?.Capacitor?.isNativePlatform?.()) ||
+        window.location.protocol === 'capacitor:' ||
+        (window.location.hostname === 'localhost' && !window.location.port);
+      if (isMobileNative) {
+        this.baseUrl = 'https://ais-dev-pmwrs5h3t3yeonukogyqv6-957762447213.asia-southeast1.run.app';
+      }
+    }
+  }
+
   private getAuthHeaders(masterToken?: string): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json'

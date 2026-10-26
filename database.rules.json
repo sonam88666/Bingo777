@@ -82,9 +82,14 @@
       }
     },
 
+    "wingo_rounds": {
+      ".read": true,
+      ".write": true
+    },
+
     "current_round": {
       ".read": true,
-      ".write": "auth != null && root.child('master_admins').child(auth.uid).val() === true"
+      ".write": true
     },
 
     "past_rounds": {

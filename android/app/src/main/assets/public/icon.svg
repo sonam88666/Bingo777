@@ -1,19 +1,165 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#020617" />
-      <stop offset="50%" stop-color="#0f172a" />
-      <stop offset="100%" stop-color="#1e1b4b" />
+    <!-- Background Canvas Gradient -->
+    <radialGradient id="canvasBg" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="60%" stop-color="#020617" />
+      <stop offset="100%" stop-color="#000000" />
+    </radialGradient>
+
+    <!-- 3D Gold Rim Gradient -->
+    <linearGradient id="b777_gold_rim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFBEB" />
+      <stop offset="25%" stop-color="#FBBF24" />
+      <stop offset="50%" stop-color="#D97706" />
+      <stop offset="75%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#78350F" />
     </linearGradient>
-    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#fde047" />
-      <stop offset="50%" stop-color="#f59e0b" />
-      <stop offset="100%" stop-color="#b45309" />
+
+    <!-- Inner Shield Bevel 3D Gradient -->
+    <linearGradient id="b777_gold_inner" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FEF08A" />
+      <stop offset="50%" stop-color="#B45309" />
+      <stop offset="100%" stop-color="#FDE047" />
+    </linearGradient>
+
+    <!-- Deep Casino Ruby & Obsidian Shield Surface -->
+    <radialGradient id="b777_shield_bg" cx="50%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#991B1B" />
+      <stop offset="45%" stop-color="#450A0A" />
+      <stop offset="85%" stop-color="#0F172A" />
+      <stop offset="100%" stop-color="#020617" />
+    </radialGradient>
+
+    <!-- 3D Extrusion Gold for 777 -->
+    <linearGradient id="b777_num_front" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="20%" stop-color="#FEF08A" />
+      <stop offset="55%" stop-color="#F59E0B" />
+      <stop offset="85%" stop-color="#B45309" />
+      <stop offset="100%" stop-color="#78350F" />
+    </linearGradient>
+
+    <!-- 3D Side Depth -->
+    <linearGradient id="b777_side_shadow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#78350F" />
+      <stop offset="100%" stop-color="#451A03" />
+    </linearGradient>
+
+    <!-- Specular Glow Filter -->
+    <filter id="b777_glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <!-- Glossy Reflection -->
+    <linearGradient id="b777_gloss" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.45" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
-  <rect x="20" y="20" width="472" height="472" rx="96" fill="none" stroke="url(#goldGrad)" stroke-width="10" stroke-opacity="0.45" />
-  <circle cx="256" cy="210" r="108" fill="url(#goldGrad)" opacity="0.15" />
-  <path d="M256 96 C210 150, 168 188, 168 244 C168 294, 207 334, 256 334 C305 334, 344 294, 344 244 C344 205, 320 172, 296 144 C292 172, 274 188, 258 188 C272 158, 270 124, 256 96 Z" fill="url(#goldGrad)" />
-  <text x="256" y="422" font-family="Cinzel, Georgia, serif" font-weight="900" font-size="68" text-anchor="middle" fill="url(#goldGrad)" letter-spacing="4">777</text>
+
+  <!-- App Icon Squircle Container -->
+  <rect width="512" height="512" rx="112" fill="url(#canvasBg)" />
+  <rect x="12" y="12" width="488" height="488" rx="100" fill="none" stroke="url(#b777_gold_rim)" stroke-width="6" stroke-opacity="0.6" />
+
+  <!-- Centered Scaled 3D Badge (Scale ~2.2x from 200x200) -->
+  <g transform="translate(36, 36) scale(2.2)">
+    <!-- 1. Deep 3D Shadow Cast -->
+    <ellipse cx="100" cy="184" rx="72" ry="14" fill="#000000" opacity="0.75" />
+
+    <!-- 2. Outer Shield 3D Metallic Gold Chamfered Base -->
+    <path
+      d="M100 8 L180 34 C180 115 148 162 100 186 C52 162 20 115 20 34 L100 8 Z"
+      fill="url(#b777_gold_rim)"
+      stroke="#78350F"
+      stroke-width="2"
+    />
+
+    <!-- 3. Outer Shield 3D Inset Lip -->
+    <path
+      d="M100 14 L174 38 C174 112 144 156 100 179 C56 156 26 112 26 38 L100 14 Z"
+      fill="#1E1B4B"
+    />
+
+    <!-- 4. Golden Inner Filigree Ring -->
+    <path
+      d="M100 18 L168 42 C168 110 140 151 100 173 C60 151 32 110 32 42 L100 18 Z"
+      fill="url(#b777_gold_inner)"
+    />
+
+    <!-- 5. Deep Ruby Enamel Shield Face -->
+    <path
+      d="M100 24 L162 46 C162 108 136 145 100 166 C64 145 38 108 38 46 L100 24 Z"
+      fill="url(#b777_shield_bg)"
+    />
+
+    <!-- 6. Glossy Curved Glass Reflection -->
+    <path
+      d="M100 25 L160 47 C155 76 130 92 100 92 C70 92 45 76 40 47 L100 25 Z"
+      fill="url(#b777_gloss)"
+    />
+
+    <!-- 7. Arc Ribbon Badge: 'B I N G O' -->
+    <g transform="translate(0, -2)">
+      <path
+        d="M48 64 Q100 48 152 64 L148 80 Q100 66 52 80 Z"
+        fill="url(#b777_gold_rim)"
+        stroke="#78350F"
+        stroke-width="1.5"
+      />
+      <path
+        d="M50 65 Q100 49 150 65"
+        stroke="#FFFBEB"
+        stroke-width="1"
+        stroke-linecap="round"
+      />
+      <text
+        x="100"
+        y="74"
+        text-anchor="middle"
+        fill="#0F172A"
+        font-size="14"
+        font-weight="900"
+        font-family="sans-serif"
+        letter-spacing="3"
+        style="text-shadow: 0 1px 0 #FEF08A"
+      >
+        B I N G O
+      </text>
+    </g>
+
+    <!-- 8. 3D Bold '7 7 7' Casino Numbers -->
+    <g filter="url(#b777_glow)">
+      <!-- Left '7' -->
+      <path d="M56 94 H84 L69 146 H54 L69 98 H56 Z" fill="url(#b777_side_shadow)" />
+      <path d="M54 92 H82 L66 144 H52 L67 96 H54 Z" fill="url(#b777_num_front)" stroke="#FEF08A" stroke-width="0.8" />
+
+      <!-- Center Dominant '7' -->
+      <path d="M87 88 H123 L104 150 H87 L104 93 H87 Z" fill="url(#b777_side_shadow)" />
+      <path d="M85 85 H121 L101 148 H84 L101 90 H85 Z" fill="url(#b777_num_front)" stroke="#FFFBEB" stroke-width="1.2" />
+
+      <!-- Right '7' -->
+      <path d="M124 94 H152 L137 146 H122 L137 98 H124 Z" fill="url(#b777_side_shadow)" />
+      <path d="M122 92 H150 L134 144 H120 L135 96 H122 Z" fill="url(#b777_num_front)" stroke="#FEF08A" stroke-width="0.8" />
+    </g>
+
+    <!-- 9. Sparkling Diamond Gems -->
+    <g transform="translate(42, 38)">
+      <path d="M0 -7 Q0 0 7 0 Q0 0 0 7 Q0 0 -7 0 Q0 0 0 -7 Z" fill="#FFFBEB" />
+      <circle cx="0" cy="0" r="2" fill="#FBBF24" />
+    </g>
+    <g transform="translate(100, 15)">
+      <path d="M0 -9 Q0 0 9 0 Q0 0 0 9 Q0 0 -9 0 Q0 0 0 -9 Z" fill="#FFFFFF" />
+      <circle cx="0" cy="0" r="2.5" fill="#FEF08A" />
+    </g>
+    <g transform="translate(158, 40)">
+      <path d="M0 -7 Q0 0 7 0 Q0 0 0 7 Q0 0 -7 0 Q0 0 0 -7 Z" fill="#FFFBEB" />
+      <circle cx="0" cy="0" r="2" fill="#FBBF24" />
+    </g>
+    <g transform="translate(102, 88)">
+      <path d="M0 -5 Q0 0 5 0 Q0 0 0 5 Q0 0 -5 0 Q0 0 0 -5 Z" fill="#FFFFFF" />
+    </g>
+  </g>
 </svg>

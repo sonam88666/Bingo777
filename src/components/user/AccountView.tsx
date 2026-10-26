@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { UserRecord, DeviceRecord } from '../../types';
 import { store } from '../../services/store';
+import { firebaseSync } from '../../services/firebaseSync';
 import { useToast } from '../common/Toast';
 import { soundFx, AudioSettingsState } from '../../services/soundFx';
 import { AppUpdateModal } from './AppUpdateModal';
@@ -56,6 +57,25 @@ export const AccountView: React.FC<AccountViewProps> = ({
   onLogout
 }) => {
   const { showToast } = useToast();
+  const [isForceSyncing, setIsForceSyncing] = useState(false);
+  const [lastSyncedTime, setLastSyncedTime] = useState<string>('Live');
+
+  const handleForceRefresh = async () => {
+    setIsForceSyncing(true);
+    try {
+      const res = await firebaseSync.forceSyncFromFirebase();
+      if (res.success) {
+        setLastSyncedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        showToast(`Cloud Re-Sync Complete! Balance: ₹${(res.balance ?? user.balance).toFixed(2)}`, 'success');
+      } else {
+        showToast('Firebase Re-Sync completed.', 'info');
+      }
+    } catch {
+      showToast('Firebase sync failed. Please check network.', 'error');
+    } finally {
+      setIsForceSyncing(false);
+    }
+  };
 
   // Persistent Audio Settings State from browser localStorage
   const [audioSettings, setAudioSettings] = useState<AudioSettingsState>(() => soundFx.getAudioSettings());
@@ -161,6 +181,33 @@ export const AccountView: React.FC<AccountViewProps> = ({
             </button>
           </div>
         )}
+      </div>
+
+      {/* Cloud Live Sync & Force Refresh Card */}
+      <div className="p-3 bg-gradient-to-r from-slate-900 via-slate-900/90 to-amber-950/20 rounded-2xl border border-amber-500/30 shadow-lg flex items-center justify-between gap-3">
+        <div className="flex items-center space-x-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+            <RefreshCw className={`w-4 h-4 ${isForceSyncing ? 'animate-spin text-amber-300' : ''}`} />
+          </div>
+          <div className="min-w-0">
+            <div className="text-xs font-black text-amber-300 flex items-center space-x-1.5 truncate">
+              <span>Firebase Cloud Sync</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            </div>
+            <div className="text-[10px] text-slate-400">
+              Status: <span className="font-mono text-emerald-400">{isForceSyncing ? 'Synchronizing...' : lastSyncedTime}</span>
+            </div>
+          </div>
+        </div>
+
+        <button
+          onClick={handleForceRefresh}
+          disabled={isForceSyncing}
+          className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-400 text-slate-950 font-black text-xs shadow-md shadow-amber-500/20 active:scale-95 transition flex items-center space-x-1.5 disabled:opacity-60 shrink-0"
+        >
+          <RefreshCw className={`w-3 h-3 ${isForceSyncing ? 'animate-spin' : ''}`} />
+          <span>{isForceSyncing ? 'Syncing...' : 'Force Refresh'}</span>
+        </button>
       </div>
 
       {/* Stats Breakdown Grid */}

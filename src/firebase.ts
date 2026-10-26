@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInAnonymously } from 'firebase/auth';
 import {
   initializeFirestore,
   doc,
@@ -31,6 +31,15 @@ export const db = initializeFirestore(
 export const rtdb = firebaseConfig.databaseURL ? getDatabase(app, firebaseConfig.databaseURL) : getDatabase(app);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Automatically ensure an active Firebase Auth session exists so RTDB & Firestore permissions pass
+if (typeof window !== 'undefined') {
+  if (!auth.currentUser) {
+    signInAnonymously(auth).catch((err) => {
+      console.warn('Firebase anonymous auth init:', err?.message || err);
+    });
+  }
+}
 
 export enum OperationType {
   CREATE = 'create',

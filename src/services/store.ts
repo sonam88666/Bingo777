@@ -2017,16 +2017,37 @@ class AuthoritativeStore {
   }
 
   // --- ROUND GENERATORS ---
+  // --- UNIVERSAL SYNCHRONIZED ROUND GENERATORS ---
   public generateNewRound(gameType: '30s' | '1min' | '3min' | '5min' = '30s'): GameRound {
     const duration = gameType === '30s' ? 30000 : gameType === '1min' ? 60000 : gameType === '3min' ? 180000 : 300000;
     const now = Date.now();
-    const prefix = gameType === '30s' ? '202610130' : gameType === '1min' ? '202610131' : '202610133';
-    const periodSeq = this.getNextRoundSeq(this.pastRounds, prefix, this.activeRoundsByMode[gameType as '30s' | '1min' | '3min']?.period);
+    
+    // Aligned to exact wall-clock boundaries so every device (Admin & APK) runs in lockstep
+    const startTime = Math.floor(now / duration) * duration;
+    const endTime = startTime + duration;
+
+    // Deterministic date prefix: YYYYMMDD in UTC
+    const d = new Date(startTime);
+    const year = d.getUTCFullYear();
+    const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    const dateStr = `${year}${month}${day}`;
+
+    // Mode Code: 30s -> '0', 1min -> '1', 3min -> '3', 5min -> '5'
+    const modeCode = gameType === '30s' ? '0' : gameType === '1min' ? '1' : gameType === '3min' ? '3' : '5';
+
+    // Seconds elapsed since UTC midnight
+    const utcMidnight = Date.UTC(year, d.getUTCMonth(), d.getUTCDate());
+    const secondsToday = Math.floor((startTime - utcMidnight) / 1000);
+    const roundIndex = Math.floor(secondsToday / (duration / 1000)) + 1;
+    const periodSeq = roundIndex.toString().padStart(4, '0');
+    const period = `${dateStr}${modeCode}${periodSeq}`;
+
     return {
-      period: `${prefix}${periodSeq}`,
+      period,
       gameType: gameType as '30s' | '1min' | '3min',
-      startTime: now,
-      endTime: now + duration,
+      startTime,
+      endTime,
       winningNumber: -1,
       winningColor: [],
       winningSize: 'small',
@@ -2060,13 +2081,21 @@ class AuthoritativeStore {
   }
 
   public generateNewTrxRound(gameType: '1min' | '3min' = '1min'): GameRound {
+    const duration = gameType === '1min' ? 60000 : 180000;
     const now = Date.now();
-    const periodSeq = this.getNextRoundSeq(this.trxPastRounds, 'TRX20261013', this.trxCurrentRound?.period);
+    const startTime = Math.floor(now / duration) * duration;
+    const endTime = startTime + duration;
+    const d = new Date(startTime);
+    const dateStr = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
+    const utcMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    const roundIndex = Math.floor((startTime - utcMidnight) / duration) + 1;
+    const period = `TRX${dateStr}${gameType === '1min' ? '1' : '3'}${roundIndex.toString().padStart(4, '0')}`;
+
     return {
-      period: `TRX20261013${periodSeq}`,
+      period,
       gameType: gameType as '1min' | '3min' | '5min',
-      startTime: now,
-      endTime: now + (gameType === '1min' ? 60000 : 180000),
+      startTime,
+      endTime,
       winningNumber: -1,
       winningColor: [],
       winningSize: 'small',
@@ -3381,6 +3410,15 @@ class AuthoritativeStore {
       this.currentRound = nextRound;
     }
 
+    if (this.onRoundSynced) {
+      try {
+        this.onRoundSynced(completedRound);
+        this.onRoundSynced(nextRound);
+      } catch (e) {
+        console.warn('onRoundSynced error:', e);
+      }
+    }
+
     // Dispatch authoritative settlement notices for every participant in this round
     Object.entries(userSettledBetsMap).forEach(([uid, settledBets]) => {
       const totalBetAmount = settledBets.reduce((sum, bet) => sum + bet.amount, 0);
@@ -3710,6 +3748,9 @@ class AuthoritativeStore {
       action: 'SET_ROUND_OUTCOME_OVERRIDE',
       details: number !== null ? `Set outcome override for period ${targetRound.period} (${targetRound.gameType}) to number ${number}` : 'Cleared manual override to Auto RNG'
     });
+    if (this.onRoundSynced) {
+      try { this.onRoundSynced(targetRound); } catch (e) { console.warn('onRoundSynced error:', e); }
+    }
     this.notify();
   }
 
@@ -5334,6 +5375,44 @@ class AuthoritativeStore {
   public onWithdrawalSaved?: (w: WithdrawalRecord) => void;
   public onLiveBetSaved?: (bet: LiveBet) => void;
   public onAdminSettingsSaved?: (settings: AdminSettings) => void;
+  public onRoundSynced?: (round: GameRound) => void;
+
+  public ingestCloudRound(round: Partial<GameRound>) {
+    if (!round || !round.period || !round.gameType) return;
+    const mode = round.gameType as '30s' | '1min' | '3min';
+    let target = this.activeRoundsByMode[mode];
+    if (!target || target.period !== round.period) {
+      target = {
+        period: round.period,
+        gameType: mode,
+        startTime: round.startTime || Date.now(),
+        endTime: round.endTime || Date.now() + 30000,
+        winningNumber: round.winningNumber ?? -1,
+        winningColor: round.winningColor || [],
+        winningSize: round.winningSize || 'small',
+        totalBetVolume: round.totalBetVolume || 0,
+        totalPayout: round.totalPayout || 0,
+        hash: round.hash || 'SHA256_' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+        isResolved: Boolean(round.isResolved),
+        manualOverrideNumber: round.manualOverrideNumber ?? null
+      };
+      this.activeRoundsByMode[mode] = target;
+    } else {
+      if (round.manualOverrideNumber !== undefined) {
+        target.manualOverrideNumber = round.manualOverrideNumber;
+      }
+      if (round.isResolved && !target.isResolved) {
+        target.isResolved = true;
+        target.winningNumber = round.winningNumber ?? target.winningNumber;
+        target.winningColor = round.winningColor || target.winningColor;
+        target.winningSize = round.winningSize || target.winningSize;
+      }
+    }
+    if (this.currentRound.gameType === mode) {
+      this.currentRound = target;
+    }
+    this.safeNotifyListeners();
+  }
 
   public ingestCloudDeposit(dep: DepositRecord) {
     if (!dep || !dep.id || !dep.uid) return;
