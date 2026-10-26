@@ -18,11 +18,13 @@ import {
   Edit3,
   ArrowLeft,
   Trash2,
-  RotateCcw
+  RotateCcw,
+  RefreshCw
 } from 'lucide-react';
 import { UserRecord } from '../../types';
 import { store } from '../../services/store';
 import { apiClient } from '../../services/apiClient';
+import { firebaseSync } from '../../services/firebaseSync';
 import { useToast } from '../common/Toast';
 
 interface AdminUsersProps {
@@ -38,6 +40,23 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   }, []);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'active' | 'admins' | 'banned'>('all');
+  const [isSyncingFirebase, setIsSyncingFirebase] = useState(false);
+
+  const handleForceFirebaseSync = async () => {
+    setIsSyncingFirebase(true);
+    try {
+      const res = await firebaseSync.forceSyncFromFirebase();
+      if (res.success) {
+        showToast(`Firebase Synced! Total Users: ${Object.keys(store.getUsers()).length}`, 'success');
+      } else {
+        showToast(res.message || 'Firebase Sync error', 'error');
+      }
+    } catch {
+      showToast('Firebase Sync failed', 'error');
+    } finally {
+      setIsSyncingFirebase(false);
+    }
+  };
 
   // Dedicated User Details Sub-Screen State
   const [selectedUserUid, setSelectedUserUid] = useState<string | null>(null);
@@ -899,16 +918,29 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   // ============================================================================
   return (
     <div className="space-y-4">
-      {/* Search Bar */}
-      <div className="relative">
-        <Search className="w-4 h-4 text-slate-400 absolute left-4 top-3.5" />
-        <input
-          type="text"
-          placeholder="Search by UID, name, phone..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full bg-white border border-slate-200/90 rounded-2xl pl-11 pr-4 py-3 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:border-blue-600"
-        />
+      {/* Search Bar + Firebase Sync Button */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="w-4 h-4 text-slate-400 absolute left-4 top-3.5" />
+          <input
+            type="text"
+            placeholder="Search by UID, name, phone..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full bg-white border border-slate-200/90 rounded-2xl pl-11 pr-4 py-3 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:border-blue-600"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={handleForceFirebaseSync}
+          disabled={isSyncingFirebase}
+          className="px-3.5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs flex items-center space-x-1.5 shadow-sm transition shrink-0"
+          title="Force Sync all players and balances from Firebase Realtime Database"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isSyncingFirebase ? 'animate-spin' : ''}`} />
+          <span className="hidden sm:inline">Sync Firebase</span>
+          <span className="sm:hidden">Sync</span>
+        </button>
       </div>
 
       {/* Segmented Filter Pills matching Reference Image + Admins (X/5) */}

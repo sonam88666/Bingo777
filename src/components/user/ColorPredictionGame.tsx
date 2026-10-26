@@ -70,8 +70,9 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
   // Round countdown timer loop
   useEffect(() => {
     const updateCountdown = () => {
+      const freshRound = store.ensureRoundFreshness(selectedGameType);
       const now = Date.now();
-      const diff = Math.max(0, Math.floor((currentRound.endTime - now) / 1000));
+      const diff = Math.max(0, Math.floor((freshRound.endTime - now) / 1000));
       setTimeLeft(diff);
       const locked = diff <= 5;
       setIsLocked(locked);
@@ -81,8 +82,8 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
         soundFx.playCountdownTick(diff <= 2);
       }
 
-      // Auto resolve when time expires if enabled
-      if (diff === 0 && adminSettings.autoGameResolution) {
+      // Auto resolve when time expires and unlock next round
+      if (diff === 0) {
         store.resolveRound(undefined, selectedGameType);
         showToast(`Win Go ${selectedGameType} round ended! Results updated.`, 'info');
       }
@@ -92,7 +93,7 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
     const timer = setInterval(updateCountdown, 1000);
 
     return () => clearInterval(timer);
-  }, [currentRound, adminSettings.autoGameResolution, showToast, selectedGameType]);
+  }, [currentRound, showToast, selectedGameType]);
 
   const totalBetAmount = chipAmount * multiplier;
 

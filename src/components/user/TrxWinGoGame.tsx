@@ -45,8 +45,9 @@ export const TrxWinGoGame: React.FC<TrxWinGoGameProps> = ({
 
   useEffect(() => {
     const timer = setInterval(() => {
+      const freshRound = store.ensureTrxRoundFreshness();
       const now = Date.now();
-      const diff = Math.max(0, Math.floor((trxRound.endTime - now) / 1000));
+      const diff = Math.max(0, Math.floor((freshRound.endTime - now) / 1000));
       setTimeLeft(diff);
 
       if (diff === 0) {

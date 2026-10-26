@@ -3272,8 +3272,16 @@ class AuthoritativeStore {
       ? this.activeRoundsByMode[targetMode]!
       : this.currentRound;
 
+    const resolvingGameType = (roundToResolve.gameType || targetMode || '30s') as '30s' | '1min' | '3min';
     const resolvingPeriod = roundToResolve.period;
     if (this.resolvedPeriodIds.has(resolvingPeriod)) {
+      // Ensure we immediately advance past the already resolved period so countdown unlocks
+      const nextRound = this.generateNewRound(resolvingGameType);
+      this.activeRoundsByMode[resolvingGameType] = nextRound;
+      if (this.currentRound.gameType === resolvingGameType || !targetMode) {
+        this.currentRound = nextRound;
+      }
+      this.notify();
       return;
     }
     this.resolvedPeriodIds.add(resolvingPeriod);
@@ -3339,7 +3347,6 @@ class AuthoritativeStore {
       winningNum = Math.floor(Math.random() * 10);
     }
 
-    const resolvingGameType = (roundToResolve.gameType || '30s') as '30s' | '1min' | '3min';
     const winningColors: BetColor[] = winningNum === 0 ? ['red', 'violet'] : winningNum === 5 ? ['green', 'violet'] : winningNum % 2 === 0 ? ['red'] : ['green'];
     const winningSize: BetSize = winningNum >= 5 ? 'big' : 'small';
     let totalRoundPayout = 0;
@@ -3462,6 +3469,8 @@ class AuthoritativeStore {
   public resolveTrxRound(overrideNumber?: number) {
     const resolvingPeriod = this.trxCurrentRound.period;
     if (this.resolvedPeriodIds.has(resolvingPeriod)) {
+      this.trxCurrentRound = this.generateNewTrxRound('1min');
+      this.notify();
       return;
     }
     this.resolvedPeriodIds.add(resolvingPeriod);
@@ -3635,6 +3644,39 @@ class AuthoritativeStore {
 
     // 5. Reconcile any late or orphaned pending bets whose period already resolved
     this.reconcilePendingBetsFromHistory();
+  }
+
+  public ensureRoundFreshness(gameType: '30s' | '1min' | '3min' = '30s'): GameRound {
+    let round = this.activeRoundsByMode[gameType] || this.currentRound;
+    const now = Date.now();
+    if (round.endTime <= now) {
+      this.resolveRound(undefined, gameType);
+      round = this.activeRoundsByMode[gameType] || this.currentRound;
+      if (round.endTime <= now) {
+        round = this.generateNewRound(gameType);
+        this.activeRoundsByMode[gameType] = round;
+        if (this.currentRound.gameType === gameType) {
+          this.currentRound = round;
+        }
+        this.notify();
+      }
+    }
+    return round;
+  }
+
+  public ensureTrxRoundFreshness(): GameRound {
+    let round = this.trxCurrentRound;
+    const now = Date.now();
+    if (round.endTime <= now) {
+      this.resolveTrxRound();
+      round = this.trxCurrentRound;
+      if (round.endTime <= now) {
+        round = this.generateNewTrxRound('1min');
+        this.trxCurrentRound = round;
+        this.notify();
+      }
+    }
+    return round;
   }
 
   private reconcilePendingBetsFromHistory() {
@@ -5496,7 +5538,10 @@ class AuthoritativeStore {
     if (!userData.uid || this.deletedUserUids.has(userData.uid)) return;
 
     const existing = this.users[userData.uid];
-    const verifiedBalance = this.computeVerifiedLedgerBalance(userData.uid);
+    const incomingBal = typeof userData.balance === 'number' ? userData.balance : 0;
+    const computedBal = this.computeVerifiedLedgerBalance(userData.uid);
+    const verifiedBalance = incomingBal > 0 ? incomingBal : computedBal;
+
     if (existing) {
       const cleanPhone = this.normalizePhone(userData.phone) || this.normalizePhone(existing.phone);
       this.users[userData.uid] = {

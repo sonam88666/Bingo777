@@ -153,6 +153,24 @@ class FirebaseSyncService {
     } catch (e) {
       console.warn('live_bets listener error:', e);
     }
+
+    try {
+      rtdbOnValue(rtdbRef(rtdb, 'users'), (snapshot) => {
+        if (snapshot.exists()) {
+          const val = snapshot.val();
+          if (val && typeof val === 'object') {
+            Object.values(val).forEach((u: unknown) => {
+              const cloudUser = u as Partial<UserRecord>;
+              if (cloudUser && cloudUser.uid) {
+                store.updateUserFromFirestore(cloudUser as Partial<UserRecord> & { uid: string });
+              }
+            });
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('users listener error:', e);
+    }
   }
 
   private lastSyncedAviatorRoundKey: string = '';
@@ -693,6 +711,24 @@ class FirebaseSyncService {
           }
         }
       } catch {}
+
+      // 5. Force sync all registered players from /users
+      try {
+        const usersSnap = await rtdbGet(rtdbRef(rtdb, 'users'));
+        if (usersSnap.exists()) {
+          const allUsers = usersSnap.val();
+          if (allUsers && typeof allUsers === 'object') {
+            Object.values(allUsers).forEach((u: unknown) => {
+              const cloudUser = u as Partial<UserRecord>;
+              if (cloudUser && cloudUser.uid) {
+                store.updateUserFromFirestore(cloudUser as Partial<UserRecord> & { uid: string });
+              }
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Force sync users error:', e);
+      }
 
       // Refresh store notification
       store.safeNotifyListeners();
