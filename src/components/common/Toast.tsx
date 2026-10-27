@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'info';
@@ -17,13 +17,39 @@ const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const recentToastsRef = useRef<Map<string, number>>(new Map());
 
   const showToast = useCallback((message: string, type: ToastType = 'info') => {
+    const cleanMsg = String(message || '').trim();
+    if (!cleanMsg) return;
+
+    // Suppress accidental low-level network/HTML parse errors from spamming UI
+    const lower = cleanMsg.toLowerCase();
+    if (
+      lower.includes("unexpected token '<'") ||
+      lower.includes('<!doctype') ||
+      lower.includes('is not valid json') ||
+      lower.includes('failed to fetch') ||
+      lower.includes('networkerror')
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    const lastShown = recentToastsRef.current.get(cleanMsg) || 0;
+    if (now - lastShown < 3500) {
+      return;
+    }
+    recentToastsRef.current.set(cleanMsg, now);
+
     const id = Math.random().toString(36).substring(2, 9);
-    setToasts((prev) => [...prev, { id, type, message }]);
+    setToasts((prev) => {
+      if (prev.some((t) => t.message === cleanMsg)) return prev;
+      return [...prev.slice(-2), { id, type, message: cleanMsg }];
+    });
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
+    }, 3500);
   }, []);
 
   const removeToast = (id: string) => {

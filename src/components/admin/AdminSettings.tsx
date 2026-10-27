@@ -40,7 +40,21 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
   const [newUpiSetAsActive, setNewUpiSetAsActive] = useState(false);
 
   React.useEffect(() => {
-    return store.subscribe(() => setTick((t) => t + 1));
+    return store.subscribe(() => {
+      setTick((t) => t + 1);
+      const liveSettings = store.getAdminSettings();
+      setFormState((prev) => {
+        if (prev.maintenanceMode !== Boolean(liveSettings.maintenanceMode)) {
+          return {
+            ...prev,
+            maintenanceMode: Boolean(liveSettings.maintenanceMode),
+            maintenanceMessage: liveSettings.maintenanceMessage || prev.maintenanceMessage,
+            maintenanceEstimatedResumeTime: liveSettings.maintenanceEstimatedResumeTime ?? prev.maintenanceEstimatedResumeTime
+          };
+        }
+        return prev;
+      });
+    });
   }, []);
 
   const allUsers = Object.values(store.getUsers());

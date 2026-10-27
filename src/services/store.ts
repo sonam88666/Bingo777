@@ -839,18 +839,27 @@ class AuthoritativeStore {
   private lastBetActionAtByUid: Record<string, number> = {};
   private recentTxTimestampsByUid: Record<string, number[]> = {};
   private backgroundSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private serverTimeOffset: number = 0;
+
+  public setServerTimeOffset(offsetMs: number): void {
+    if (typeof offsetMs === 'number' && Number.isFinite(offsetMs)) {
+      this.serverTimeOffset = offsetMs;
+    }
+  }
+
+  public getServerNow(): number {
+    return Date.now() + this.serverTimeOffset;
+  }
 
   constructor() {
-    // 1. Load permanently deleted UIDs registry to prevent reactivation
     this.deletedUserUids = new Set();
     try {
-      const deletedJson = safeStorage.getItem('bingo777_deleted_uids') || safeStorage.getItem('maanwin_deleted_uids');
-      if (deletedJson) {
-        const arr = JSON.parse(deletedJson);
-        if (Array.isArray(arr)) {
-          arr.forEach((id: string) => this.deletedUserUids.add(id));
-        }
-      }
+      // Deprecate & purge legacy local storage dumps so multi-device Firebase state is never overridden
+      safeStorage.removeItem('bingo777_rtdb_store');
+      safeStorage.removeItem('maanwin_rtdb_store');
+      safeStorage.removeItem('bingo777_permanent_users_v1');
+      safeStorage.removeItem('bingo777_backup_auto');
+
       const ackJson = safeStorage.getItem('bingo777_ack_results');
       if (ackJson) {
         const ackArr = JSON.parse(ackJson);
@@ -858,205 +867,28 @@ class AuthoritativeStore {
           ackArr.forEach((id: string) => this.acknowledgedResultIds.add(id));
         }
       }
-    } catch (e) {
-      console.warn('Failed parsing deleted UIDs or acknowledged results:', e);
-    }
+    } catch {}
 
-    // 2. Load or migrate store data (Always merge permanent user registry so accounts never disappear)
-    const saved = safeStorage.getItem('bingo777_rtdb_store') || safeStorage.getItem('maanwin_rtdb_store');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        
-        this.transactions = Array.isArray(parsed.transactions) ? parsed.transactions : INITIAL_TRANSACTIONS;
-
-        // Filter out any users who were deleted and merge with permanent user registry
-        const rawUsers = parsed.users || INITIAL_USERS;
-        const sanitizedUsers: Record<string, UserRecord> = {};
-        Object.keys(rawUsers).forEach((uid) => {
-          if (!this.deletedUserUids.has(uid) && rawUsers[uid]) {
-            const u = rawUsers[uid];
-            sanitizedUsers[uid] = {
-              ...u,
-              balance: Number.isFinite(Number(u.balance)) ? Number(u.balance) : 0,
-              totalWonAmount: Number.isFinite(Number(u.totalWonAmount)) ? Number(u.totalWonAmount) : 0,
-              totalLostAmount: Number.isFinite(Number(u.totalLostAmount)) ? Number(u.totalLostAmount) : 0,
-              totalBetsCount: Number.isFinite(Number(u.totalBetsCount)) ? Number(u.totalBetsCount) : 0
-            };
-          }
-        });
-
-        this.users = this.mergeAllStoredUsers(sanitizedUsers);
-        this.liveBets = Array.isArray(parsed.liveBets) ? parsed.liveBets : [];
-        this.pastRounds = this.deduplicateRounds(parsed.pastRounds || []);
-        this.deposits = Array.isArray(parsed.deposits) ? parsed.deposits : INITIAL_DEPOSITS;
-        this.withdrawals = Array.isArray(parsed.withdrawals) ? parsed.withdrawals : INITIAL_WITHDRAWALS;
-        this.giftCodes = parsed.giftCodes && typeof parsed.giftCodes === 'object' ? parsed.giftCodes : INITIAL_GIFT_CODES;
-        this.supportMessages = Array.isArray(parsed.supportMessages) ? parsed.supportMessages : INITIAL_SUPPORT_MESSAGES;
-        const loadedSettings = parsed.adminSettings ? { ...DEFAULT_ADMIN_SETTINGS, ...parsed.adminSettings, appName: 'Bingo777' } : DEFAULT_ADMIN_SETTINGS;
-        if (!loadedSettings.supportTelegram || loadedSettings.supportTelegram === '@Bingo777OfficialSupport') {
-          loadedSettings.supportTelegram = '@colourWinAdmin';
-        }
-        if (
-          !loadedSettings.officialUpiId ||
-          loadedSettings.officialUpiId === 'bingo777.pay@oksbi' ||
-          loadedSettings.officialUpiId === 'maanwin.pay@oksbi'
-        ) {
-          loadedSettings.officialUpiId = 'BHARATPE09905641446@yesbankltd';
-        }
-        if (
-          !loadedSettings.officialUpiName ||
-          loadedSettings.officialUpiName === 'BINGO777 OFFICIAL ENTERPRISES' ||
-          loadedSettings.officialUpiName === 'MAAN WIN REAL ENTERPRISES'
-        ) {
-          loadedSettings.officialUpiName = 'BHARATPE ENTERPRISES';
-        }
-        loadedSettings.upiId = loadedSettings.officialUpiId;
-        loadedSettings.upiMerchantName = loadedSettings.officialUpiName;
-        if (!loadedSettings.secondaryUpiId) {
-          loadedSettings.secondaryUpiId = 'suman.1299@superyes';
-        }
-        if (!loadedSettings.secondaryUpiName) {
-          loadedSettings.secondaryUpiName = 'SUMAN ENTERPRISES';
-        }
-        if (!Array.isArray(loadedSettings.checkInBonuses) || loadedSettings.checkInBonuses.length < 7) {
-          loadedSettings.checkInBonuses = [10, 25, 50, 80, 150, 250, 500];
-        }
-        if (!loadedSettings.minDeposit || loadedSettings.minDeposit === 100) {
-          loadedSettings.minDeposit = 250;
-        }
-        if (!loadedSettings.minWithdrawal || loadedSettings.minWithdrawal === 300 || loadedSettings.minWithdrawal === 200) {
-          loadedSettings.minWithdrawal = 500;
-        }
-        if (!loadedSettings.usdtErc20Address) {
-          loadedSettings.usdtErc20Address = '0xF600F72A9d4b9B0D6F6972a9037767ca7A9f3d45';
-        }
-        if (!loadedSettings.usdtNetwork) {
-          loadedSettings.usdtNetwork = 'ERC20';
-        }
-        if (!loadedSettings.minUsdtDeposit) {
-          loadedSettings.minUsdtDeposit = 5;
-        }
-        if (!loadedSettings.minUsdtWithdrawal) {
-          loadedSettings.minUsdtWithdrawal = 10;
-        }
-        if (!loadedSettings.usdtExchangeRate) {
-          loadedSettings.usdtExchangeRate = 90;
-        }
-        this.adminSettings = loadedSettings;
-        this.auditLogs = Array.isArray(parsed.auditLogs) ? parsed.auditLogs : INITIAL_AUDIT_LOGS;
-        const defaultFbCfg: FirebaseConnectionConfig = {
-          databaseUrl: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
-          databaseURL: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
-          projectId: 'gen-lang-client-0859410588',
-          apiKey: 'AIzaSyB8OQZI2dXCQIphSrPU1dSUsWdx5POAVf4',
-          enabled: true
-        };
-        if (
-          parsed.firebaseConfig &&
-          parsed.firebaseConfig.databaseURL &&
-          !String(parsed.firebaseConfig.databaseURL).includes('bingo777-4a510')
-        ) {
-          this.firebaseConfig = {
-            ...defaultFbCfg,
-            ...parsed.firebaseConfig,
-            enabled: parsed.firebaseConfig.enabled !== false
-          };
-        } else {
-          this.firebaseConfig = defaultFbCfg;
-        }
-        this.referrals = Array.isArray(parsed.referrals) ? parsed.referrals : INITIAL_REFERRALS;
-        this.featureModules = parsed.featureModules
-          ? { ...INITIAL_FEATURE_MODULES, ...parsed.featureModules }
-          : { ...INITIAL_FEATURE_MODULES };
-        this.deletedFeaturesBackup = parsed.deletedFeaturesBackup || {};
-        this.deletedUsersBackup = parsed.deletedUsersBackup || {};
-        if (parsed.settlementNotices && typeof parsed.settlementNotices === 'object') {
-          this.settlementNotices = parsed.settlementNotices;
-        }
-        if (parsed.acknowledgedResultIds && Array.isArray(parsed.acknowledgedResultIds)) {
-          parsed.acknowledgedResultIds.forEach((id: string) => this.acknowledgedResultIds.add(id));
-        }
-        if (Array.isArray(parsed.aviatorPastCrashes) && parsed.aviatorPastCrashes.length > 0) {
-          this.aviatorPastCrashes = parsed.aviatorPastCrashes.filter(
-            (c: unknown): c is number => typeof c === 'number' && Number.isFinite(c) && c >= 1.0
-          );
-        }
-        if (typeof parsed.aviatorTotalStaked === 'number' && Number.isFinite(parsed.aviatorTotalStaked)) {
-          this.aviatorTotalStaked = Math.max(0, parsed.aviatorTotalStaked);
-        }
-        if (typeof parsed.aviatorTotalPaidOut === 'number' && Number.isFinite(parsed.aviatorTotalPaidOut)) {
-          this.aviatorTotalPaidOut = Math.max(0, parsed.aviatorTotalPaidOut);
-        }
-        if (Array.isArray(parsed.aviatorSessionRounds)) {
-          this.aviatorSessionRounds = parsed.aviatorSessionRounds.slice(0, 50);
-        }
-        if (Array.isArray(parsed.aviatorHistoryItems)) {
-          this.aviatorHistoryItems = parsed.aviatorHistoryItems.slice(0, 50);
-        }
-        if (parsed.aviatorEngineConfig && typeof parsed.aviatorEngineConfig === 'object') {
-          this.aviatorEngineConfig = {
-            ...this.aviatorEngineConfig,
-            ...parsed.aviatorEngineConfig,
-            enabled: true,
-            paused: false
-          };
-        }
-        if (typeof parsed.aviatorRoundNonce === 'number' && parsed.aviatorRoundNonce >= 1000) {
-          this.aviatorRoundNonce = parsed.aviatorRoundNonce;
-        }
-        if (Array.isArray(parsed.userNotifications) && parsed.userNotifications.length > 0) {
-          this.userNotifications = parsed.userNotifications;
-        } else {
-          this.userNotifications = [...INITIAL_USER_NOTIFICATIONS];
-        }
-      } catch {
-        this.users = this.mergeAllStoredUsers(this.getSanitizedInitialUsers());
-        this.liveBets = [];
-        this.pastRounds = [];
-        this.deposits = INITIAL_DEPOSITS;
-        this.withdrawals = INITIAL_WITHDRAWALS;
-        this.giftCodes = INITIAL_GIFT_CODES;
-        this.supportMessages = INITIAL_SUPPORT_MESSAGES;
-        this.adminSettings = DEFAULT_ADMIN_SETTINGS;
-        this.auditLogs = INITIAL_AUDIT_LOGS;
-        this.firebaseConfig = {
-          databaseUrl: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
-          databaseURL: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
-          projectId: 'gen-lang-client-0859410588',
-          apiKey: 'AIzaSyB8OQZI2dXCQIphSrPU1dSUsWdx5POAVf4',
-          enabled: true
-        };
-        this.transactions = INITIAL_TRANSACTIONS;
-        this.referrals = INITIAL_REFERRALS;
-        this.featureModules = { ...INITIAL_FEATURE_MODULES };
-        this.userNotifications = [...INITIAL_USER_NOTIFICATIONS];
-      }
-    } else {
-      this.users = this.mergeAllStoredUsers(this.getSanitizedInitialUsers());
-      this.liveBets = [];
-      this.pastRounds = [];
-      this.deposits = INITIAL_DEPOSITS;
-      this.withdrawals = INITIAL_WITHDRAWALS;
-      this.giftCodes = INITIAL_GIFT_CODES;
-      this.supportMessages = INITIAL_SUPPORT_MESSAGES;
-      this.adminSettings = DEFAULT_ADMIN_SETTINGS;
-      this.auditLogs = INITIAL_AUDIT_LOGS;
-      this.firebaseConfig = {
-        databaseUrl: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
-        databaseURL: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
-        projectId: 'gen-lang-client-0859410588',
-        apiKey: 'AIzaSyB8OQZI2dXCQIphSrPU1dSUsWdx5POAVf4',
-        enabled: true
-      };
-      this.transactions = INITIAL_TRANSACTIONS;
-      this.referrals = INITIAL_REFERRALS;
-      this.featureModules = { ...INITIAL_FEATURE_MODULES };
-      this.userNotifications = [...INITIAL_USER_NOTIFICATIONS];
-    }
-
-    // Auto backup on initialization
-    this.backupDataBeforeMigration();
+    this.users = this.getSanitizedInitialUsers();
+    this.liveBets = [];
+    this.pastRounds = [];
+    this.deposits = INITIAL_DEPOSITS;
+    this.withdrawals = INITIAL_WITHDRAWALS;
+    this.giftCodes = INITIAL_GIFT_CODES;
+    this.supportMessages = INITIAL_SUPPORT_MESSAGES;
+    this.adminSettings = { ...DEFAULT_ADMIN_SETTINGS, maintenanceMode: false };
+    this.auditLogs = INITIAL_AUDIT_LOGS;
+    this.firebaseConfig = {
+      databaseUrl: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
+      databaseURL: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
+      projectId: 'gen-lang-client-0859410588',
+      apiKey: 'AIzaSyB8OQZI2dXCQIphSrPU1dSUsWdx5POAVf4',
+      enabled: true
+    };
+    this.transactions = INITIAL_TRANSACTIONS;
+    this.referrals = INITIAL_REFERRALS;
+    this.featureModules = { ...INITIAL_FEATURE_MODULES };
+    this.userNotifications = [...INITIAL_USER_NOTIFICATIONS];
 
     // Immediately purge any cached demo users, demo deposits, and demo transactions
     this.purgeDemoRecords();
@@ -1064,20 +896,20 @@ class AuthoritativeStore {
     // Ensure all user UIDs are unique IDs and NEVER phone numbers
     this.sanitizeUserUids();
 
-    // Ensure all 3 Win Go timeframes (30s, 1min, 3min) have an equal 30-period history list
-    this.normalizeWinGoPastRounds(30);
-
     this.currentRound = this.generateNewRound('30s');
     this.activeRoundsByMode['30s'] = this.currentRound;
     this.activeRoundsByMode['1min'] = this.generateNewRound('1min');
     this.activeRoundsByMode['3min'] = this.generateNewRound('3min');
+
+    // Ensure all 3 Win Go timeframes (30s, 1min, 3min) have an equal 30-period history list
+    this.normalizeWinGoPastRounds(30);
 
     // Initialize TRX Win Go
     this.trxPastRounds = [];
     this.seedTrxRounds();
     this.trxCurrentRound = this.generateNewTrxRound('1min');
 
-    // Initialize Aviator with Provably Fair crash history (natural statistical distribution: low, medium, and occasional high)
+    // Initialize Aviator with Provably Fair crash history
     this.aviatorPastCrashes = (this.aviatorPastCrashes || []).filter(
       (c) => typeof c === 'number' && Number.isFinite(c) && c >= 1.0
     );
@@ -1104,9 +936,9 @@ class AuthoritativeStore {
       this.aviatorEngineConfig.maxMultiplierCap
     );
     this.aviatorCurrentRound = {
-      roundId: `av_${this.aviatorRoundNonce}_${Date.now()}`,
+      roundId: `av_${this.aviatorRoundNonce}_${this.getServerNow()}`,
       roundNumber: this.aviatorRoundNonce,
-      startTime: Date.now() + 5000,
+      startTime: this.getServerNow() + 5000,
       crashMultiplier: initPf.crashMultiplier,
       status: 'waiting',
       serverSeedHash: initPf.serverSeedHash,
@@ -1116,7 +948,6 @@ class AuthoritativeStore {
       bets: {}
     };
 
-    // Start real-time server synchronization for Aviator
     if (typeof window !== 'undefined') {
       this.startAviatorRealtimeSync();
     }
@@ -1131,7 +962,7 @@ class AuthoritativeStore {
     this.seedFiveDRounds();
     this.fiveDCurrentRound = this.generateNewFiveDRound();
 
-    // Reconcile any orphaned pending bets from previous session
+    // Reconcile any orphaned pending bets
     this.reconcilePendingBetsFromHistory();
 
     if (typeof window !== 'undefined') {
@@ -1139,62 +970,32 @@ class AuthoritativeStore {
         try {
           this.broadcastChannel = new BroadcastChannel('bingo777_sync_channel');
           this.broadcastChannel.onmessage = (event) => {
-            if (event.data === 'sync_needed') {
-              this.reloadFromStorage();
-            } else if (event.data && typeof event.data === 'object' && event.data.type === 'user_deleted') {
+            if (event.data && typeof event.data === 'object' && event.data.type === 'user_deleted') {
               delete this.users[event.data.uid];
               this.deletedUserUids.add(event.data.uid);
-              this.notify();
+              this.safeNotifyListeners();
             } else if (event.data && typeof event.data === 'object' && event.data.type === 'settlement_notice') {
               const incoming: RoundSettlementNotice = event.data.notice;
-              if (incoming && incoming.resultId) {
-                this.reloadFromStorage();
-                if (!this.isResultAcknowledged(incoming.resultId)) {
-                  this.settlementListeners.forEach((listener) => {
-                    try {
-                      listener(incoming);
-                    } catch (err) {
-                      console.error('Settlement broadcast listener error:', err);
-                    }
-                  });
-                }
-              }
-            } else if (event.data && typeof event.data === 'object' && event.data.type === 'user_notification') {
-              const incomingNotif: UserNotification = event.data.notification;
-              if (incomingNotif && incomingNotif.id) {
-                this.reloadFromStorage();
-                this.userNotificationListeners.forEach((listener) => {
+              if (incoming && incoming.resultId && !this.isResultAcknowledged(incoming.resultId)) {
+                this.settlementListeners.forEach((listener) => {
                   try {
-                    listener(incomingNotif);
-                  } catch (err) {
-                    console.error('Notification broadcast listener error:', err);
-                  }
+                    listener(incoming);
+                  } catch {}
                 });
               }
             }
           };
-        } catch (e) {
-          console.warn('BroadcastChannel error:', e);
-        }
+        } catch {}
       }
 
-      // Global background lifecycle & round settlement watchdog (handles navigation, tab switches, and background/foreground resume)
+      // Global background lifecycle & round settlement watchdog aligned to server time
       setInterval(() => {
         this.checkAndResolveExpiredRounds();
       }, 1000);
 
-      // Synchronize permanent user accounts & financial ledger with backend disk store on boot and in real time
-      setTimeout(() => {
-        this.syncUsersWithBackend();
-      }, 200);
-      setInterval(() => {
-        this.syncUsersWithBackend();
-      }, 3000);
-
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
           this.checkAndResolveExpiredRounds();
-          this.syncUsersWithBackend();
           this.safeNotifyListeners();
         }
       });
@@ -1506,11 +1307,11 @@ class AuthoritativeStore {
       uid: targetUid,
       phone: cleanPhone || existing.phone || incoming.phone || '',
       username: incoming.username || existing.username,
-      passwordHash: existing.passwordHash || incoming.passwordHash,
-      referralCode: existing.referralCode || incoming.referralCode,
+      passwordHash: incoming.passwordHash || existing.passwordHash,
+      referralCode: incoming.referralCode || existing.referralCode,
       referredBy: existing.referredBy || incoming.referredBy,
       balance: verifiedBalance,
-      vipLevel: Math.max(existing.vipLevel || 1, incoming.vipLevel || 1),
+      vipLevel: typeof incoming.vipLevel === 'number' ? incoming.vipLevel : (existing.vipLevel || 1),
       role: incoming.role || existing.role || 'user',
       devices: { ...(existing.devices || {}), ...(incoming.devices || {}) }
     };
@@ -1536,192 +1337,21 @@ class AuthoritativeStore {
     };
 
     // 1. Auto backup users (fallback)
-    try {
-      const backupRaw = safeStorage.getItem('bingo777_backup_auto');
-      if (backupRaw) {
-        const parsedBackup = JSON.parse(backupRaw);
-        if (parsedBackup && parsedBackup.users) {
-          addMap(parsedBackup.users);
-        }
-      }
-    } catch {}
-
-    // 2. Base users from main store
+    // 1. Base users
     addMap(baseUsers);
 
-    // 3. Dedicated permanent user registry (highest local durability)
-    try {
-      const permRaw = safeStorage.getItem('bingo777_permanent_users_v1');
-      if (permRaw) {
-        const parsedPerm = JSON.parse(permRaw);
-        if (parsedPerm && typeof parsedPerm === 'object') {
-          addMap(parsedPerm);
-        }
-      }
-    } catch {}
-
-    // 4. Current in-memory users (never lose active session registrations)
+    // 2. Current in-memory users (synced in real time with Firebase RTDB & Firestore)
     addMap(this.users);
 
     return merged;
   }
 
   private savePermanentUsersRegistry() {
-    try {
-      if (!this.users) return;
-      safeStorage.setItem('bingo777_permanent_users_v1', JSON.stringify(this.users));
-    } catch (e) {
-      console.warn('Failed saving permanent users registry:', e);
-    }
+    // Deprecated local storage user registry — all users are persisted directly in Firebase RTDB (/users) & Firestore
   }
 
   public async syncUsersWithBackend(): Promise<void> {
-    if (typeof window === 'undefined') return;
-    try {
-      this.enforceAllUsersLedgerIntegrity();
-      const res = await fetch('/api/auth/sync-users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          users: this.users,
-          transactions: (this.transactions || []).slice(0, 500),
-          deposits: (this.deposits || []).slice(0, 300),
-          withdrawals: (this.withdrawals || []).slice(0, 300)
-        })
-      });
-      if (!res.ok) return;
-      const text = await res.text();
-      if (!text || text.trim().startsWith('<')) return;
-      const data = JSON.parse(text);
-      if (data && data.success) {
-        let updated = false;
-
-        if (Array.isArray(data.deletedUserUids)) {
-          data.deletedUserUids.forEach((id: string) => {
-            if (!this.deletedUserUids.has(id)) {
-              this.deletedUserUids.add(id);
-              delete this.users[id];
-              updated = true;
-            }
-          });
-        }
-
-        // Ingest server deposits BEFORE transactions so approved deposits validate deposit credits
-        if (Array.isArray(data.deposits) && data.deposits.length > 0) {
-          for (const sDep of data.deposits) {
-            if (!sDep || !sDep.id) continue;
-            const existingDep = this.deposits.find((d) => d.id === sDep.id);
-            if (!existingDep) {
-              this.deposits.unshift(sDep);
-              updated = true;
-            } else if (existingDep.status !== sDep.status) {
-              existingDep.status = sDep.status;
-              existingDep.reviewedAt = sDep.reviewedAt;
-              existingDep.reviewedBy = sDep.reviewedBy;
-              existingDep.adminNote = sDep.adminNote;
-              updated = true;
-            }
-          }
-        }
-
-        // Ingest server withdrawals
-        if (Array.isArray(data.withdrawals) && data.withdrawals.length > 0) {
-          for (const sW of data.withdrawals) {
-            if (!sW || !sW.id) continue;
-            const existingW = this.withdrawals.find((w) => w.id === sW.id);
-            if (!existingW) {
-              this.withdrawals.unshift(sW);
-              updated = true;
-            } else if (existingW.status !== sW.status) {
-              existingW.status = sW.status;
-              existingW.processedAt = sW.processedAt;
-              existingW.processedBy = sW.processedBy;
-              existingW.rejectionReason = sW.rejectionReason;
-              updated = true;
-            }
-          }
-        }
-
-        // Ingest any server transactions (e.g. Master Admin balance adjustments or deposit approvals)
-        if (Array.isArray(data.transactions) && data.transactions.length > 0) {
-          const currentTxMap = new Map(this.transactions.map((t) => [t.id, t]));
-          let txChanged = false;
-          for (const sTx of data.transactions) {
-            if (!sTx || !sTx.id) continue;
-            const existingTx = currentTxMap.get(sTx.id);
-            if (!existingTx) {
-              currentTxMap.set(sTx.id, sTx);
-              this.transactions.unshift(sTx);
-              txChanged = true;
-            } else if (existingTx.status !== sTx.status && sTx.status) {
-              existingTx.status = sTx.status;
-              txChanged = true;
-            }
-          }
-          if (txChanged) {
-            this.sanitizeTransactionsLedger();
-            updated = true;
-          }
-        }
-
-        if (data.users && typeof data.users === 'object') {
-          Object.entries(data.users).forEach(([uid, sUser]) => {
-            if (!sUser || typeof sUser !== 'object' || this.deletedUserUids.has(uid) || uid.startsWith('usr_demo_')) {
-              return;
-            }
-            const incoming = sUser as UserRecord;
-            const cleanPhone = this.normalizePhone(incoming.phone);
-            if (!cleanPhone) return;
-
-            const existingByPhone = Object.values(this.users).find(
-              (u) => this.normalizePhone(u.phone) === cleanPhone
-            );
-            const targetUid = existingByPhone ? existingByPhone.uid : uid;
-            const existing = this.users[targetUid];
-            const verifiedBalance = this.computeVerifiedLedgerBalance(targetUid);
-
-            if (!existing) {
-              this.users[targetUid] = {
-                ...incoming,
-                uid: targetUid,
-                phone: cleanPhone,
-                balance: verifiedBalance,
-                devices: incoming.devices || {}
-              };
-              updated = true;
-            } else {
-              if (incoming.passwordHash && !existing.passwordHash) {
-                existing.passwordHash = incoming.passwordHash;
-                updated = true;
-              }
-              if (incoming.status && incoming.status !== existing.status) {
-                existing.status = incoming.status;
-                updated = true;
-              }
-              if (typeof incoming.vipLevel === 'number' && incoming.vipLevel !== existing.vipLevel) {
-                existing.vipLevel = incoming.vipLevel;
-                updated = true;
-              }
-              if (incoming.devices && typeof incoming.devices === 'object') {
-                existing.devices = { ...(existing.devices || {}), ...incoming.devices };
-              }
-              if (Math.abs((existing.balance || 0) - verifiedBalance) >= 0.01) {
-                existing.balance = verifiedBalance;
-                updated = true;
-              }
-            }
-          });
-        }
-
-        if (updated) {
-          this.savePermanentUsersRegistry();
-          this.saveToStorage();
-          this.safeNotifyListeners();
-        }
-      }
-    } catch {
-      // Offline or dev reload: local permanent registry keeps users intact
-    }
+    // Deprecated local file sync — all entities sync in real time via Firebase RTDB & Firestore
   }
 
   private getSanitizedInitialUsers(): Record<string, UserRecord> {
@@ -1735,31 +1365,12 @@ class AuthoritativeStore {
   }
 
   public backupDataBeforeMigration(): string {
-    try {
-      const backupKey = `bingo777_backup_auto`;
-      const existing = safeStorage.getItem(backupKey);
-      if (!existing) {
-        const payload = {
-          timestamp: Date.now(),
-          users: this.users,
-          deposits: this.deposits,
-          withdrawals: this.withdrawals,
-          transactions: this.transactions || INITIAL_TRANSACTIONS,
-          adminSettings: this.adminSettings,
-          deletedUserUids: Array.from(this.deletedUserUids)
-        };
-        safeStorage.setItem(backupKey, JSON.stringify(payload));
-      }
-      return backupKey;
-    } catch (e) {
-      console.warn('Backup error:', e);
-      return '';
-    }
+    return '';
   }
 
   // --- SEEDERS & PER-MODE HISTORY NORMALIZER ---
   private normalizeWinGoPastRounds(targetPerMode: number = 30) {
-    const now = Date.now();
+    const now = this.getServerNow();
     const modes: Array<{ mode: '30s' | '1min' | '3min'; modeCode: string; stepMs: number }> = [
       { mode: '30s', modeCode: '0', stepMs: 30000 },
       { mode: '1min', modeCode: '1', stepMs: 60000 },
@@ -1770,13 +1381,28 @@ class AuthoritativeStore {
 
     modes.forEach(({ mode, modeCode, stepMs }) => {
       const existingMap = new Map<string, GameRound>();
+      let highestResolvedSlotStart = 0;
+
       (this.pastRounds || []).forEach((r) => {
         if (r && r.gameType === mode && r.period && !r.period.startsWith('20261013')) {
           existingMap.set(r.period, r);
+          if (r.isResolved && typeof r.startTime === 'number' && r.startTime > highestResolvedSlotStart) {
+            highestResolvedSlotStart = r.startTime;
+          }
         }
       });
 
-      const currentSlotStart = Math.floor(now / stepMs) * stepMs;
+      const activeRound = this.activeRoundsByMode[mode];
+      let currentSlotStart =
+        activeRound && !activeRound.isResolved && typeof activeRound.startTime === 'number'
+          ? activeRound.startTime
+          : Math.floor(now / stepMs) * stepMs;
+
+      // If a round with startTime === currentSlotStart was just resolved, advance currentSlotStart so the resolved round is at idx = 1 (top of history)
+      if (highestResolvedSlotStart >= currentSlotStart) {
+        currentSlotStart = highestResolvedSlotStart + stepMs;
+      }
+
       const modeList: GameRound[] = [];
 
       for (let idx = 1; idx <= targetPerMode; idx++) {
@@ -1829,24 +1455,29 @@ class AuthoritativeStore {
   }
 
   private seedTrxRounds() {
-    const now = Date.now();
+    const now = this.getServerNow();
+    const currentSlotStart = Math.floor(now / 60000) * 60000;
     for (let i = 10; i >= 1; i--) {
-      const hexChar = Math.floor(Math.random() * 10).toString(16);
-      const num = parseInt(hexChar, 16) % 10;
+      const slotStart = currentSlotStart - i * 60000;
+      const d = new Date(slotStart);
+      const dateStr = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
+      const utcMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+      const roundIndex = Math.floor((slotStart - utcMidnight) / 60000) + 1;
+      const period = `TRX${dateStr}1${roundIndex.toString().padStart(4, '0')}`;
+      const num = this.getDeterministicOutcomeForPeriod(period, '1min');
       const color: BetColor[] = num === 0 ? ['red', 'violet'] : num === 5 ? ['green', 'violet'] : num % 2 === 0 ? ['red'] : ['green'];
       const size: BetSize = num >= 5 ? 'big' : 'small';
-      const blockHash = '0000000003058' + Math.random().toString(16).substring(2, 10) + num;
-      const period = `TRX2026101300${10 - i + 1}`;
+      const blockHash = `0000000003058${period.slice(-8)}${num}`;
       this.trxPastRounds.unshift({
         period,
         gameType: '1min',
-        startTime: now - i * 60000,
-        endTime: now - (i - 1) * 60000,
+        startTime: slotStart,
+        endTime: slotStart + 60000,
         winningNumber: num,
         winningColor: color,
         winningSize: size,
-        totalBetVolume: Math.floor(Math.random() * 6000) + 1000,
-        totalPayout: Math.floor(Math.random() * 5000) + 900,
+        totalBetVolume: 0,
+        totalPayout: 0,
         hash: blockHash,
         blockHash,
         isResolved: true
@@ -1855,14 +1486,16 @@ class AuthoritativeStore {
   }
 
   private seedK3Rounds() {
-    const now = Date.now();
+    const now = this.getServerNow();
+    const d = new Date(now);
+    const dateStr = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
     for (let i = 10; i >= 1; i--) {
-      const d1 = Math.floor(Math.random() * 6) + 1;
-      const d2 = Math.floor(Math.random() * 6) + 1;
-      const d3 = Math.floor(Math.random() * 6) + 1;
+      const d1 = ((i * 3) % 6) + 1;
+      const d2 = ((i * 5) % 6) + 1;
+      const d3 = ((i * 7) % 6) + 1;
       const sum = d1 + d2 + d3;
       this.k3PastRounds.unshift({
-        period: `202610130${20 - i}`,
+        period: `${dateStr}0${(20 - i).toString().padStart(3, '0')}`,
         startTime: now - i * 60000,
         endTime: now - (i - 1) * 60000,
         dice: [d1, d2, d3],
@@ -1875,18 +1508,20 @@ class AuthoritativeStore {
   }
 
   private seedFiveDRounds() {
-    const now = Date.now();
+    const now = this.getServerNow();
+    const d = new Date(now);
+    const dateStr = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
     for (let i = 10; i >= 1; i--) {
       const digits: [number, number, number, number, number] = [
-        Math.floor(Math.random() * 10),
-        Math.floor(Math.random() * 10),
-        Math.floor(Math.random() * 10),
-        Math.floor(Math.random() * 10),
-        Math.floor(Math.random() * 10)
+        (i * 2) % 10,
+        (i * 3) % 10,
+        (i * 5) % 10,
+        (i * 7) % 10,
+        (i * 9) % 10
       ];
       const sum = digits.reduce((a, b) => a + b, 0);
       this.fiveDPastRounds.unshift({
-        period: `202610135${20 - i}`,
+        period: `${dateStr}5${(20 - i).toString().padStart(3, '0')}`,
         startTime: now - i * 60000,
         endTime: now - (i - 1) * 60000,
         digits,
@@ -2022,12 +1657,13 @@ class AuthoritativeStore {
 
   // --- ROUND GENERATORS ---
   // --- UNIVERSAL SYNCHRONIZED ROUND GENERATORS ---
-  public generateNewRound(gameType: '30s' | '1min' | '3min' | '5min' = '30s'): GameRound {
+  public generateNewRound(gameType: '30s' | '1min' | '3min' | '5min' = '30s', minStartTime?: number): GameRound {
     const duration = gameType === '30s' ? 30000 : gameType === '1min' ? 60000 : gameType === '3min' ? 180000 : 300000;
-    const now = Date.now();
-    
-    // Aligned to exact wall-clock boundaries so every device (Admin & APK) runs in lockstep
-    const startTime = Math.floor(now / duration) * duration;
+    const rawNow = this.getServerNow();
+    const effectiveNow = minStartTime && minStartTime > rawNow ? minStartTime : rawNow;
+
+    // Aligned to exact Firebase server-clock boundaries so every device (Admin & APK) runs in lockstep
+    const startTime = Math.floor(effectiveNow / duration) * duration;
     const endTime = startTime + duration;
 
     // Deterministic date prefix: YYYYMMDD in UTC
@@ -2057,7 +1693,7 @@ class AuthoritativeStore {
       winningSize: 'small',
       totalBetVolume: 0,
       totalPayout: 0,
-      hash: 'SHA256_' + Math.random().toString(36).substring(2, 12).toUpperCase(),
+      hash: `SHA256_${period}`,
       isResolved: false,
       manualOverrideNumber: null
     };
@@ -2069,25 +1705,27 @@ class AuthoritativeStore {
       this.activeRoundsByMode[curMode] = this.currentRound;
     }
 
+    const now = this.getServerNow();
     let existing = this.activeRoundsByMode[mode];
-    if (!existing || existing.isResolved || existing.endTime <= Date.now()) {
-      if (existing && !existing.isResolved && existing.endTime <= Date.now()) {
-        const saved = this.currentRound;
-        this.currentRound = existing;
-        this.resolveRound();
-        this.currentRound = saved;
+    if (!existing || existing.isResolved || existing.endTime <= now) {
+      if (existing && !existing.isResolved && existing.endTime <= now) {
+        this.resolveRound(undefined, mode);
+        existing = this.activeRoundsByMode[mode];
       }
-      existing = this.generateNewRound(mode);
-      this.activeRoundsByMode[mode] = existing;
+      if (!existing || existing.isResolved || existing.endTime <= now) {
+        existing = this.generateNewRound(mode);
+        this.activeRoundsByMode[mode] = existing;
+      }
     }
     this.currentRound = existing;
     this.notify();
   }
 
-  public generateNewTrxRound(gameType: '1min' | '3min' = '1min'): GameRound {
+  public generateNewTrxRound(gameType: '1min' | '3min' = '1min', minStartTime?: number): GameRound {
     const duration = gameType === '1min' ? 60000 : 180000;
-    const now = Date.now();
-    const startTime = Math.floor(now / duration) * duration;
+    const rawNow = this.getServerNow();
+    const effectiveNow = minStartTime && minStartTime > rawNow ? minStartTime : rawNow;
+    const startTime = Math.floor(effectiveNow / duration) * duration;
     const endTime = startTime + duration;
     const d = new Date(startTime);
     const dateStr = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
@@ -2310,11 +1948,6 @@ class AuthoritativeStore {
   private notify() {
     this.saveToStorage();
     this.safeNotifyListeners();
-    if (this.broadcastChannel) {
-      try {
-        this.broadcastChannel.postMessage('sync_needed');
-      } catch {}
-    }
   }
 
   private notifyLightweight() {
@@ -2324,10 +1957,6 @@ class AuthoritativeStore {
 
   private saveToStorage() {
     try {
-      // 1. Always persist the dedicated permanent user registry first so accounts & passwords are never lost
-      this.savePermanentUsersRegistry();
-
-      // 2. Keep exactly 30 rounds per Win Go mode (30s, 1min, 3min) so all timeframes stay equal in length
       this.normalizeWinGoPastRounds(30);
       if (this.liveBets && this.liveBets.length > 150) {
         this.liveBets = this.liveBets.slice(0, 150);
@@ -2338,136 +1967,13 @@ class AuthoritativeStore {
       if (this.auditLogs && this.auditLogs.length > 150) {
         this.auditLogs = this.auditLogs.slice(0, 150);
       }
-
-      const payload = {
-        users: this.users,
-        transactions: this.transactions,
-        liveBets: this.liveBets,
-        pastRounds: this.pastRounds,
-        deposits: this.deposits,
-        withdrawals: this.withdrawals,
-        giftCodes: this.giftCodes,
-        supportMessages: this.supportMessages,
-        adminSettings: this.adminSettings,
-        auditLogs: this.auditLogs,
-        firebaseConfig: this.firebaseConfig,
-        deletedUserUids: Array.from(this.deletedUserUids),
-        referrals: this.referrals,
-        featureModules: this.featureModules,
-        deletedFeaturesBackup: this.deletedFeaturesBackup,
-        deletedUsersBackup: this.deletedUsersBackup,
-        settlementNotices: this.settlementNotices,
-        acknowledgedResultIds: Array.from(this.acknowledgedResultIds),
-        aviatorPastCrashes: this.aviatorPastCrashes,
-        aviatorTotalStaked: this.aviatorTotalStaked,
-        aviatorTotalPaidOut: this.aviatorTotalPaidOut,
-        aviatorSessionRounds: this.aviatorSessionRounds.slice(0, 50),
-        aviatorHistoryItems: this.aviatorHistoryItems.slice(0, 50),
-        aviatorEngineConfig: this.aviatorEngineConfig,
-        aviatorRoundNonce: this.aviatorRoundNonce,
-        userNotifications: this.userNotifications
-      };
-      const serialized = JSON.stringify(payload);
-      safeStorage.setItem('bingo777_rtdb_store', serialized);
-      safeStorage.setItem('bingo777_deleted_uids', JSON.stringify(Array.from(this.deletedUserUids)));
       safeStorage.setItem('bingo777_ack_results', JSON.stringify(Array.from(this.acknowledgedResultIds)));
-    } catch (e) {
-      console.warn('Storage save error:', e);
-    }
+    } catch {}
   }
 
   private reloadFromStorage() {
-    const saved = safeStorage.getItem('bingo777_rtdb_store') || safeStorage.getItem('maanwin_rtdb_store');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed.deletedUserUids && Array.isArray(parsed.deletedUserUids)) {
-          parsed.deletedUserUids.forEach((id: string) => this.deletedUserUids.add(id));
-        }
-        if (parsed.acknowledgedResultIds && Array.isArray(parsed.acknowledgedResultIds)) {
-          parsed.acknowledgedResultIds.forEach((id: string) => this.acknowledgedResultIds.add(id));
-        }
-        
-        this.transactions = parsed.transactions || this.transactions;
-        const rawUsers = parsed.users || this.users;
-        const sanitizedUsers: Record<string, UserRecord> = {};
-        Object.keys(rawUsers).forEach((uid) => {
-          if (!this.deletedUserUids.has(uid)) {
-            sanitizedUsers[uid] = rawUsers[uid];
-          }
-        });
-        this.users = this.mergeAllStoredUsers(sanitizedUsers);
-        this.enforceAllUsersLedgerIntegrity();
-        this.savePermanentUsersRegistry();
-        this.referrals = parsed.referrals || this.referrals;
-        this.liveBets = parsed.liveBets || this.liveBets;
-        this.pastRounds = this.deduplicateRounds(parsed.pastRounds || this.pastRounds);
-        this.normalizeWinGoPastRounds(30);
-        this.deposits = parsed.deposits || this.deposits;
-        this.withdrawals = parsed.withdrawals || this.withdrawals;
-        this.giftCodes = parsed.giftCodes || this.giftCodes;
-        this.supportMessages = parsed.supportMessages || this.supportMessages;
-        this.adminSettings = parsed.adminSettings ? { ...DEFAULT_ADMIN_SETTINGS, ...parsed.adminSettings, appName: 'Bingo777' } : this.adminSettings;
-        if (!this.adminSettings.minDeposit || this.adminSettings.minDeposit === 100) {
-          this.adminSettings.minDeposit = 250;
-        }
-        if (!this.adminSettings.minWithdrawal || this.adminSettings.minWithdrawal === 300 || this.adminSettings.minWithdrawal === 200) {
-          this.adminSettings.minWithdrawal = 500;
-        }
-        if (!this.adminSettings.usdtErc20Address) {
-          this.adminSettings.usdtErc20Address = '0xF600F72A9d4b9B0D6F6972a9037767ca7A9f3d45';
-        }
-        if (!this.adminSettings.minUsdtDeposit) {
-          this.adminSettings.minUsdtDeposit = 5;
-        }
-        if (!this.adminSettings.minUsdtWithdrawal) {
-          this.adminSettings.minUsdtWithdrawal = 10;
-        }
-        if (!this.adminSettings.usdtExchangeRate) {
-          this.adminSettings.usdtExchangeRate = 90;
-        }
-        this.auditLogs = parsed.auditLogs || this.auditLogs;
-        this.firebaseConfig = parsed.firebaseConfig || this.firebaseConfig;
-        if (parsed.featureModules && typeof parsed.featureModules === 'object') {
-          this.featureModules = { ...INITIAL_FEATURE_MODULES, ...parsed.featureModules };
-        }
-        if (parsed.deletedFeaturesBackup && typeof parsed.deletedFeaturesBackup === 'object') {
-          this.deletedFeaturesBackup = parsed.deletedFeaturesBackup;
-        }
-        if (parsed.deletedUsersBackup && typeof parsed.deletedUsersBackup === 'object') {
-          this.deletedUsersBackup = parsed.deletedUsersBackup;
-        }
-        if (parsed.settlementNotices && typeof parsed.settlementNotices === 'object') {
-          this.settlementNotices = parsed.settlementNotices;
-        }
-        if (Array.isArray(parsed.aviatorPastCrashes) && parsed.aviatorPastCrashes.length > 0) {
-          this.aviatorPastCrashes = parsed.aviatorPastCrashes.filter(
-            (c: unknown): c is number => typeof c === 'number' && Number.isFinite(c) && c >= 1.0
-          );
-        }
-        if (typeof parsed.aviatorTotalStaked === 'number' && Number.isFinite(parsed.aviatorTotalStaked)) {
-          this.aviatorTotalStaked = Math.max(0, parsed.aviatorTotalStaked);
-        }
-        if (typeof parsed.aviatorTotalPaidOut === 'number' && Number.isFinite(parsed.aviatorTotalPaidOut)) {
-          this.aviatorTotalPaidOut = Math.max(0, parsed.aviatorTotalPaidOut);
-        }
-        if (Array.isArray(parsed.aviatorSessionRounds)) {
-          this.aviatorSessionRounds = parsed.aviatorSessionRounds.slice(0, 50);
-        }
-        if (Array.isArray(parsed.aviatorHistoryItems)) {
-          this.aviatorHistoryItems = parsed.aviatorHistoryItems.slice(0, 50);
-        }
-        if (parsed.aviatorEngineConfig && typeof parsed.aviatorEngineConfig === 'object') {
-          this.aviatorEngineConfig = { ...this.aviatorEngineConfig, ...parsed.aviatorEngineConfig };
-        }
-        if (Array.isArray(parsed.userNotifications)) {
-          this.userNotifications = parsed.userNotifications;
-        }
-        this.safeNotifyListeners();
-      } catch (e) {
-        console.error('Storage reload error:', e);
-      }
-    }
+    // Deprecated local storage reload — all state is synchronized directly via Firebase RTDB & Firestore
+    this.safeNotifyListeners();
   }
 
   // --- GETTERS ---
@@ -3271,13 +2777,12 @@ class AuthoritativeStore {
     const resolvingGameType = (roundToResolve.gameType || targetMode || '30s') as '30s' | '1min' | '3min';
     const resolvingPeriod = roundToResolve.period;
     if (this.resolvedPeriodIds.has(resolvingPeriod)) {
-      // Ensure we immediately advance past the already resolved period so countdown unlocks
-      const nextRound = this.generateNewRound(resolvingGameType);
+      const nextRound = this.generateNewRound(resolvingGameType, roundToResolve.endTime);
       this.activeRoundsByMode[resolvingGameType] = nextRound;
       if (this.currentRound.gameType === resolvingGameType || !targetMode) {
         this.currentRound = nextRound;
       }
-      this.notify();
+      this.safeNotifyListeners();
       return;
     }
     this.resolvedPeriodIds.add(resolvingPeriod);
@@ -3295,9 +2800,6 @@ class AuthoritativeStore {
     } else if (roundToResolve.manualOverrideNumber !== null && roundToResolve.manualOverrideNumber !== undefined) {
       winningNum = roundToResolve.manualOverrideNumber;
     } else if (this.adminSettings.zeroPlatformLossMode) {
-      // ZERO PLATFORM LOSS ENGINE:
-      // Evaluate all 10 candidate outcomes (0 to 9) and calculate total player payout for each.
-      // Automatically choose the outcome yielding the LOWEST user payout, guaranteeing platform profitability.
       const activeBets = this.liveBets.filter(
         (b) => b.roundPeriod === resolvingPeriod && b.status === 'pending'
       );
@@ -3408,13 +2910,14 @@ class AuthoritativeStore {
       isResolved: true
     };
 
-    this.pastRounds.unshift(completedRound);
-    this.normalizeWinGoPastRounds(30);
-    const nextRound = this.generateNewRound(resolvingGameType);
+    const nextRound = this.generateNewRound(resolvingGameType, roundToResolve.endTime);
     this.activeRoundsByMode[resolvingGameType] = nextRound;
     if (this.currentRound.gameType === resolvingGameType || !targetMode) {
       this.currentRound = nextRound;
     }
+
+    this.pastRounds.unshift(completedRound);
+    this.normalizeWinGoPastRounds(30);
 
     if (this.onRoundSynced) {
       try {
@@ -3449,7 +2952,7 @@ class AuthoritativeStore {
         netProfit,
         walletBalanceAfter,
         bets: settledBets,
-        settledAt: Date.now()
+        settledAt: this.getServerNow()
       };
 
       this.emitSettlementNotice(notice);
@@ -3458,18 +2961,15 @@ class AuthoritativeStore {
     // Also reconcile any late/orphaned pending bets
     this.reconcilePendingBetsFromHistory();
 
-    if (Object.keys(userSettledBetsMap).length > 0) {
-      this.notify();
-    } else {
-      this.notifyLightweight();
-    }
+    this.safeNotifyListeners();
   }
 
   public resolveTrxRound(overrideNumber?: number) {
     const resolvingPeriod = this.trxCurrentRound.period;
+    const prevEndTime = this.trxCurrentRound.endTime;
     if (this.resolvedPeriodIds.has(resolvingPeriod)) {
-      this.trxCurrentRound = this.generateNewTrxRound('1min');
-      this.notify();
+      this.trxCurrentRound = this.generateNewTrxRound('1min', prevEndTime);
+      this.safeNotifyListeners();
       return;
     }
     this.resolvedPeriodIds.add(resolvingPeriod);
@@ -3507,10 +3007,10 @@ class AuthoritativeStore {
         }
         winningNum = bestCandidate;
       } else {
-        winningNum = Math.floor(Math.random() * 10);
+        winningNum = this.getDeterministicOutcomeForPeriod(resolvingPeriod, '1min');
       }
     } else {
-      winningNum = Math.floor(Math.random() * 10);
+      winningNum = this.getDeterministicOutcomeForPeriod(resolvingPeriod, '1min');
     }
 
     const winningColors: BetColor[] = winningNum === 0 ? ['red', 'violet'] : winningNum === 5 ? ['green', 'violet'] : winningNum % 2 === 0 ? ['red'] : ['green'];
@@ -3576,7 +3076,7 @@ class AuthoritativeStore {
 
     this.trxPastRounds.unshift(completedRound);
     if (this.trxPastRounds.length > 50) this.trxPastRounds.pop();
-    this.trxCurrentRound = this.generateNewTrxRound('1min');
+    this.trxCurrentRound = this.generateNewTrxRound('1min', prevEndTime);
 
     Object.entries(userSettledBetsMap).forEach(([uid, settledBets]) => {
       const totalBetAmount = settledBets.reduce((sum, bet) => sum + bet.amount, 0);
@@ -3601,22 +3101,18 @@ class AuthoritativeStore {
         netProfit,
         walletBalanceAfter,
         bets: settledBets,
-        settledAt: Date.now()
+        settledAt: this.getServerNow()
       };
 
       this.emitSettlementNotice(notice);
     });
 
-    if (Object.keys(userSettledBetsMap).length > 0) {
-      this.notify();
-    } else {
-      this.notifyLightweight();
-    }
+    this.safeNotifyListeners();
   }
 
   public checkAndResolveExpiredRounds() {
     if (!this.adminSettings.autoGameResolution) return;
-    const now = Date.now();
+    const now = this.getServerNow();
 
     // 1. Check all Win Go modes (30s, 1min, 3min) independently
     (['30s', '1min', '3min'] as const).forEach((mode) => {
@@ -3647,7 +3143,7 @@ class AuthoritativeStore {
 
   public ensureRoundFreshness(gameType: '30s' | '1min' | '3min' = '30s'): GameRound {
     let round = this.activeRoundsByMode[gameType] || this.currentRound;
-    const now = Date.now();
+    const now = this.getServerNow();
     if (round.endTime <= now) {
       this.resolveRound(undefined, gameType);
       round = this.activeRoundsByMode[gameType] || this.currentRound;
@@ -3657,7 +3153,7 @@ class AuthoritativeStore {
         if (this.currentRound.gameType === gameType) {
           this.currentRound = round;
         }
-        this.notify();
+        this.safeNotifyListeners();
       }
     }
     return round;
@@ -3665,14 +3161,14 @@ class AuthoritativeStore {
 
   public ensureTrxRoundFreshness(): GameRound {
     let round = this.trxCurrentRound;
-    const now = Date.now();
+    const now = this.getServerNow();
     if (round.endTime <= now) {
       this.resolveTrxRound();
       round = this.trxCurrentRound;
       if (round.endTime <= now) {
         round = this.generateNewTrxRound('1min');
         this.trxCurrentRound = round;
-        this.notify();
+        this.safeNotifyListeners();
       }
     }
     return round;
@@ -3813,10 +3309,13 @@ class AuthoritativeStore {
       try {
         const res = await fetch('/api/aviator/state');
         if (res.ok) {
-          const data = await res.json();
-          if (data && (data.ok || data.success) && data.currentRound) {
-            this.lastAviatorServerSyncAt = Date.now();
-            this.applyServerAviatorState(data);
+          const text = await res.text();
+          if (text && !text.trim().startsWith('<')) {
+            const data = JSON.parse(text);
+            if (data && (data.ok || data.success) && data.currentRound) {
+              this.lastAviatorServerSyncAt = Date.now();
+              this.applyServerAviatorState(data);
+            }
           }
         }
       } catch {
@@ -5420,11 +4919,13 @@ class AuthoritativeStore {
 
   public ingestCloudRound(round: Partial<GameRound>) {
     if (!round || !round.period || !round.gameType) return;
+    if (String(round.period).startsWith('20261013')) return;
     const mode = round.gameType as '30s' | '1min' | '3min';
     const target = this.activeRoundsByMode[mode];
 
     // If cloud round is resolved and has a valid winningNumber, update pastRounds and reconcile bets
     if (round.isResolved && typeof round.winningNumber === 'number' && round.winningNumber >= 0) {
+      this.resolvedPeriodIds.add(round.period);
       const existingIdx = this.pastRounds.findIndex((r) => r.period === round.period && r.gameType === mode);
       const num = round.winningNumber;
       const winningColor: BetColor[] =
@@ -5442,8 +4943,8 @@ class AuthoritativeStore {
       const resolvedObj: GameRound = {
         period: round.period,
         gameType: mode,
-        startTime: round.startTime || Date.now() - 30000,
-        endTime: round.endTime || Date.now(),
+        startTime: round.startTime || this.getServerNow() - 30000,
+        endTime: round.endTime || this.getServerNow(),
         winningNumber: num,
         winningColor,
         winningSize,
@@ -5453,6 +4954,15 @@ class AuthoritativeStore {
         isResolved: true,
         manualOverrideNumber: round.manualOverrideNumber ?? null
       };
+
+      // If local active round was still on this resolved period, advance it to the next period immediately
+      if (target && target.period === round.period) {
+        const nextRound = this.generateNewRound(mode, resolvedObj.endTime);
+        this.activeRoundsByMode[mode] = nextRound;
+        if (this.currentRound.gameType === mode) {
+          this.currentRound = nextRound;
+        }
+      }
 
       if (existingIdx >= 0) {
         this.pastRounds[existingIdx] = resolvedObj;
@@ -5466,12 +4976,37 @@ class AuthoritativeStore {
     }
 
     // Active round or manual override sync
-    if (target && target.period === round.period) {
-      if (round.manualOverrideNumber !== undefined) {
+    const now = this.getServerNow();
+    if (!round.isResolved && round.endTime && round.endTime > now) {
+      if (!target || target.period < round.period) {
+        const syncedActive: GameRound = {
+          period: round.period,
+          gameType: mode,
+          startTime: round.startTime || now,
+          endTime: round.endTime,
+          winningNumber: -1,
+          winningColor: [],
+          winningSize: 'small',
+          totalBetVolume: round.totalBetVolume || 0,
+          totalPayout: 0,
+          hash: round.hash || `SHA256_${round.period}`,
+          isResolved: false,
+          manualOverrideNumber: round.manualOverrideNumber ?? null
+        };
+        this.activeRoundsByMode[mode] = syncedActive;
+        if (this.currentRound.gameType === mode) {
+          this.currentRound = syncedActive;
+        }
+      } else if (target && target.period === round.period && round.manualOverrideNumber !== undefined) {
         target.manualOverrideNumber = round.manualOverrideNumber;
         if (this.currentRound.period === round.period) {
           this.currentRound.manualOverrideNumber = round.manualOverrideNumber;
         }
+      }
+    } else if (target && target.period === round.period && round.manualOverrideNumber !== undefined) {
+      target.manualOverrideNumber = round.manualOverrideNumber;
+      if (this.currentRound.period === round.period) {
+        this.currentRound.manualOverrideNumber = round.manualOverrideNumber;
       }
     }
     this.safeNotifyListeners();
@@ -6181,6 +5716,10 @@ class AuthoritativeStore {
       }).catch(() => {});
     }
 
+    if (this.onUserSaved) {
+      try { this.onUserSaved(user); } catch (e) { console.warn('onUserSaved error:', e); }
+    }
+
     this.logAudit({
       actor: adminId,
       category: 'DEVICE',
@@ -6215,6 +5754,10 @@ class AuthoritativeStore {
       }).catch(() => {});
     }
 
+    if (this.onUserSaved) {
+      try { this.onUserSaved(user); } catch (e) { console.warn('onUserSaved error:', e); }
+    }
+
     this.logAudit({
       actor: adminId,
       category: 'DEVICE',
@@ -6246,6 +5789,9 @@ class AuthoritativeStore {
           uid: user.uid
         })
       }).catch(() => {});
+    }
+    if (this.onUserSaved) {
+      try { this.onUserSaved(user); } catch (e) { console.warn('onUserSaved error:', e); }
     }
     this.logAudit({
       actor: adminId,
@@ -7176,6 +6722,11 @@ class AuthoritativeStore {
       deactivated: 'USER_DEACTIVATED'
     };
 
+    this.savePermanentUsersRegistry();
+    if (this.onUserSaved) {
+      try { this.onUserSaved(user); } catch (e) { console.warn('onUserSaved error:', e); }
+    }
+
     this.logAudit({
       actor: adminId,
       category: 'AUTH',
@@ -7783,6 +7334,11 @@ class AuthoritativeStore {
       });
     }
 
+    this.savePermanentUsersRegistry();
+    if (this.onUserSaved) {
+      try { this.onUserSaved(newUser); } catch (e) { console.warn('onUserSaved error:', e); }
+    }
+
     this.logAudit({
       actor: adminId,
       category: 'AUTH',
@@ -7803,6 +7359,8 @@ class AuthoritativeStore {
     updates: {
       username?: string;
       phone?: string;
+      password?: string;
+      referralCode?: string;
       vipLevel?: number;
       status?: UserRecord['status'];
       reason: string;
@@ -7820,6 +7378,12 @@ class AuthoritativeStore {
       const cleanPhone = updates.phone.replace(/\D/g, '').slice(-10);
       if (cleanPhone.length === 10) user.phone = cleanPhone;
     }
+    if (updates.password && updates.password.trim()) {
+      user.passwordHash = updates.password.trim();
+    }
+    if (updates.referralCode && updates.referralCode.trim()) {
+      user.referralCode = updates.referralCode.trim().toUpperCase();
+    }
     if (typeof updates.vipLevel === 'number') {
       user.vipLevel = Math.max(0, Math.min(10, updates.vipLevel));
     }
@@ -7827,11 +7391,29 @@ class AuthoritativeStore {
       user.status = updates.status;
     }
 
+    this.savePermanentUsersRegistry();
+    if (typeof window !== 'undefined') {
+      fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user,
+          phone: user.phone,
+          username: user.username,
+          password: user.passwordHash,
+          uid: user.uid
+        })
+      }).catch(() => {});
+    }
+    if (this.onUserSaved) {
+      try { this.onUserSaved(user); } catch (e) { console.warn('onUserSaved error:', e); }
+    }
+
     this.logAudit({
       actor: adminId,
       category: 'AUTH',
       action: 'USER_PROFILE_EDITED',
-      details: `Updated user ${user.username} (${uid}) [Phone: +91 ${user.phone}, VIP: ${user.vipLevel}, Status: ${user.status}]. Reason: ${updates.reason}`,
+      details: `Updated user ${user.username} (${uid}) [Phone: +91 ${user.phone}, VIP: ${user.vipLevel}, Status: ${user.status}${updates.password ? ', Password Updated' : ''}]. Reason: ${updates.reason}`,
       targetUser: uid,
       affectedRecordId: uid,
       reason: updates.reason,

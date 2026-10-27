@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Zap, 
   ArrowLeft, 
@@ -33,6 +33,7 @@ export const TrxWinGoGame: React.FC<TrxWinGoGameProps> = ({
   const [selectedBetType, setSelectedBetType] = useState<'color' | 'number' | 'size'>('color');
   const [selectedBetValue, setSelectedBetValue] = useState<string>('green');
   const [betAmount, setBetAmount] = useState<number>(50);
+  const lastResolvedTrxPeriodRef = useRef<string>('');
 
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -44,20 +45,30 @@ export const TrxWinGoGame: React.FC<TrxWinGoGameProps> = ({
   const pastRounds = store.getTrxPastRounds();
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      const freshRound = store.ensureTrxRoundFreshness();
-      const now = Date.now();
-      const diff = Math.max(0, Math.floor((freshRound.endTime - now) / 1000));
+    const updateCountdown = () => {
+      const activeRound = store.getTrxCurrentRound();
+      const now = store.getServerNow();
+      const remainingMs = activeRound.endTime - now;
+      const diff = Math.max(0, Math.ceil(remainingMs / 1000));
       setTimeLeft(diff);
 
-      if (diff === 0) {
-        store.resolveTrxRound();
-        showToast('TRX block verified! Winning number calculated from hash.', 'info');
+      if (remainingMs <= 0) {
+        if (lastResolvedTrxPeriodRef.current !== activeRound.period) {
+          lastResolvedTrxPeriodRef.current = activeRound.period;
+          store.resolveTrxRound();
+          setTick((t) => t + 1);
+        } else {
+          store.ensureTrxRoundFreshness();
+          setTick((t) => t + 1);
+        }
       }
-    }, 1000);
+    };
+
+    updateCountdown();
+    const timer = setInterval(updateCountdown, 250);
 
     return () => clearInterval(timer);
-  }, [trxRound, showToast]);
+  }, []);
 
   const handlePlaceBet = () => {
     if (!user) {

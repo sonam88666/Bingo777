@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Clock, 
   HelpCircle, 
@@ -46,9 +46,17 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
   const [multiplier, setMultiplier] = useState<number>(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Store data
+  const [manualNotice, setManualNotice] = useState<RoundSettlementNotice | null>(null);
+  const [tick, setTick] = useState(0);
+  const lastResolvedPeriodRef = useRef<string>('');
+  const lastTickSoundKeyRef = useRef<string>('');
+
+  // Store data (re-evaluated on every store tick / round settlement)
   const currentRound = store.getCurrentRound(selectedGameType);
-  const pastRounds = store.getPastRounds(selectedGameType);
+  const pastRounds = useMemo(
+    () => [...store.getPastRounds(selectedGameType)],
+    [selectedGameType, currentRound.period, tick]
+  );
   const liveBets = store.getLiveBets();
   const adminSettings = store.getAdminSettings();
 
@@ -56,10 +64,7 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
   const userBets = useMemo(() => {
     if (!user) return [];
     return liveBets.filter((b) => b.uid === user.uid);
-  }, [liveBets, user]);
-
-  const [manualNotice, setManualNotice] = useState<RoundSettlementNotice | null>(null);
-  const [, setTick] = useState(0);
+  }, [liveBets, user, tick]);
 
   // Authoritative real-time reactivity to store updates
   useEffect(() => {
@@ -67,32 +72,45 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
     return unsub;
   }, []);
 
-  // Round countdown timer loop
+  // Global Server-Synchronized Round Countdown Loop
   useEffect(() => {
     const updateCountdown = () => {
-      const freshRound = store.ensureRoundFreshness(selectedGameType);
-      const now = Date.now();
-      const diff = Math.max(0, Math.floor((freshRound.endTime - now) / 1000));
+      const activeRound = store.getCurrentRound(selectedGameType);
+      const now = store.getServerNow();
+      const remainingMs = activeRound.endTime - now;
+      const diff = Math.max(0, Math.ceil(remainingMs / 1000));
+
       setTimeLeft(diff);
       const locked = diff <= 5;
       setIsLocked(locked);
 
-      // Play tick sound in final 5 seconds
+      // Play tick sound once per second in final 5 seconds
       if (diff <= 5 && diff > 0) {
-        soundFx.playCountdownTick(diff <= 2);
+        const soundKey = `${activeRound.period}_${diff}`;
+        if (lastTickSoundKeyRef.current !== soundKey) {
+          lastTickSoundKeyRef.current = soundKey;
+          soundFx.playCountdownTick(diff <= 2);
+        }
       }
 
-      // Auto resolve when time expires and unlock next round
-      if (diff === 0) {
-        store.resolveRound(undefined, selectedGameType);
+      // Resolve round exactly once when server time reaches endTime (00:00)
+      if (remainingMs <= 0) {
+        if (lastResolvedPeriodRef.current !== activeRound.period) {
+          lastResolvedPeriodRef.current = activeRound.period;
+          store.resolveRound(undefined, selectedGameType);
+          setTick((t) => t + 1);
+        } else {
+          store.ensureRoundFreshness(selectedGameType);
+          setTick((t) => t + 1);
+        }
       }
     };
 
     updateCountdown();
-    const timer = setInterval(updateCountdown, 1000);
+    const timer = setInterval(updateCountdown, 250);
 
     return () => clearInterval(timer);
-  }, [currentRound, showToast, selectedGameType]);
+  }, [selectedGameType]);
 
   const totalBetAmount = chipAmount * multiplier;
 

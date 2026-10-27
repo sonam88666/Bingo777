@@ -35,15 +35,17 @@ class FirebaseSyncService {
   private currentSyncedUid: string | null = null;
   private authPromise: Promise<boolean> | null = null;
   private listenersAttached = false;
+  private rtdbListenersAttached = false;
 
   constructor() {
     this.bindStoreHooks();
+    this.attachRealtimeDatabaseListeners();
     this.initAuthListener();
   }
 
   /**
    * Ensures the client has a valid Firebase Auth session (Anonymous or Phone)
-   * so Firestore security rules (`isSignedIn()`) always succeed on every device/APK.
+   * so Firestore & RTDB security rules always succeed on every device/APK.
    */
   private async ensureAuth(): Promise<boolean> {
     if (typeof window === 'undefined') return false;
@@ -93,12 +95,299 @@ class FirebaseSyncService {
   }
 
   /**
-   * Pushes all local entities (users, deposits, withdrawals, transactions, pending bets)
-   * to Firestore on startup so any account or deposit created on any phone immediately reaches Admin.
+   * Attaches direct Firebase Realtime Database (`firebase/database`) onValue listeners
+   * immediately on startup so multi-device timers, users, bets, deposits, and maintenance mode
+   * synchronize within <1 second across all phones and Admin Console.
+   */
+  private attachRealtimeDatabaseListeners() {
+    if (typeof window === 'undefined' || this.rtdbListenersAttached) return;
+    this.rtdbListenersAttached = true;
+
+    // 1. Server Time Offset synchronization for identical countdowns across all devices
+    try {
+      const offsetUnsub = rtdbOnValue(
+        rtdbRef(rtdb, '.info/serverTimeOffset'),
+        (snap) => {
+          const offset = Number(snap.val()) || 0;
+          store.setServerTimeOffset(offset);
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(offsetUnsub);
+    } catch {}
+
+    // 2. Real-time RTDB listener on /admin_settings & /admin_settings/maintenanceMode
+    try {
+      const settingsUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'admin_settings'),
+        (snap) => {
+          if (snap.exists()) {
+            const val = snap.val();
+            if (val && typeof val === 'object') {
+              store.ingestCloudAdminSettings(val as Partial<AdminSettings>);
+            }
+          }
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(settingsUnsub);
+    } catch {}
+
+    // 3. Real-time RTDB listener on /current_round & /wingo_rounds
+    try {
+      const currentRoundUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'current_round'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+          if (val.period && val.gameType) {
+            store.ingestCloudRound(val as Partial<GameRound>);
+          }
+          const modes: Array<'30s' | '1min' | '3min'> = ['30s', '1min', '3min'];
+          modes.forEach((m) => {
+            if (val[m] && typeof val[m] === 'object' && val[m].period) {
+              store.ingestCloudRound(val[m] as Partial<GameRound>);
+            }
+          });
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(currentRoundUnsub);
+    } catch {}
+
+    const modes: Array<'30s' | '1min' | '3min'> = ['30s', '1min', '3min'];
+    modes.forEach((mode) => {
+      try {
+        const modeUnsub = rtdbOnValue(
+          rtdbRef(rtdb, `wingo_rounds/${mode}`),
+          (snapshot) => {
+            if (snapshot.exists()) {
+              const data = snapshot.val();
+              if (data && typeof data === 'object' && data.period) {
+                store.ingestCloudRound(data);
+              }
+            }
+          },
+          () => {}
+        );
+        this.globalUnsubscribes.push(modeUnsub);
+
+        const resolvedUnsub = rtdbOnValue(
+          rtdbRef(rtdb, `wingo_rounds/resolved_${mode}`),
+          (snapshot) => {
+            if (snapshot.exists()) {
+              const data = snapshot.val();
+              if (data && typeof data === 'object' && data.period) {
+                store.ingestCloudRound(data);
+              }
+            }
+          },
+          () => {}
+        );
+        this.globalUnsubscribes.push(resolvedUnsub);
+      } catch {}
+    });
+
+    // Listen to /past_rounds in RTDB for instant completed round history updates
+    try {
+      const pastRoundsUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'past_rounds'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+          Object.values(val).forEach((item: any) => {
+            if (item && typeof item === 'object' && item.period && item.isResolved) {
+              store.ingestCloudRound(item as Partial<GameRound>);
+            }
+          });
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(pastRoundsUnsub);
+    } catch {}
+
+    // 4. Real-time RTDB listener on /users
+    try {
+      const usersUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'users'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object') {
+              const uid = raw.uid || key;
+              if (uid && !String(uid).startsWith('usr_demo_')) {
+                store.updateUserFromFirestore({
+                  ...raw,
+                  uid
+                });
+              }
+            }
+          });
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(usersUnsub);
+    } catch {}
+
+    // 5. Real-time RTDB listener on /deposits
+    try {
+      const depsUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'deposits'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object' && (raw.id || key)) {
+              const dep: DepositRecord = {
+                id: raw.id || key,
+                uid: raw.uid,
+                username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
+                phone: raw.phone || '',
+                amount: Number(raw.amount) || 0,
+                usdtAmount: raw.usdtAmount ? Number(raw.usdtAmount) : undefined,
+                paymentMethod: raw.paymentMethod || raw.method || 'UPI',
+                referenceId: raw.referenceId || raw.utrOrRef || '',
+                upiReceiverId: raw.upiReceiverId || '',
+                status: raw.status || 'pending',
+                submittedAt: typeof raw.submittedAt === 'number' ? raw.submittedAt : Date.now(),
+                reviewedAt: raw.reviewedAt || undefined,
+                reviewedBy: raw.reviewedBy || undefined,
+                adminNote: raw.adminNote || undefined
+              };
+              store.ingestCloudDeposit(dep);
+            }
+          });
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(depsUnsub);
+    } catch {}
+
+    // 6. Real-time RTDB listener on /withdrawals
+    try {
+      const wUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'withdrawals'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object' && (raw.id || key)) {
+              const item: WithdrawalRecord = {
+                id: raw.id || key,
+                uid: raw.uid,
+                username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
+                phone: raw.phone || '',
+                amount: Number(raw.amount) || 0,
+                usdtAmount: raw.usdtAmount ? Number(raw.usdtAmount) : undefined,
+                payoutMethod: raw.payoutMethod || (raw.method === 'BANK' ? 'Bank Transfer' : 'UPI'),
+                accountDetails: raw.accountDetails || { upiId: raw.destination || '' },
+                status: raw.status || 'pending',
+                requestedAt: typeof raw.requestedAt === 'number' ? raw.requestedAt : Date.now(),
+                processedAt: raw.processedAt || undefined,
+                processedBy: raw.processedBy || undefined,
+                rejectionReason: raw.rejectionReason || undefined
+              };
+              store.ingestCloudWithdrawal(item);
+            }
+          });
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(wUnsub);
+    } catch {}
+
+    // 7. Real-time RTDB listener on /transactions
+    try {
+      const txUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'transactions'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object' && (raw.id || key) && raw.uid) {
+              const tx: WalletTransaction = {
+                id: raw.id || key,
+                uid: raw.uid,
+                type: raw.type,
+                category: raw.category,
+                amount: Number(raw.amount) || 0,
+                balanceBefore: Number(raw.balanceBefore) || 0,
+                balanceAfter: Number(raw.balanceAfter) || 0,
+                referenceId: raw.referenceId || '',
+                description: raw.description || '',
+                timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
+                status: raw.status || 'completed',
+                metadata: raw.metadata || undefined,
+                integritySeal: raw.integritySeal || undefined
+              };
+              store.ingestCloudTransaction(tx);
+            }
+          });
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(txUnsub);
+    } catch {}
+
+    // 8. Real-time RTDB listener on /live_bets
+    try {
+      const betsUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'live_bets'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+          let changed = false;
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object' && (raw.betId || key)) {
+              const bet: LiveBet = {
+                betId: raw.betId || key,
+                uid: raw.uid,
+                username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
+                roundPeriod: raw.roundPeriod,
+                gameType: raw.gameType || '30s',
+                betType: raw.betType,
+                betValue: String(raw.betValue),
+                amount: Number(raw.amount) || 0,
+                multiplier: Number(raw.multiplier) || 2,
+                potentialPayout: Number(raw.potentialPayout) || 0,
+                status: raw.status || 'pending',
+                actualPayout: Number(raw.actualPayout) || 0,
+                timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now()
+              };
+              const existingIdx = store.liveBets.findIndex((item) => item.betId === bet.betId);
+              if (existingIdx === -1) {
+                store.liveBets.unshift(bet);
+                changed = true;
+              } else if (store.liveBets[existingIdx].status !== bet.status) {
+                store.liveBets[existingIdx] = { ...store.liveBets[existingIdx], ...bet };
+                changed = true;
+              }
+            }
+          });
+          if (changed) {
+            store.safeNotifyListeners();
+          }
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(betsUnsub);
+    } catch {}
+  }
+
+  /**
+   * Pushes all active in-memory entities (users, deposits, withdrawals, transactions, pending bets)
+   * to Firebase RTDB & Firestore on startup so any account or deposit created on any phone immediately reaches Admin.
    */
   private async pushLocalStateToCloud() {
-    const authed = await this.ensureAuth();
-    if (!authed) return;
+    await this.ensureAuth();
 
     try {
       const localUsers = Object.values(store.getUsers());
@@ -142,13 +431,14 @@ class FirebaseSyncService {
 
   public async pushRoundToRtdb(round: GameRound): Promise<void> {
     if (!round || !round.period || !round.gameType) return;
+    if (String(round.period).startsWith('20261013')) return;
 
     const payload = {
       period: round.period,
       gameType: round.gameType,
       startTime: round.startTime,
       endTime: round.endTime,
-      winningNumber: round.winningNumber,
+      winningNumber: round.winningNumber ?? null,
       winningColor: round.winningColor || [],
       winningSize: round.winningSize || 'small',
       totalBetVolume: round.totalBetVolume || 0,
@@ -159,7 +449,18 @@ class FirebaseSyncService {
       updatedAt: Date.now()
     };
 
-    // 1. Primary Firestore real-time round sync
+    // 1. Primary RTDB real-time round sync (/wingo_rounds & /current_round & /past_rounds)
+    try {
+      const nodeKey = round.isResolved ? `wingo_rounds/resolved_${round.gameType}` : `wingo_rounds/${round.gameType}`;
+      await rtdbSet(rtdbRef(rtdb, nodeKey), payload);
+      if (!round.isResolved) {
+        await rtdbSet(rtdbRef(rtdb, `current_round/${round.gameType}`), payload);
+      } else {
+        await rtdbSet(rtdbRef(rtdb, `past_rounds/${round.period}`), payload);
+      }
+    } catch {}
+
+    // 2. Firestore real-time round sync
     try {
       await this.ensureAuth();
       const docId = round.isResolved ? `resolved_${round.gameType}` : round.gameType;
@@ -172,23 +473,13 @@ class FirebaseSyncService {
           updatedAt: Date.now()
         });
       }
-    } catch (e) {
-      console.warn('Firestore pushRound error:', e);
-    }
-
-    // 2. Secondary RTDB fallback
-    try {
-      await rtdbSet(rtdbRef(rtdb, `wingo_rounds/${round.gameType}`), payload);
-    } catch {
-      // Non-blocking
-    }
+    } catch {}
   }
 
   public async attachRealtimeGameRoundsSync() {
     if (typeof window === 'undefined') return;
     await this.ensureAuth();
 
-    // 1. Primary Firestore real-time listener on wingo_rounds collection
     try {
       const unsub = onSnapshot(
         collection(db, 'wingo_rounds'),
@@ -196,46 +487,23 @@ class FirebaseSyncService {
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'added' || change.type === 'removed' || change.type === 'modified') {
               const data = change.doc.data();
-              if (data && data.period && data.gameType) {
+              if (data && data.period && data.gameType && !String(data.period).startsWith('20261013')) {
                 store.ingestCloudRound(data as Partial<GameRound>);
               }
             }
           });
         },
-        (err) => {
-          console.warn('Firestore wingo_rounds listener notice:', err?.message);
-        }
+        () => {}
       );
       this.globalUnsubscribes.push(unsub);
-    } catch (err) {
-      console.warn('attachRealtimeGameRoundsSync Firestore error:', err);
-    }
-
-    // 2. Secondary RTDB listener
-    const modes: Array<'30s' | '1min' | '3min'> = ['30s', '1min', '3min'];
-    modes.forEach((mode) => {
-      try {
-        rtdbOnValue(
-          rtdbRef(rtdb, `wingo_rounds/${mode}`),
-          (snapshot) => {
-            if (snapshot.exists()) {
-              const data = snapshot.val();
-              if (data && typeof data === 'object') {
-                store.ingestCloudRound(data);
-              }
-            }
-          },
-          () => {}
-        );
-      } catch {}
-    });
+    } catch {}
   }
 
   public async attachRealtimeGlobalEntitiesSync() {
     if (typeof window === 'undefined') return;
     await this.ensureAuth();
 
-    // 1. Real-time Firestore listener for ALL Users (instant Admin & Multi-Device sync)
+    // 1. Real-time Firestore listener for ALL Users
     try {
       const unsubUsers = onSnapshot(
         collection(db, 'users'),
@@ -253,16 +521,12 @@ class FirebaseSyncService {
             }
           });
         },
-        (err) => {
-          console.warn('Firestore users listener notice:', err?.message);
-        }
+        () => {}
       );
       this.globalUnsubscribes.push(unsubUsers);
-    } catch (e) {
-      console.warn('Firestore users listener init error:', e);
-    }
+    } catch {}
 
-    // 2. Real-time Firestore listener for ALL Deposits (instant Admin deposit notification & player approval sync)
+    // 2. Real-time Firestore listener for ALL Deposits
     try {
       const unsubDeps = onSnapshot(
         collection(db, 'deposits'),
@@ -292,14 +556,10 @@ class FirebaseSyncService {
             }
           });
         },
-        (err) => {
-          console.warn('Firestore deposits listener notice:', err?.message);
-        }
+        () => {}
       );
       this.globalUnsubscribes.push(unsubDeps);
-    } catch (e) {
-      console.warn('Firestore deposits listener init error:', e);
-    }
+    } catch {}
 
     // 3. Real-time Firestore listener for ALL Withdrawals
     try {
@@ -330,16 +590,12 @@ class FirebaseSyncService {
             }
           });
         },
-        (err) => {
-          console.warn('Firestore withdrawals listener notice:', err?.message);
-        }
+        () => {}
       );
       this.globalUnsubscribes.push(unsubWithdrawals);
-    } catch (e) {
-      console.warn('Firestore withdrawals listener init error:', e);
-    }
+    } catch {}
 
-    // 4. Real-time Firestore listener for ALL Transactions (ledger synchronization across devices)
+    // 4. Real-time Firestore listener for ALL Transactions
     try {
       const unsubTxs = onSnapshot(
         collection(db, 'transactions'),
@@ -368,16 +624,12 @@ class FirebaseSyncService {
             }
           });
         },
-        (err) => {
-          console.warn('Firestore transactions listener notice:', err?.message);
-        }
+        () => {}
       );
       this.globalUnsubscribes.push(unsubTxs);
-    } catch (e) {
-      console.warn('Firestore transactions listener init error:', e);
-    }
+    } catch {}
 
-    // 5. Real-time Firestore listener for ALL Live Bets (so Admin sees live bets from every device in 1 second)
+    // 5. Real-time Firestore listener for ALL Live Bets
     try {
       const unsubBets = onSnapshot(
         collection(db, 'live_bets'),
@@ -417,14 +669,10 @@ class FirebaseSyncService {
             store.safeNotifyListeners();
           }
         },
-        (err) => {
-          console.warn('Firestore live_bets listener notice:', err?.message);
-        }
+        () => {}
       );
       this.globalUnsubscribes.push(unsubBets);
-    } catch (e) {
-      console.warn('Firestore live_bets listener init error:', e);
-    }
+    } catch {}
   }
 
   private lastSyncedAviatorRoundKey: string = '';
@@ -437,30 +685,28 @@ class FirebaseSyncService {
     const dedupKey = `${round.roundId}_${round.status}`;
     if (this.lastSyncedAviatorRoundKey === dedupKey) return;
     this.lastSyncedAviatorRoundKey = dedupKey;
+
+    const payload = {
+      roundId: round.roundId,
+      status: round.status,
+      crashMultiplier: round.status === 'crashed' ? round.crashMultiplier : null,
+      liveMultiplier: liveMult,
+      serverSeedHash: round.serverSeedHash || '',
+      clientSeed: round.clientSeed || '',
+      nonce: round.nonce || 0,
+      updatedAt: Date.now()
+    };
+
+    try {
+      await rtdbSet(rtdbRef(rtdb, 'current_round/aviator'), payload);
+    } catch {}
+
     try {
       await this.ensureAuth();
-      await setDoc(
-        doc(db, 'aviator_rounds', 'latest'),
-        {
-          roundId: round.roundId,
-          status: round.status,
-          crashMultiplier: round.status === 'crashed' ? round.crashMultiplier : null,
-          liveMultiplier: liveMult,
-          serverSeedHash: round.serverSeedHash || '',
-          clientSeed: round.clientSeed || '',
-          nonce: round.nonce || 0,
-          updatedAt: Date.now()
-        },
-        { merge: true }
-      );
-    } catch {
-      // Non-blocking
-    }
+      await setDoc(doc(db, 'aviator_rounds', 'latest'), payload, { merge: true });
+    } catch {}
   }
 
-  /**
-   * Attaches real-time listener on admin_settings/config in Firestore (and fallback RTDB)
-   */
   public async attachRealtimeAdminSettingsSync() {
     if (typeof window === 'undefined' || this.activeRtdbSettingsUnsubscribe) return;
     await this.ensureAuth();
@@ -479,40 +725,27 @@ class FirebaseSyncService {
         },
         () => {}
       );
-    } catch {
-      // Ignore init error
-    }
+    } catch {}
   }
 
   public async pushAdminSettingsToRtdb(settings: AdminSettings): Promise<void> {
     if (!settings) return;
+    const payload = {
+      ...settings,
+      maintenanceMode: Boolean(settings.maintenanceMode),
+      updatedAt: Date.now()
+    };
+
+    try {
+      await rtdbSet(rtdbRef(rtdb, 'admin_settings'), payload);
+    } catch {}
+
     try {
       await this.ensureAuth();
-      await setDoc(
-        doc(db, 'admin_settings', 'config'),
-        {
-          ...settings,
-          updatedAt: Date.now()
-        },
-        { merge: true }
-      );
-    } catch {
-      // Non-blocking
-    }
-
-    try {
-      await rtdbSet(rtdbRef(rtdb, 'admin_settings'), {
-        ...settings,
-        updatedAt: Date.now()
-      });
-    } catch {
-      // Non-blocking
-    }
+      await setDoc(doc(db, 'admin_settings', 'config'), payload, { merge: true });
+    } catch {}
   }
 
-  /**
-   * Initializes automatic Firebase Auth state listener and starts global real-time listeners.
-   */
   private initAuthListener() {
     if (typeof window === 'undefined') return;
 
@@ -545,9 +778,6 @@ class FirebaseSyncService {
     });
   }
 
-  /**
-   * Attaches real-time Firestore listener for a specific active user UID.
-   */
   public async attachRealtimeUserSync(uid: string, fallbackPhone?: string) {
     if (!uid) return;
     if (this.currentSyncedUid === uid && this.activeUserUnsubscribe) {
@@ -556,8 +786,28 @@ class FirebaseSyncService {
 
     this.detachRealtimeUserSync();
     this.currentSyncedUid = uid;
-    await this.ensureAuth();
 
+    // 1. RTDB live listener on /users/{uid}
+    try {
+      this.activeRtdbUserUnsubscribe = rtdbOnValue(
+        rtdbRef(rtdb, `users/${uid}`),
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.val();
+            if (data && typeof data === 'object') {
+              store.updateUserFromFirestore({
+                ...data,
+                uid
+              });
+            }
+          }
+        },
+        () => {}
+      );
+    } catch {}
+
+    // 2. Firestore live listener on /users/{uid}
+    await this.ensureAuth();
     try {
       const userDocRef = doc(db, 'users', uid);
       this.activeUserUnsubscribe = onSnapshot(
@@ -589,14 +839,9 @@ class FirebaseSyncService {
         },
         () => {}
       );
-    } catch {
-      // Non-blocking
-    }
+    } catch {}
   }
 
-  /**
-   * Detaches active user listener on sign-out
-   */
   public detachRealtimeUserSync() {
     if (this.activeRtdbUserUnsubscribe) {
       this.activeRtdbUserUnsubscribe();
@@ -610,39 +855,48 @@ class FirebaseSyncService {
   }
 
   /**
-   * Uploads or updates player document in Firestore (/users/{uid})
+   * Writes player document directly to RTDB (/users/{uid}) and Firestore (/users/{uid})
    */
   public async pushUserToFirestore(user: UserRecord, phoneOverride?: string): Promise<boolean> {
     if (!user || !user.uid || user.uid.startsWith('usr_demo_')) return false;
     const cleanPhone = phoneOverride || user.phone || '';
 
-    await this.ensureAuth();
+    const userPayload: Record<string, any> = {
+      uid: user.uid,
+      username: user.username || `Player_${user.uid.slice(-4)}`,
+      phone: cleanPhone,
+      balance: Math.max(0, Number(user.balance) || 0),
+      vipLevel: Math.min(10, Math.max(0, Number(user.vipLevel) || 1)),
+      status: user.status || 'active',
+      role: user.role || 'user',
+      referralCode: user.referralCode || '',
+      totalBetsCount: user.totalBetsCount || 0,
+      totalWonAmount: user.totalWonAmount || 0,
+      totalLostAmount: user.totalLostAmount || 0,
+      createdAt: user.createdAt || Date.now(),
+      lastLogin: user.lastLogin || Date.now(),
+      devices: user.devices || {},
+      updatedAt: Date.now()
+    };
 
+    if (user.passwordHash) {
+      userPayload.passwordHash = user.passwordHash;
+    }
+    if (user.referredBy) {
+      userPayload.referredBy = user.referredBy;
+    }
+
+    // 1. Write immediately to Firebase Realtime Database (/users/{uid})
+    try {
+      await rtdbSet(rtdbRef(rtdb, `users/${user.uid}`), userPayload);
+    } catch (e) {
+      console.warn('[FirebaseSync] RTDB pushUser notice:', e);
+    }
+
+    // 2. Write to Firestore (/users/{uid})
+    await this.ensureAuth();
     try {
       const userRef = doc(db, 'users', user.uid);
-      const userPayload: Record<string, unknown> = {
-        uid: user.uid,
-        username: user.username || `Player_${user.uid.slice(-4)}`,
-        phone: cleanPhone,
-        balance: Math.max(0, Number(user.balance) || 0),
-        vipLevel: Math.min(10, Math.max(0, Number(user.vipLevel) || 1)),
-        status: user.status || 'active',
-        role: user.role || 'user',
-        referralCode: user.referralCode || '',
-        totalBetsCount: user.totalBetsCount || 0,
-        totalWonAmount: user.totalWonAmount || 0,
-        totalLostAmount: user.totalLostAmount || 0,
-        devices: user.devices || {},
-        updatedAt: Date.now()
-      };
-
-      if (user.passwordHash) {
-        userPayload.passwordHash = user.passwordHash;
-      }
-      if (user.referredBy) {
-        userPayload.referredBy = user.referredBy;
-      }
-
       await setDoc(userRef, userPayload, { merge: true });
 
       if (cleanPhone) {
@@ -666,80 +920,77 @@ class FirebaseSyncService {
   }
 
   /**
-   * Syncs a wallet transaction to Firestore (/transactions/{txId})
+   * Syncs a wallet transaction to RTDB (/transactions/{txId}) and Firestore
    */
   public async pushTransactionToFirestore(tx: WalletTransaction): Promise<void> {
     if (!tx || !tx.id || !tx.uid) return;
+    const payload = {
+      id: tx.id,
+      uid: tx.uid,
+      type: tx.type,
+      category: tx.category,
+      amount: tx.amount,
+      balanceBefore: tx.balanceBefore,
+      balanceAfter: tx.balanceAfter,
+      referenceId: tx.referenceId || '',
+      description: tx.description || '',
+      timestamp: tx.timestamp || Date.now(),
+      status: tx.status || 'completed',
+      metadata: tx.metadata || {},
+      integritySeal: tx.integritySeal || '',
+      updatedAt: Date.now()
+    };
+
+    try {
+      await rtdbSet(rtdbRef(rtdb, `transactions/${tx.id}`), payload);
+    } catch {}
+
     await this.ensureAuth();
     try {
-      const txRef = doc(db, 'transactions', tx.id);
-      await setDoc(
-        txRef,
-        {
-          id: tx.id,
-          uid: tx.uid,
-          type: tx.type,
-          category: tx.category,
-          amount: tx.amount,
-          balanceBefore: tx.balanceBefore,
-          balanceAfter: tx.balanceAfter,
-          referenceId: tx.referenceId || '',
-          description: tx.description || '',
-          timestamp: tx.timestamp || Date.now(),
-          status: tx.status || 'completed',
-          metadata: tx.metadata || {},
-          integritySeal: tx.integritySeal || '',
-          updatedAt: Date.now()
-        },
-        { merge: true }
-      );
-    } catch (err) {
-      console.warn('[FirebaseSync] pushTransactionToFirestore error:', err);
-    }
+      await setDoc(doc(db, 'transactions', tx.id), payload, { merge: true });
+    } catch {}
   }
 
   /**
-   * Syncs a player deposit request to Firestore (/deposits/{depositId})
+   * Syncs a player deposit request to RTDB (/deposits/{depositId}) and Firestore
    */
   public async pushDepositToFirestore(dep: DepositRecord): Promise<void> {
     if (!dep || !dep.id || !dep.uid) return;
+    const payload = {
+      id: dep.id,
+      uid: dep.uid,
+      username: dep.username,
+      phone: dep.phone || '',
+      amount: dep.amount,
+      usdtAmount: dep.usdtAmount || null,
+      paymentMethod: dep.paymentMethod || 'UPI',
+      method: dep.paymentMethod === 'USDT' ? 'USDT' : 'UPI',
+      referenceId: dep.referenceId,
+      utrOrRef: dep.referenceId,
+      upiReceiverId: dep.upiReceiverId || '',
+      status: dep.status,
+      submittedAt: dep.submittedAt || Date.now(),
+      reviewedAt: dep.reviewedAt || null,
+      reviewedBy: dep.reviewedBy || null,
+      adminNote: dep.adminNote || null,
+      updatedAt: Date.now()
+    };
+
+    try {
+      await rtdbSet(rtdbRef(rtdb, `deposits/${dep.id}`), payload);
+    } catch {}
+
     await this.ensureAuth();
     try {
-      const depRef = doc(db, 'deposits', dep.id);
-      await setDoc(
-        depRef,
-        {
-          id: dep.id,
-          uid: dep.uid,
-          username: dep.username,
-          phone: dep.phone || '',
-          amount: dep.amount,
-          usdtAmount: dep.usdtAmount || null,
-          paymentMethod: dep.paymentMethod || 'UPI',
-          method: dep.paymentMethod === 'USDT' ? 'USDT' : 'UPI',
-          referenceId: dep.referenceId,
-          utrOrRef: dep.referenceId,
-          upiReceiverId: dep.upiReceiverId || '',
-          status: dep.status,
-          submittedAt: dep.submittedAt || Date.now(),
-          reviewedAt: dep.reviewedAt || null,
-          reviewedBy: dep.reviewedBy || null,
-          adminNote: dep.adminNote || null,
-          updatedAt: Date.now()
-        },
-        { merge: true }
-      );
-    } catch (err) {
-      console.warn('[FirebaseSync] pushDepositToFirestore error:', err);
-    }
+      await setDoc(doc(db, 'deposits', dep.id), payload, { merge: true });
+    } catch {}
   }
 
   /**
-   * Syncs a player withdrawal request to Firestore (/withdrawals/{withdrawalId})
+   * Syncs a player withdrawal request to RTDB (/withdrawals/{withdrawalId}) and Firestore
    */
   public async pushWithdrawalToFirestore(w: WithdrawalRecord): Promise<void> {
     if (!w || !w.id || !w.uid) return;
-    await this.ensureAuth();
     const destination =
       w.accountDetails?.upiId ||
       w.accountDetails?.accountNumber ||
@@ -747,71 +998,69 @@ class FirebaseSyncService {
       w.phone ||
       'BANK_OR_UPI';
 
+    const payload = {
+      id: w.id,
+      uid: w.uid,
+      username: w.username,
+      phone: w.phone || '',
+      amount: w.amount,
+      usdtAmount: w.usdtAmount || null,
+      payoutMethod: w.payoutMethod,
+      method: w.payoutMethod === 'Bank Transfer' ? 'BANK' : 'UPI',
+      accountDetails: w.accountDetails || {},
+      destination,
+      status: w.status,
+      requestedAt: w.requestedAt || Date.now(),
+      processedAt: w.processedAt || null,
+      processedBy: w.processedBy || null,
+      rejectionReason: w.rejectionReason || null,
+      updatedAt: Date.now()
+    };
+
     try {
-      const wRef = doc(db, 'withdrawals', w.id);
-      await setDoc(
-        wRef,
-        {
-          id: w.id,
-          uid: w.uid,
-          username: w.username,
-          phone: w.phone || '',
-          amount: w.amount,
-          usdtAmount: w.usdtAmount || null,
-          payoutMethod: w.payoutMethod,
-          method: w.payoutMethod === 'Bank Transfer' ? 'BANK' : 'UPI',
-          accountDetails: w.accountDetails || {},
-          destination,
-          status: w.status,
-          requestedAt: w.requestedAt || Date.now(),
-          processedAt: w.processedAt || null,
-          processedBy: w.processedBy || null,
-          rejectionReason: w.rejectionReason || null,
-          updatedAt: Date.now()
-        },
-        { merge: true }
-      );
-    } catch (err) {
-      console.warn('[FirebaseSync] pushWithdrawalToFirestore error:', err);
-    }
+      await rtdbSet(rtdbRef(rtdb, `withdrawals/${w.id}`), payload);
+    } catch {}
+
+    await this.ensureAuth();
+    try {
+      await setDoc(doc(db, 'withdrawals', w.id), payload, { merge: true });
+    } catch {}
   }
 
   /**
-   * Syncs a live game bet to Firestore (/live_bets/{betId})
+   * Syncs a live game bet to RTDB (/live_bets/{betId}) and Firestore
    */
   public async pushLiveBetToFirestore(bet: LiveBet): Promise<void> {
     if (!bet || !bet.betId || !bet.uid) return;
+    const payload = {
+      betId: bet.betId,
+      uid: bet.uid,
+      username: bet.username,
+      roundPeriod: bet.roundPeriod,
+      gameType: bet.gameType,
+      betType: bet.betType,
+      betValue: String(bet.betValue),
+      amount: bet.amount,
+      multiplier: bet.multiplier,
+      potentialPayout: bet.potentialPayout,
+      status: bet.status,
+      actualPayout: bet.actualPayout || 0,
+      timestamp: bet.timestamp || Date.now(),
+      updatedAt: Date.now()
+    };
+
+    try {
+      await rtdbSet(rtdbRef(rtdb, `live_bets/${bet.betId}`), payload);
+    } catch {}
+
     await this.ensureAuth();
     try {
-      const betRef = doc(db, 'live_bets', bet.betId);
-      await setDoc(
-        betRef,
-        {
-          betId: bet.betId,
-          uid: bet.uid,
-          username: bet.username,
-          roundPeriod: bet.roundPeriod,
-          gameType: bet.gameType,
-          betType: bet.betType,
-          betValue: String(bet.betValue),
-          amount: bet.amount,
-          multiplier: bet.multiplier,
-          potentialPayout: bet.potentialPayout,
-          status: bet.status,
-          actualPayout: bet.actualPayout || 0,
-          timestamp: bet.timestamp || Date.now(),
-          updatedAt: Date.now()
-        },
-        { merge: true }
-      );
-    } catch (err) {
-      console.warn('[FirebaseSync] pushLiveBetToFirestore error:', err);
-    }
+      await setDoc(doc(db, 'live_bets', bet.betId), payload, { merge: true });
+    } catch {}
   }
 
   /**
-   * Manually triggers an immediate force re-sync with Cloud Firestore,
-   * pulling all users, deposits, withdrawals, transactions, active rounds, and settings.
+   * Manually triggers an immediate force re-sync with Firebase RTDB & Cloud Firestore
    */
   public async forceSyncFromFirebase(): Promise<{ success: boolean; message: string; balance?: number; period?: string }> {
     await this.ensureAuth();
@@ -822,7 +1071,23 @@ class FirebaseSyncService {
     let latestPeriod = store.getCurrentRound()?.period;
 
     try {
-      // 1. Pull all users from Firestore
+      // Pull from RTDB first
+      try {
+        const rtdbUsersSnap = await rtdbGet(rtdbRef(rtdb, 'users'));
+        if (rtdbUsersSnap.exists()) {
+          const val = rtdbUsersSnap.val();
+          if (val && typeof val === 'object') {
+            Object.entries(val).forEach(([key, raw]: [string, any]) => {
+              const uid = raw?.uid || key;
+              if (uid && !String(uid).startsWith('usr_demo_')) {
+                store.updateUserFromFirestore({ ...raw, uid });
+              }
+            });
+          }
+        }
+      } catch {}
+
+      // Pull from Firestore
       const usersSnap = await getDocs(collection(db, 'users'));
       usersSnap.forEach((docSnap) => {
         const data = docSnap.data() as Partial<UserRecord>;
@@ -835,7 +1100,6 @@ class FirebaseSyncService {
         }
       });
 
-      // 2. Pull all deposits from Firestore
       const depSnap = await getDocs(collection(db, 'deposits'));
       depSnap.forEach((docSnap) => {
         const raw = docSnap.data();
@@ -859,7 +1123,6 @@ class FirebaseSyncService {
         }
       });
 
-      // 3. Pull all withdrawals from Firestore
       const wSnap = await getDocs(collection(db, 'withdrawals'));
       wSnap.forEach((docSnap) => {
         const raw = docSnap.data();
@@ -882,7 +1145,6 @@ class FirebaseSyncService {
         }
       });
 
-      // 4. Pull all transactions from Firestore
       const txSnap = await getDocs(collection(db, 'transactions'));
       txSnap.forEach((docSnap) => {
         const raw = docSnap.data();
@@ -905,17 +1167,15 @@ class FirebaseSyncService {
         }
       });
 
-      // 5. Pull WinGo rounds from Firestore
       const roundsSnap = await getDocs(collection(db, 'wingo_rounds'));
       roundsSnap.forEach((docSnap) => {
         const val = docSnap.data();
-        if (val && val.period && val.gameType) {
+        if (val && val.period && val.gameType && !String(val.period).startsWith('20261013')) {
           store.ingestCloudRound(val as Partial<GameRound>);
           if (val.period && !val.isResolved) latestPeriod = val.period;
         }
       });
 
-      // 6. Pull Admin Settings from Firestore
       const settingsSnap = await getDoc(doc(db, 'admin_settings', 'config'));
       if (settingsSnap.exists()) {
         store.ingestCloudAdminSettings(settingsSnap.data() as Partial<AdminSettings>);
@@ -929,7 +1189,7 @@ class FirebaseSyncService {
 
       return {
         success: true,
-        message: 'Live state synchronized successfully with Cloud Firestore!',
+        message: 'Live state synchronized successfully with Firebase!',
         balance: newBalance,
         period: latestPeriod
       };

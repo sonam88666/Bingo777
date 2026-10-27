@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Dice6, 
   ArrowLeft, 
@@ -33,25 +33,38 @@ export const K3DiceGame: React.FC<K3DiceGameProps> = ({
   const [selectedBetValue, setSelectedBetValue] = useState<string>('big');
   const [betAmount, setBetAmount] = useState<number>(50);
   const [k3Tab, setK3Tab] = useState<'game' | 'mybets'>('game');
+  const [, setTick] = useState(0);
+  const lastResolvedK3PeriodRef = useRef<string>('');
+
+  useEffect(() => {
+    const unsub = store.subscribe(() => setTick((t) => t + 1));
+    return unsub;
+  }, []);
 
   const k3Round = store.getK3CurrentRound();
   const pastRounds = store.getK3PastRounds();
   const userK3Bets = user ? store.getLiveBets().filter((b) => b.uid === user.uid && (b.gameId === 'k3_dice' || b.betType.startsWith('k3'))) : [];
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      const now = Date.now();
-      const diff = Math.max(0, Math.floor((k3Round.endTime - now) / 1000));
+    const updateCountdown = () => {
+      const activeRound = store.getK3CurrentRound();
+      const now = store.getServerNow();
+      const remainingMs = activeRound.endTime - now;
+      const diff = Math.max(0, Math.ceil(remainingMs / 1000));
       setTimeLeft(diff);
 
-      if (diff === 0) {
+      if (remainingMs <= 0 && lastResolvedK3PeriodRef.current !== activeRound.period) {
+        lastResolvedK3PeriodRef.current = activeRound.period;
         store.resolveK3Round();
-        showToast('K3 Dice round rolled! Results updated.', 'info');
+        setTick((t) => t + 1);
       }
-    }, 1000);
+    };
+
+    updateCountdown();
+    const timer = setInterval(updateCountdown, 250);
 
     return () => clearInterval(timer);
-  }, [k3Round]);
+  }, []);
 
   const handlePlaceBet = () => {
     if (!user) {

@@ -288,102 +288,16 @@ function computeServerVerifiedBalance(uId: string): number {
 }
 
 function saveServerStateToDisk(): void {
-  try {
-    const payload = {
-      updatedAt: Date.now(),
-      users: serverUsers,
-      referrals: Array.from(serverReferrals.entries()),
-      deposits: Array.from(serverDeposits.entries()),
-      withdrawals: Array.from(serverWithdrawals.entries()),
-      transactions: serverTransactions.slice(0, 1000),
-      deletedUserUids: Array.from(deletedUserUids),
-      approvedDepositReferences: Array.from(approvedDepositReferences),
-      adminSettings: serverAdminSettings
-    };
-    fs.writeFileSync(PERSISTENT_DB_PATH, JSON.stringify(payload, null, 2), 'utf8');
-  } catch (err) {
-    console.warn('[ServerPersistence] Warning saving state to disk:', err);
-  }
+  // Deprecated local JSON file persistence (.bingo777_persistent_db.json) in favor of Firebase Realtime Database & Firestore
 }
 
 function loadServerStateFromDisk(): void {
   try {
-    if (!fs.existsSync(PERSISTENT_DB_PATH)) return;
-    const raw = fs.readFileSync(PERSISTENT_DB_PATH, 'utf8');
-    if (!raw) return;
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed.deletedUserUids)) {
-      parsed.deletedUserUids.forEach((uid: string) => deletedUserUids.add(uid));
+    if (fs.existsSync(PERSISTENT_DB_PATH)) {
+      fs.unlinkSync(PERSISTENT_DB_PATH);
     }
-    if (Array.isArray(parsed.approvedDepositReferences)) {
-      parsed.approvedDepositReferences.forEach((ref: string) => approvedDepositReferences.add(ref));
-    }
-    if (parsed.users && typeof parsed.users === 'object') {
-      Object.entries(parsed.users).forEach(([uid, u]) => {
-        if (!deletedUserUids.has(uid) && u && typeof u === 'object') {
-          const userObj = u as ServerUser;
-          userObj.phone = normalizePhoneNumber(userObj.phone);
-          serverUsers[uid] = userObj;
-        }
-      });
-    }
-    if (Array.isArray(parsed.referrals)) {
-      parsed.referrals.forEach(([k, v]: [string, ServerReferral]) => {
-        if (k && v) serverReferrals.set(k, v);
-      });
-    }
-    if (Array.isArray(parsed.deposits)) {
-      parsed.deposits.forEach(([k, v]: [string, ServerDeposit]) => {
-        if (k && v) serverDeposits.set(k, v);
-      });
-    }
-    if (Array.isArray(parsed.withdrawals)) {
-      parsed.withdrawals.forEach(([k, v]: [string, ServerWithdrawal]) => {
-        if (k && v) serverWithdrawals.set(k, v);
-      });
-    }
-    if (Array.isArray(parsed.transactions)) {
-      serverTransactions.splice(0, serverTransactions.length, ...parsed.transactions);
-    }
-    if (parsed.adminSettings && typeof parsed.adminSettings === 'object') {
-      Object.assign(serverAdminSettings, parsed.adminSettings);
-    }
-
-    // Sanitize any legacy phone-based UIDs to unique player IDs
-    const oldToNewMap = new Map<string, string>();
-    Object.keys(serverUsers).forEach((uid) => {
-      const u = serverUsers[uid];
-      const cleanPhone = normalizePhoneNumber(u.phone);
-      if (uid.startsWith('usr_') || uid === cleanPhone || (cleanPhone.length >= 7 && uid.includes(cleanPhone))) {
-        const newUid = generateUniqueServerPlayerUid();
-        oldToNewMap.set(uid, newUid);
-        u.uid = newUid;
-        delete serverUsers[uid];
-        serverUsers[newUid] = u;
-      }
-    });
-    if (oldToNewMap.size > 0) {
-      serverTransactions.forEach((tx) => {
-        if (oldToNewMap.has(tx.uid)) tx.uid = oldToNewMap.get(tx.uid)!;
-      });
-      serverDeposits.forEach((dep, key) => {
-        if (oldToNewMap.has(dep.uid)) {
-          dep.uid = oldToNewMap.get(dep.uid)!;
-          serverDeposits.set(key, dep);
-        }
-      });
-      serverWithdrawals.forEach((w, key) => {
-        if (oldToNewMap.has(w.uid)) {
-          w.uid = oldToNewMap.get(w.uid)!;
-          serverWithdrawals.set(key, w);
-        }
-      });
-      saveServerStateToDisk();
-    }
-
-    console.log(`[ServerPersistence] Loaded ${Object.keys(serverUsers).length} permanent user accounts from disk.`);
-  } catch (err) {
-    console.warn('[ServerPersistence] Warning loading state from disk:', err);
+  } catch {
+    // Ignore cleanup errors
   }
 }
 
@@ -397,7 +311,7 @@ function generateUniqueServerPlayerUid(): string {
   return candidate;
 }
 
-// Hydrate persistent server state immediately on startup
+// Clean up any legacy local JSON persistence on startup
 loadServerStateFromDisk();
 
 // Helper: Extract Master Admin Token from request

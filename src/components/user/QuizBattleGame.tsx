@@ -202,7 +202,9 @@ export const QuizBattleGame: React.FC<QuizBattleGameProps> = ({
         const uidParam = user?.uid ? encodeURIComponent(user.uid) : '';
         const catParam = encodeURIComponent(selectedCategory);
         const res = await fetch(`/api/news-polls/live?uid=${uidParam}&category=${catParam}`);
-        const data = await res.json();
+        const text = await res.text();
+        if (!text || text.trim().startsWith('<')) return;
+        const data = JSON.parse(text);
         if (res.ok && data.success) {
           setActivePolls(data.activePolls || []);
           setCompletedPolls(data.completedPolls || []);
@@ -299,7 +301,12 @@ export const QuizBattleGame: React.FC<QuizBattleGameProps> = ({
           clientBalance: user.balance
         })
       });
-      const data = await res.json();
+      const text = await res.text();
+      if (!text || text.trim().startsWith('<')) {
+        showToast('Quiz server is syncing. Please try again in a moment.', 'info');
+        return;
+      }
+      const data = JSON.parse(text);
       if (res.ok && data.success) {
         if (data.debitTxId && !store.getTransaction(data.debitTxId)) {
           store.executeWalletTransaction({
@@ -334,8 +341,8 @@ export const QuizBattleGame: React.FC<QuizBattleGameProps> = ({
         showToast(data.error || 'Could not place bet', 'error');
         fetchLivePolls(true);
       }
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Network error', 'error');
+    } catch {
+      showToast('Quiz service temporarily unavailable.', 'info');
     } finally {
       setVotingPollId(null);
     }

@@ -19,7 +19,9 @@ import {
   ArrowLeft,
   Trash2,
   RotateCcw,
-  RefreshCw
+  RefreshCw,
+  Key,
+  Copy
 } from 'lucide-react';
 import { UserRecord } from '../../types';
 import { store } from '../../services/store';
@@ -71,6 +73,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   const [showAddUserModal, setShowAddUserModal] = useState<boolean>(false);
   const [newUsername, setNewUsername] = useState('');
   const [newPhone, setNewPhone] = useState('');
+  const [newPassword, setNewPassword] = useState('123456');
   const [newBalance, setNewBalance] = useState<number>(0);
   const [newVip, setNewVip] = useState<number>(1);
 
@@ -78,13 +81,27 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
   const [editUsername, setEditUsername] = useState('');
   const [editPhone, setEditPhone] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [editReferralCode, setEditReferralCode] = useState('');
   const [editVip, setEditVip] = useState<number>(1);
   const [editStatus, setEditStatus] = useState<UserRecord['status']>('active');
   const [editReason, setEditReason] = useState('');
 
+  // Quick Inline Password Reset State
+  const [quickNewPassword, setQuickNewPassword] = useState('');
+
   // Ban / Unban Confirmation Modal
   const [showBanModal, setShowBanModal] = useState<boolean>(false);
   const [banReason, setBanReason] = useState('');
+
+  const copyText = (value: string, label: string) => {
+    try {
+      navigator.clipboard.writeText(value);
+      showToast(`Copied ${label}: ${value}`, 'success');
+    } catch {
+      showToast(`${label}: ${value}`, 'info');
+    }
+  };
 
   const usersMap = store.getUsers();
   const users = Object.values(usersMap);
@@ -117,6 +134,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
       {
         username: newUsername,
         phone: newPhone,
+        password: newPassword.trim() || '123456',
         vipLevel: newVip,
         initialBalance: newBalance,
         reason: 'Created via + Add Manual User in Admin Console'
@@ -124,10 +142,11 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
       adminId
     );
     if (res.success && res.user) {
-      showToast(`Created user ${res.user.username} (${res.user.uid})`, 'success');
+      showToast(`Created user ${res.user.username} (${res.user.uid}) | Password: ${res.user.passwordHash}`, 'success');
       setShowAddUserModal(false);
       setNewUsername('');
       setNewPhone('');
+      setNewPassword('123456');
       setNewBalance(0);
       setNewVip(1);
     } else {
@@ -165,9 +184,11 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   const openEditUserModal = (u: UserRecord) => {
     setEditUsername(u.username);
     setEditPhone(u.phone);
+    setEditPassword(u.passwordHash || '');
+    setEditReferralCode(u.referralCode || '');
     setEditVip(u.vipLevel);
     setEditStatus(u.status);
-    setEditReason('Updated profile settings via Edit User');
+    setEditReason('Updated profile & credentials via Edit User');
     setShowEditModal(true);
   };
 
@@ -179,6 +200,8 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
       {
         username: editUsername,
         phone: editPhone,
+        password: editPassword.trim() || undefined,
+        referralCode: editReferralCode.trim() || undefined,
         vipLevel: editVip,
         status: editStatus,
         reason: editReason || 'Admin profile edit'
@@ -187,7 +210,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
     );
     if (res.success) {
       await apiClient.updateUserStatus(selectedUser.uid, editStatus, editReason || 'Admin edit', adminId, tokenToUse).catch(() => {});
-      showToast(`Updated profile for ${selectedUser.uid}`, 'success');
+      showToast(`Updated profile & password for ${selectedUser.uid}`, 'success');
       setShowEditModal(false);
     } else {
       showToast(res.error || 'Failed to update user', 'error');
@@ -254,36 +277,193 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
           <span className="font-mono text-xs text-slate-500">UID: {selectedUser.uid}</span>
         </div>
 
-        {/* 1. Top User Identity Card */}
-        <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-sm flex items-center space-x-3.5">
-          <div className="w-14 h-14 rounded-full bg-blue-100 text-[#2563EB] flex items-center justify-center shrink-0">
-            <User className="w-8 h-8" />
+        {/* 1. Top User Identity Card + Login Credentials & Password Management */}
+        <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-sm space-y-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center space-x-3.5 min-w-0">
+              <div className="w-14 h-14 rounded-full bg-blue-100 text-[#2563EB] flex items-center justify-center shrink-0">
+                <User className="w-8 h-8" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono font-black text-slate-900 text-base sm:text-lg truncate">
+                    {selectedUser.uid}
+                  </span>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                      selectedUser.status === 'active'
+                        ? 'bg-emerald-500 text-white'
+                        : 'bg-rose-500 text-white'
+                    }`}
+                  >
+                    {selectedUser.status === 'active' ? 'Active' : selectedUser.status.toUpperCase()}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-indigo-100 text-indigo-800">
+                    VIP {selectedUser.vipLevel}
+                  </span>
+                  {selectedUser.role === 'master_admin' && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500 text-slate-950 shadow-sm">
+                      ★ ADMIN (Maintenance Bypass)
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-slate-700 font-semibold mt-0.5">
+                  {selectedUser.username} · +91 {selectedUser.phone}
+                </div>
+                <div className="text-xs text-slate-400 mt-0.5">
+                  Joined: {new Date(selectedUser.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => openEditUserModal(selectedUser)}
+              className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center space-x-1.5 shadow-sm shrink-0"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>Full Edit</span>
+            </button>
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono font-black text-slate-900 text-base sm:text-lg truncate">
-                {selectedUser.uid}
-              </span>
-              <span
-                className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                  selectedUser.status === 'active'
-                    ? 'bg-emerald-500 text-white'
-                    : 'bg-rose-500 text-white'
-                }`}
+
+          {/* User Login Credentials (Phone, UID, Password View & Instant Password Reset) */}
+          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+              <div className="p-2.5 rounded-lg bg-white border border-slate-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Mobile Number</span>
+                  <span className="font-mono font-black text-slate-900 text-xs">+91 {selectedUser.phone}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyText(selectedUser.phone, 'Mobile Number')}
+                  className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"
+                  title="Copy Phone"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-amber-50/70 border border-amber-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-amber-700 flex items-center space-x-1">
+                    <Key className="w-3 h-3" />
+                    <span>Login Password</span>
+                  </span>
+                  <span className="font-mono font-black text-slate-950 text-sm">
+                    {selectedUser.passwordHash || 'Not Set'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyText(selectedUser.passwordHash || '', 'Password')}
+                  className="p-1.5 rounded-lg bg-amber-200/70 hover:bg-amber-300 text-amber-900"
+                  title="Copy Password"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-white border border-slate-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Referral Code</span>
+                  <span className="font-mono font-black text-blue-700 text-xs">{selectedUser.referralCode || 'N/A'}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyText(selectedUser.referralCode || '', 'Referral Code')}
+                  className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"
+                  title="Copy Referral Code"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Instant Password Change Row */}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <input
+                type="text"
+                placeholder="Enter new password to change..."
+                value={quickNewPassword}
+                onChange={(e) => setQuickNewPassword(e.target.value)}
+                className="flex-1 min-w-[160px] bg-white border border-slate-200 rounded-xl px-3 py-2 font-mono text-xs font-bold text-slate-900 focus:outline-none focus:border-blue-600"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (!quickNewPassword.trim()) {
+                    showToast('Please enter a new password first', 'error');
+                    return;
+                  }
+                  const res = store.updateUserProfile(
+                    selectedUser.uid,
+                    {
+                      password: quickNewPassword.trim(),
+                      reason: 'Password updated by Admin'
+                    },
+                    adminId
+                  );
+                  if (res.success) {
+                    showToast(`Password updated to "${quickNewPassword.trim()}" for ${selectedUser.username}!`, 'success');
+                    setQuickNewPassword('');
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold text-xs flex items-center space-x-1.5 shadow-sm transition shrink-0"
               >
-                {selectedUser.status === 'active' ? 'Active' : selectedUser.status.toUpperCase()}
-              </span>
-              {selectedUser.role === 'master_admin' && (
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500 text-slate-950 shadow-sm">
-                  ★ ADMIN (Maintenance Bypass)
-                </span>
-              )}
+                <Key className="w-3.5 h-3.5" />
+                <span>Update Password</span>
+              </button>
             </div>
-            <div className="text-xs text-slate-700 font-semibold mt-0.5">
-              {selectedUser.username} · +91 {selectedUser.phone}
-            </div>
-            <div className="text-xs text-slate-400 mt-0.5">
-              Joined: {new Date(selectedUser.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+
+            {/* Quick Account Status & VIP Controls */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80 text-xs">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-bold text-slate-600 text-[11px] mr-1">Account Status:</span>
+                {(['active', 'suspended', 'banned', 'deactivated'] as const).map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={async () => {
+                      const ok = store.toggleUserStatus(selectedUser.uid, st, `Status set to ${st} by Admin`, adminId);
+                      if (ok) {
+                        await apiClient.updateUserStatus(selectedUser.uid, st, `Status set to ${st}`, adminId, tokenToUse).catch(() => {});
+                        showToast(`User status updated to ${st.toUpperCase()}`, st === 'active' ? 'success' : 'info');
+                      }
+                    }}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-[10px] uppercase transition ${
+                      selectedUser.status === st
+                        ? st === 'active'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-rose-600 text-white shadow-xs'
+                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    {st}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <span className="font-bold text-slate-600 text-[11px]">VIP:</span>
+                <select
+                  value={selectedUser.vipLevel}
+                  onChange={(e) => {
+                    const nextVip = Number(e.target.value);
+                    store.updateUserProfile(
+                      selectedUser.uid,
+                      { vipLevel: nextVip, reason: `VIP changed to ${nextVip} by Admin` },
+                      adminId
+                    );
+                    showToast(`Updated ${selectedUser.username} to VIP ${nextVip}`, 'success');
+                  }}
+                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-900"
+                >
+                  {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => (
+                    <option key={v} value={v}>VIP {v}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -816,30 +996,52 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
                     />
                   </div>
                   <div>
+                    <label className="text-xs font-semibold text-amber-700 mb-1 block">Login Password</label>
+                    <input
+                      type="text"
+                      placeholder="Set / Change Password"
+                      value={editPassword}
+                      onChange={(e) => setEditPassword(e.target.value)}
+                      className="w-full bg-amber-50/70 border border-amber-200 rounded-xl px-3.5 py-2 font-mono text-xs font-black text-slate-950"
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div>
                     <label className="text-xs font-semibold text-slate-600 mb-1 block">VIP Level</label>
                     <select
                       value={editVip}
                       onChange={(e) => setEditVip(Number(e.target.value))}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-900"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-900"
                     >
                       {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) => (
                         <option key={v} value={v}>VIP {v}</option>
                       ))}
                     </select>
                   </div>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-slate-600 mb-1 block">Account Status</label>
-                  <select
-                    value={editStatus}
-                    onChange={(e) => setEditStatus(e.target.value as UserRecord['status'])}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-bold text-slate-900"
-                  >
-                    <option value="active">Active</option>
-                    <option value="suspended">Suspended</option>
-                    <option value="banned">Banned</option>
-                    <option value="deactivated">Deactivated</option>
-                  </select>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 mb-1 block">Account Status</label>
+                    <select
+                      value={editStatus}
+                      onChange={(e) => setEditStatus(e.target.value as UserRecord['status'])}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-900"
+                    >
+                      <option value="active">Active</option>
+                      <option value="suspended">Suspended</option>
+                      <option value="banned">Banned</option>
+                      <option value="deactivated">Deactivated</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600 mb-1 block">Referral Code</label>
+                    <input
+                      type="text"
+                      value={editReferralCode}
+                      onChange={(e) => setEditReferralCode(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 font-mono text-xs font-bold text-slate-900"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-slate-600 mb-1 block">Audit Reason</label>
@@ -1026,7 +1228,15 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
                         </span>
                       )}
                     </div>
-                    <div className="text-xs text-slate-500 font-mono mt-0.5">+91 {u.phone}</div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 font-mono mt-0.5">
+                      <span>+91 {u.phone}</span>
+                      <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-900 font-bold text-[11px]">
+                        🔑 Pass: {u.passwordHash || 'Not Set'}
+                      </span>
+                      <span className="px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-700 font-bold text-[10px]">
+                        VIP {u.vipLevel}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -1113,16 +1323,29 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
                   required
                 />
               </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-600 mb-1 block">Mobile Number (10 digits)</label>
-                <input
-                  type="tel"
-                  placeholder="9876543210"
-                  value={newPhone}
-                  onChange={(e) => setNewPhone(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 font-mono text-xs font-bold text-slate-900"
-                  required
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">Mobile Number (10 digits)</label>
+                  <input
+                    type="tel"
+                    placeholder="9876543210"
+                    value={newPhone}
+                    onChange={(e) => setNewPhone(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 font-mono text-xs font-bold text-slate-900"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-amber-700 mb-1 block">Login Password</label>
+                  <input
+                    type="text"
+                    placeholder="123456"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full bg-amber-50/70 border border-amber-200 rounded-xl px-3.5 py-2 font-mono text-xs font-black text-slate-950"
+                    required
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
