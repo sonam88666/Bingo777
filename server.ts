@@ -285,7 +285,7 @@ function computeServerVerifiedBalance(uId: string): number {
     totalBet;
 
   const computed = Math.max(0, Math.round(net * 100) / 100);
-  const existingBal = serverUsers[uid]?.balance;
+  const existingBal = serverUsers[uId]?.balance;
   if (userTxs.length === 0 && typeof existingBal === 'number' && Number.isFinite(existingBal) && existingBal > 0) {
     return Math.round(existingBal * 100) / 100;
   }
@@ -612,6 +612,7 @@ async function startServer() {
           referrerUsername: referrer.username,
           referredUid: finalUid,
           referredUsername: finalUsername,
+          referredPhone: cleanPhone || '',
           registeredAt: Date.now(),
           qualifyingDaysCompleted: 0,
           dailyTurnover: {},

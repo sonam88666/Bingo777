@@ -26,7 +26,27 @@ export default defineConfig({
     },
     react(),
     tailwindcss(),
+    {
+      name: 'prune-chat-attachments',
+      closeBundle() {
+        import('fs').then((fs) => {
+          const target = 'dist/assets/aistudio';
+          if (fs.existsSync(target)) {
+            try {
+              fs.rmSync(target, { recursive: true, force: true });
+            } catch (e) {
+              console.warn('Could not remove aistudio assets:', e);
+            }
+          }
+        });
+      },
+    },
   ],
+  build: {
+    sourcemap: false,
+    minify: 'esbuild',
+    target: 'es2020',
+  },
   server: {
     port: 3000,
     host: '0.0.0.0',

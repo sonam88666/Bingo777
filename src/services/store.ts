@@ -1964,6 +1964,7 @@ class AuthoritativeStore {
   public getUser(uid: string): UserRecord | undefined { return this.users[uid]; }
   public getDeletedUserUids(): string[] { return Array.from(this.deletedUserUids); }
   public getReferrals(): ReferralRecord[] { return this.referrals; }
+  public getAllReferrals(): ReferralRecord[] { return this.referrals; }
   public getUserReferrals(referrerUid: string): ReferralRecord[] {
     return this.referrals.filter((r) => r.referrerUid === referrerUid);
   }

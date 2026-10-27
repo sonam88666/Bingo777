@@ -20,14 +20,20 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps || npm install
 
-      - name: Build web assets
-        run: npm run build
+      - name: Build web assets (Optimized)
+        run: |
+          npm run build
+          # Prune any local chat attachment media before capacitor sync
+          rm -rf dist/assets/aistudio
 
       - name: Add Capacitor Android platform
         run: npx cap add android || true
 
       - name: Sync Capacitor Android
-        run: npx cap sync android
+        run: |
+          npx cap sync android
+          # Ensure no heavy chat videos/attachments are included in android assets
+          rm -rf android/app/src/main/assets/public/assets/aistudio
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -62,7 +68,7 @@ jobs:
               -dname "CN=Bingo777, OU=Mobile, O=Bingo777, L=Mumbai, S=MH, C=IN"
           fi
 
-      - name: Build Signed Release & Debug APK with Auto-Incremented versionCode
+      - name: Build Signed Ultra-Light Release APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -76,8 +82,8 @@ jobs:
           KS_PASS="${KEYSTORE_PASSWORD:-bingo777release}"
           K_ALIAS="${KEY_ALIAS:-bingo777}"
           K_PASS="${KEY_PASSWORD:-$KS_PASS}"
-          echo "Building signed APK with versionCode=${VERSION_CODE} versionName=${VERSION_NAME}..."
-          ./gradlew assembleRelease assembleDebug \
+          echo "Building optimized release APK with versionCode=${VERSION_CODE} versionName=${VERSION_NAME}..."
+          ./gradlew assembleRelease \
             -PversionCode="${VERSION_CODE}" \
             -PversionName="${VERSION_NAME}" \
             -PKEYSTORE_FILE="app-release-key.jks" \
@@ -86,10 +92,13 @@ jobs:
             -PKEY_PASSWORD="${K_PASS}" \
             --no-daemon
 
+      - name: Display Generated APK Size
+        run: |
+          echo "=== Built Release APK Details ==="
+          ls -lh android/app/build/outputs/apk/release/
+
       - name: Upload Signed Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: bingo777-signed-release-apk
-          path: |
-            android/app/build/outputs/apk/release/*.apk
-            android/app/build/outputs/apk/debug/*.apk
+          path: android/app/build/outputs/apk/release/*.apk
