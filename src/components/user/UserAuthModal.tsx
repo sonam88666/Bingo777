@@ -63,6 +63,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
   useEffect(() => {
     refreshCaptcha();
     store.syncUsersWithBackend();
+    firebaseSync.pullUsersFromRtdb().catch(() => {});
   }, [tab, refreshCaptcha]);
 
   // Detect client device details
@@ -116,6 +117,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
 
     setIsSubmitting(true);
     try {
+      await firebaseSync.pullUsersFromRtdb();
       const device = getClientDevice();
       const existingLocal = store.findUserByPhone(cleanPhone);
 
@@ -234,6 +236,9 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
 
     setIsSubmitting(true);
     try {
+      // Pull latest users from Firebase RTDB so referral codes from other devices are always matched
+      await firebaseSync.pullUsersFromRtdb();
+
       const device = getClientDevice();
       device.status = 'approved';
 
@@ -269,11 +274,12 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
       }
 
       const defaultUsername = `Player_${cleanPhone.slice(-4)}`;
+      const enteredRefCode = referralCode.trim() ? referralCode.trim().toUpperCase() : undefined;
       const newUser = store.registerUser(
         cleanPhone,
         defaultUsername,
         device,
-        referralCode.trim() || undefined,
+        enteredRefCode,
         undefined,
         password
       );
@@ -293,7 +299,11 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
       localStorage.setItem('maanwin_active_uid', newUser.uid);
       localStorage.setItem('bingo777_last_phone', cleanPhone);
 
-      firebaseSync.pushUserToFirestore(newUser, cleanPhone);
+      await firebaseSync.pushUserToFirestore(newUser, cleanPhone);
+      const linkedRef = store.getAllReferrals().find((r) => r.referredUid === newUser.uid);
+      if (linkedRef) {
+        await firebaseSync.pushReferralToFirestore(linkedRef);
+      }
       firebaseSync.attachRealtimeUserSync(newUser.uid, cleanPhone);
 
       showToast(`Account created & saved permanently! Welcome to Bingo777.`, 'success');

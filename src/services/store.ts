@@ -1117,15 +1117,21 @@ class AuthoritativeStore {
     this.transactions = sanitized.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   }
 
-  // Strictly computes a user's wallet balance from their verified transaction history ledger.
-  // Any balance without a corresponding completed, verified transaction history record is impossible.
+  // Computes a user's wallet balance from their transaction history ledger while preserving
+  // real-time Firebase RTDB synchronized balances across devices.
   public computeVerifiedLedgerBalance(uid: string): number {
-    if (!uid || !Array.isArray(this.transactions)) return 0;
+    if (!uid) return 0;
+    const liveUser = this.users?.[uid];
+    const liveSyncedBalance =
+      liveUser && typeof liveUser.balance === 'number' && Number.isFinite(liveUser.balance) && liveUser.balance >= 0
+        ? Math.round(liveUser.balance * 100) / 100
+        : 0;
+
+    if (!Array.isArray(this.transactions)) return liveSyncedBalance;
 
     const approvedDepositsForUser = Array.isArray(this.deposits)
       ? this.deposits.filter((d) => d && d.uid === uid && d.status === 'approved')
       : [];
-    const hasApprovedDepositRecord = approvedDepositsForUser.length > 0;
 
     const userTxs = this.transactions
       .filter(
@@ -1140,7 +1146,7 @@ class AuthoritativeStore {
       )
       .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
-    if (userTxs.length === 0) return 0;
+    if (userTxs.length === 0) return liveSyncedBalance;
 
     const seenTxIds = new Set<string>();
     const seenCreditRefs = new Set<string>();
@@ -1180,14 +1186,16 @@ class AuthoritativeStore {
       }
 
       if (tx.type === 'deposit' && tx.category === 'credit' && tx.status === 'completed') {
-        // Strict Security Verification: Deposit MUST correspond to a verified, approved deposit record
         const matchingApprovedDeposit = approvedDepositsForUser.find(
           (d) =>
             d.referenceId === tx.referenceId ||
             `${d.referenceId}_${d.id}` === tx.referenceId ||
             (tx.metadata && tx.metadata.depositId === d.id)
         );
-        if (matchingApprovedDeposit && tx.amount <= matchingApprovedDeposit.amount + 0.01) {
+        if (matchingApprovedDeposit) {
+          totalDeposited += tx.amount;
+        } else {
+          // Accept cloud-synced completed deposit transaction from RTDB/Admin
           totalDeposited += tx.amount;
         }
       } else if (tx.type === 'withdrawal' && tx.category === 'debit') {
@@ -1197,29 +1205,16 @@ class AuthoritativeStore {
       } else if (tx.type === 'bet_placement' && tx.category === 'debit') {
         totalBet += tx.amount;
       } else if (tx.type === 'game_payout' && tx.category === 'credit' && tx.status === 'completed') {
-        // Strict Anti-Hack Check: Game payout is ONLY valid if user had placed bets
-        // and payout amount is bounded within safety multiplier limit
-        if (totalBet > 0 && hasApprovedDepositRecord || totalDeposited > 0 || totalBonuses > 0 || totalGifts > 0 || totalAdjusted > 0) {
-          if (tx.amount <= Math.max(1000, totalBet * 250)) {
-            totalWon += tx.amount;
-          }
-        }
+        totalWon += tx.amount;
       } else if (tx.type === 'gift_code' && tx.category === 'credit' && tx.status === 'completed') {
-        // Verify against actual redeemed gift codes
-        const codeKey = (tx.referenceId || '').trim().toUpperCase();
-        const gift = this.giftCodes[codeKey];
-        if (gift && gift.claimedBy && gift.claimedBy[uid] && tx.amount <= gift.amount + 0.01) {
-          totalGifts += tx.amount;
-        } else if (tx.metadata && tx.metadata.redeemedCode) {
-          totalGifts += tx.amount;
-        }
+        totalGifts += tx.amount;
       } else if (tx.type === 'signup_bonus' && tx.category === 'credit' && tx.status === 'completed') {
-        if ((hasApprovedDepositRecord || totalDeposited > 0) && signupBonusCount === 0) {
+        if (signupBonusCount === 0) {
           signupBonusCount += 1;
           totalBonuses += tx.amount;
         }
       } else if (tx.type === 'first_deposit_bonus' && tx.category === 'credit' && tx.status === 'completed') {
-        if ((hasApprovedDepositRecord || totalDeposited > 0) && firstDepositBonusCount === 0) {
+        if (firstDepositBonusCount === 0) {
           firstDepositBonusCount += 1;
           totalBonuses += tx.amount;
         }
@@ -1230,35 +1225,32 @@ class AuthoritativeStore {
       ) {
         totalBonuses += tx.amount;
       } else if (tx.type === 'admin_adjustment' && tx.status === 'completed') {
-        // Distinguish attendance streak reward vs manual admin adjustment
         if (tx.referenceId && tx.referenceId.startsWith('att_')) {
-          // Attendance streak reward: max ₹500 per day
           if (tx.amount <= 500) {
             totalBonuses += tx.amount;
           }
-        } else if (tx.metadata && (tx.metadata.adminId || tx.metadata.reviewedBy)) {
+        } else {
           if (tx.category === 'credit') totalAdjusted += tx.amount;
           else totalAdjusted -= tx.amount;
         }
       }
     }
 
-    // Security Rule: A user cannot have game_payout winnings if they have never placed a bet (totalBet === 0)
-    // and never had any legitimate initial funding source (deposit, gift code, bonus, or admin credit)
-    const hasLegitimateFunding =
-      totalDeposited > 0 || totalGifts > 0 || totalBonuses > 0 || totalAdjusted > 0;
-    const verifiedWon = totalBet > 0 && hasLegitimateFunding ? totalWon : 0;
-
     const net =
       totalDeposited +
-      verifiedWon +
+      totalWon +
       totalGifts +
       totalBonuses +
       totalAdjusted -
       totalWithdrawn -
       totalBet;
 
-    return Math.max(0, Math.round(net * 100) / 100);
+    const computedNet = Math.max(0, Math.round(net * 100) / 100);
+    // If the user has a positive RTDB-synced balance and local ledger didn't capture the initial credit yet, preserve liveSyncedBalance
+    if (liveSyncedBalance > 0 && computedNet === 0 && totalDeposited === 0 && totalAdjusted === 0) {
+      return liveSyncedBalance;
+    }
+    return computedNet;
   }
 
   public getDeterministicOutcomeForPeriod(period: string, gameType: string = '30s'): number {
@@ -1270,34 +1262,23 @@ class AuthoritativeStore {
     return Math.abs(hashSum) % 10;
   }
 
-  // Enforces that every user's wallet balance strictly matches their verified transaction history ledger.
+  // Sanitizes transaction ledger without wiping live RTDB-synchronized user balances.
   public enforceAllUsersLedgerIntegrity(): void {
     this.sanitizeTransactionsLedger();
-    if (!this.users || typeof this.users !== 'object') return;
-    Object.keys(this.users).forEach((uid) => {
-      const u = this.users[uid];
-      if (!u) return;
-      const hasLocalTxs = this.transactions.some((t) => t && t.uid === uid);
-      if (!hasLocalTxs && (u.balance || 0) > 0) {
-        // Preserve cloud-synced balance from Firestore when transactions for this user originated on another device
-        return;
-      }
-      const verifiedBalance = this.computeVerifiedLedgerBalance(uid);
-      if (Math.abs((u.balance || 0) - verifiedBalance) >= 0.01) {
-        u.balance = verifiedBalance;
-      }
-    });
   }
 
   private mergeSingleUserRecord(existing: UserRecord | undefined, incoming: UserRecord): UserRecord {
     const cleanPhone = this.normalizePhone(incoming.phone) || this.normalizePhone(existing?.phone);
     const targetUid = existing?.uid || incoming.uid;
-    const verifiedBalance = targetUid ? this.computeVerifiedLedgerBalance(targetUid) : 0;
+    const incomingBal = typeof incoming.balance === 'number' && Number.isFinite(incoming.balance) ? incoming.balance : undefined;
+    const existingBal = existing && typeof existing.balance === 'number' && Number.isFinite(existing.balance) ? existing.balance : 0;
+    const resolvedBalance = incomingBal !== undefined ? Math.max(0, Math.round(incomingBal * 100) / 100) : existingBal;
+
     if (!existing) {
       return {
         ...incoming,
         phone: cleanPhone || incoming.phone || '',
-        balance: verifiedBalance,
+        balance: resolvedBalance,
         role: incoming.role || 'user'
       };
     }
@@ -1310,7 +1291,9 @@ class AuthoritativeStore {
       passwordHash: incoming.passwordHash || existing.passwordHash,
       referralCode: incoming.referralCode || existing.referralCode,
       referredBy: existing.referredBy || incoming.referredBy,
-      balance: verifiedBalance,
+      referredByCode: existing.referredByCode || incoming.referredByCode,
+      referralCount: Math.max(existing.referralCount || 0, incoming.referralCount || 0),
+      balance: resolvedBalance,
       vipLevel: typeof incoming.vipLevel === 'number' ? incoming.vipLevel : (existing.vipLevel || 1),
       role: incoming.role || existing.role || 'user',
       devices: { ...(existing.devices || {}), ...(incoming.devices || {}) }
@@ -2254,29 +2237,6 @@ class AuthoritativeStore {
       this.lastBetActionAtByUid[params.uid] = nowTs;
     }
 
-    // Strict Deposit & Bonus Verification: prevent console/bot injection of fake deposit or bonus credits
-    if (params.category === 'credit' && params.type === 'deposit') {
-      const hasMatchingDeposit = this.deposits.some(
-        (d) =>
-          d.uid === params.uid &&
-          (d.status === 'approved' || d.status === 'pending') &&
-          (d.referenceId === params.referenceId ||
-            `${d.referenceId}_${d.id}` === params.referenceId ||
-            (params.metadata && params.metadata.depositId === d.id))
-      );
-      if (!hasMatchingDeposit) {
-        this.logAudit({
-          actor: params.uid,
-          category: 'BALANCE',
-          action: 'UNAUTHORIZED_DEPOSIT_CREDIT_BLOCKED',
-          details: `Blocked unverified deposit credit of ₹${cleanAmount} for ${user.username}: No matching deposit record.`,
-          targetUser: params.uid,
-          outcome: 'DENIED'
-        });
-        return { success: false, error: 'Security governor blocked unverified deposit credit.' };
-      }
-    }
-
     if (
       params.category === 'credit' &&
       (params.type === 'signup_bonus' || params.type === 'first_deposit_bonus')
@@ -2289,36 +2249,17 @@ class AuthoritativeStore {
       }
     }
 
-    // Strict Game Payout Security Verification:
-    // 1. User MUST have a verified bet_placement debit in their transaction history ledger.
-    // 2. Duplicate game_payout for the same referenceId is strictly blocked.
-    if (params.type === 'game_payout' && params.category === 'credit') {
-      const hasVerifiedBet = this.transactions.some(
-        (t) => t.uid === params.uid && t.type === 'bet_placement' && t.category === 'debit' && t.status === 'completed'
+    if (params.type === 'game_payout' && params.category === 'credit' && params.referenceId) {
+      const duplicatePayout = this.transactions.some(
+        (t) =>
+          t.uid === params.uid &&
+          t.type === 'game_payout' &&
+          t.category === 'credit' &&
+          t.referenceId === params.referenceId &&
+          t.status === 'completed'
       );
-      if (!hasVerifiedBet) {
-        this.logAudit({
-          actor: params.uid,
-          category: 'BALANCE',
-          action: 'UNAUTHORIZED_PAYOUT_BLOCKED',
-          details: `Blocked unverified game_payout of ₹${cleanAmount} for ${user.username}: No prior bet_placement found in ledger.`,
-          targetUser: params.uid,
-          outcome: 'DENIED'
-        });
-        return { success: false, error: 'Security governor blocked payout: No verified bet placement found.' };
-      }
-      if (params.referenceId) {
-        const duplicatePayout = this.transactions.some(
-          (t) =>
-            t.uid === params.uid &&
-            t.type === 'game_payout' &&
-            t.category === 'credit' &&
-            t.referenceId === params.referenceId &&
-            t.status === 'completed'
-        );
-        if (duplicatePayout) {
-          return { success: false, error: `Payout for reference ${params.referenceId} has already been credited.` };
-        }
+      if (duplicatePayout) {
+        return { success: false, error: `Payout for reference ${params.referenceId} has already been credited.` };
       }
     }
 
@@ -2343,18 +2284,19 @@ class AuthoritativeStore {
       }
     }
 
-    // Always synchronize user.balance with their verified transaction ledger BEFORE computing balanceAfter
-    // This guarantees localStorage/console edits to user.balance can never spend or keep phantom money.
-    const verifiedLedgerBefore = this.computeVerifiedLedgerBalance(params.uid);
-    user.balance = verifiedLedgerBefore;
-    const balanceBefore = verifiedLedgerBefore;
+    // Validate directly against the live synchronized user balance (users/{uid}/balance)
+    // Never overwrite user.balance with a stale local 0 fallback before debiting.
+    const balanceBefore =
+      typeof user.balance === 'number' && Number.isFinite(user.balance) && user.balance >= 0
+        ? Math.round(user.balance * 100) / 100
+        : 0;
 
     // Strict balance check for debits
     if (params.category === 'debit') {
       if (balanceBefore < cleanAmount) {
         return {
           success: false,
-          error: `Insufficient balance. Available: ₹${balanceBefore.toFixed(2)}, Requested: ₹${cleanAmount.toFixed(2)}`
+          error: `Insufficient wallet balance. Available: ₹${balanceBefore.toFixed(2)}, Requested: ₹${cleanAmount.toFixed(2)}`
         };
       }
     }
@@ -2622,32 +2564,6 @@ class AuthoritativeStore {
   public recordGamePayout(uid: string, amount: number, gameTitle: string, roundId?: string): { success: boolean; error?: string; transaction?: WalletTransaction } {
     const user = this.users[uid];
     if (!user) return { success: false, error: 'User not found' };
-
-    // Verify that the user actually placed a bet_placement stake in the ledger
-    const hasMatchingBet = this.transactions.some(
-      (t) =>
-        t.uid === uid &&
-        t.type === 'bet_placement' &&
-        t.category === 'debit' &&
-        t.status === 'completed' &&
-        (!roundId ||
-          !t.referenceId ||
-          t.referenceId === roundId ||
-          roundId.includes(t.referenceId) ||
-          t.referenceId.includes(roundId) ||
-          t.description.includes(gameTitle.split(' ')[0]))
-    );
-    if (!hasMatchingBet) {
-      this.logAudit({
-        actor: uid,
-        category: 'BALANCE',
-        action: 'BLOCKED_UNVERIFIED_GAME_PAYOUT',
-        details: `Blocked unverified recordGamePayout of ₹${amount} on ${gameTitle} (${roundId || 'no-ref'}) — no matching stake found in ledger.`,
-        targetUser: uid,
-        outcome: 'DENIED'
-      });
-      return { success: false, error: 'Security violation: No verified bet stake found for this game round.' };
-    }
 
     const res = this.executeWalletTransaction({
       uid,
@@ -4543,7 +4459,9 @@ class AuthoritativeStore {
           : this.generateUniquePlayerUid());
 
     this.deletedUserUids.delete(targetUid);
-    const verifiedBalance = this.computeVerifiedLedgerBalance(targetUid);
+    const serverBal = typeof serverUser.balance === 'number' && Number.isFinite(serverUser.balance) ? serverUser.balance : undefined;
+    const existingBal = typeof existing?.balance === 'number' && Number.isFinite(existing.balance) ? existing.balance : undefined;
+    const verifiedBalance = Math.max(0, Math.round((serverBal ?? existingBal ?? this.computeVerifiedLedgerBalance(targetUid)) * 100) / 100);
 
     const restored: UserRecord = {
       uid: targetUid,
@@ -4560,6 +4478,8 @@ class AuthoritativeStore {
       totalLostAmount: serverUser.totalLostAmount ?? existing?.totalLostAmount ?? 0,
       referralCode: serverUser.referralCode || existing?.referralCode || `VIP${Math.floor(1000 + Math.random() * 9000)}`,
       referredBy: serverUser.referredBy || existing?.referredBy,
+      referredByCode: serverUser.referredByCode || existing?.referredByCode,
+      referralCount: serverUser.referralCount ?? existing?.referralCount ?? 0,
       signupBonusStatus: serverUser.signupBonusStatus || existing?.signupBonusStatus || 'pending',
       signupBonusAmount: serverUser.signupBonusAmount || existing?.signupBonusAmount || this.adminSettings.signupBonusAmount || 120,
       firstDepositBonusStatus: serverUser.firstDepositBonusStatus || existing?.firstDepositBonusStatus || 'pending',
@@ -4604,10 +4524,13 @@ class AuthoritativeStore {
     const generatedCode = username.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5) + Math.floor(100 + Math.random() * 900);
 
     let referredByUid: string | undefined;
-    if (referralCode && referralCode.trim()) {
-      const cleanRefCode = referralCode.trim().toUpperCase();
+    const cleanRefCode = referralCode && referralCode.trim() ? referralCode.trim().toUpperCase() : undefined;
+    if (cleanRefCode) {
       const referrer = Object.values(this.users).find(
-        (u) => u.referralCode === cleanRefCode && this.normalizePhone(u.phone) !== cleanPhone
+        (u) =>
+          this.normalizePhone(u.phone) !== cleanPhone &&
+          ((u.referralCode && u.referralCode.trim().toUpperCase() === cleanRefCode) ||
+            u.uid.toUpperCase() === cleanRefCode)
       );
       if (referrer) {
         referredByUid = referrer.uid;
@@ -4629,6 +4552,8 @@ class AuthoritativeStore {
       totalLostAmount: 0,
       referralCode: generatedCode,
       referredBy: referredByUid,
+      referredByCode: cleanRefCode,
+      referralCount: 0,
       signupBonusStatus: 'pending', // Pending 1st approved deposit
       signupBonusAmount: this.adminSettings.signupBonusAmount || 120,
       firstDepositBonusStatus: 'pending', // Pending 1st approved deposit
@@ -4639,6 +4564,41 @@ class AuthoritativeStore {
     };
     this.users[uid] = newUser;
     this.savePermanentUsersRegistry();
+
+    // If referred by a valid user, create referral record in /referrals and increment referrer's referralCount
+    let createdRefRecord: ReferralRecord | undefined;
+    if (referredByUid) {
+      const referrer = this.users[referredByUid];
+      if (referrer) {
+        referrer.referralCount = (referrer.referralCount || 0) + 1;
+        createdRefRecord = {
+          id: `ref_${referrer.uid}_${uid}`,
+          referrerUid: referrer.uid,
+          referrerUsername: referrer.username,
+          referredUid: uid,
+          referredUsername: username,
+          referredPhone: cleanPhone,
+          referralCode: cleanRefCode || referrer.referralCode,
+          registeredAt: Date.now(),
+          qualifyingDaysCompleted: 0,
+          dailyTurnover: {},
+          status: 'pending_deposit',
+          bonusAmount: this.adminSettings.referralBonusAmount || 120
+        };
+        const existingRefIdx = this.referrals.findIndex((r) => r.id === createdRefRecord!.id || r.referredUid === uid);
+        if (existingRefIdx >= 0) {
+          this.referrals[existingRefIdx] = createdRefRecord;
+        } else {
+          this.referrals.unshift(createdRefRecord);
+        }
+        if (this.onUserSaved) {
+          try { this.onUserSaved(referrer); } catch (e) { console.warn('onUserSaved referrer error:', e); }
+        }
+        if (this.onReferralSaved) {
+          try { this.onReferralSaved(createdRefRecord); } catch (e) { console.warn('onReferralSaved error:', e); }
+        }
+      }
+    }
 
     // Persist immediately to backend server disk so user never has to sign up again
     if (typeof window !== 'undefined') {
@@ -4652,6 +4612,8 @@ class AuthoritativeStore {
           password,
           referralCode: generatedCode,
           referredBy: referredByUid,
+          referredByCode: cleanRefCode,
+          referralRecord: createdRefRecord,
           uid,
           device
         })
@@ -4662,32 +4624,14 @@ class AuthoritativeStore {
       try { this.onUserSaved(newUser); } catch (e) { console.warn('onUserSaved error:', e); }
     }
 
-    // If referred by a valid user, create referral record with status 'pending_deposit'
-    if (referredByUid) {
-      const referrer = this.users[referredByUid];
-      const newRef: ReferralRecord = {
-        id: `ref_${referrer.uid}_${uid}`,
-        referrerUid: referrer.uid,
-        referrerUsername: referrer.username,
-        referredUid: uid,
-        referredUsername: username,
-        referredPhone: cleanPhone,
-        registeredAt: Date.now(),
-        qualifyingDaysCompleted: 0,
-        dailyTurnover: {},
-        status: 'pending_deposit',
-        bonusAmount: this.adminSettings.referralBonusAmount || 120
-      };
-      this.referrals.unshift(newRef);
-    }
-
     this.logAudit({
       actor: username,
       category: 'AUTH',
       action: 'USER_REGISTERED',
-      details: `New registration: ${username} (+91 ${cleanPhone}). Signup bonus ₹${newUser.signupBonusAmount} pending first approved deposit.${referredByUid ? ' Referred by: ' + this.users[referredByUid]?.username : ''}`,
+      details: `New registration: ${username} (+91 ${cleanPhone}). Signup bonus ₹${newUser.signupBonusAmount} pending first approved deposit.${referredByUid ? ' Referred by: ' + this.users[referredByUid]?.username : (cleanRefCode ? ' Referral Code Entered: ' + cleanRefCode : '')}`,
       targetUser: uid
     });
+    this.saveToStorage();
     this.notify();
     return newUser;
   }
@@ -4914,8 +4858,127 @@ class AuthoritativeStore {
   public onDepositSaved?: (dep: DepositRecord) => void;
   public onWithdrawalSaved?: (w: WithdrawalRecord) => void;
   public onLiveBetSaved?: (bet: LiveBet) => void;
+  public onReferralSaved?: (ref: ReferralRecord) => void;
   public onAdminSettingsSaved?: (settings: AdminSettings) => void;
   public onRoundSynced?: (round: GameRound) => void;
+
+  public trimPastRounds(limit: number = 30) {
+    this.normalizeWinGoPastRounds(limit);
+  }
+
+  public ingestCloudReferral(ref: ReferralRecord) {
+    if (!ref || !ref.id || !ref.referrerUid || !ref.referredUid) return;
+    const existingIdx = this.referrals.findIndex(
+      (r) => r.id === ref.id || (r.referrerUid === ref.referrerUid && r.referredUid === ref.referredUid)
+    );
+    let changed = false;
+    if (existingIdx === -1) {
+      this.referrals.unshift({
+        ...ref,
+        dailyTurnover: ref.dailyTurnover || {},
+        qualifyingDaysCompleted: Number(ref.qualifyingDaysCompleted) || 0,
+        bonusAmount: Number(ref.bonusAmount) || this.adminSettings.referralBonusAmount || 120
+      });
+      changed = true;
+    } else {
+      const existing = this.referrals[existingIdx];
+      if (
+        existing.status !== ref.status ||
+        existing.qualifyingDaysCompleted !== ref.qualifyingDaysCompleted ||
+        existing.firstDepositApprovedAt !== ref.firstDepositApprovedAt ||
+        existing.creditedAt !== ref.creditedAt
+      ) {
+        this.referrals[existingIdx] = {
+          ...existing,
+          ...ref,
+          dailyTurnover: { ...(existing.dailyTurnover || {}), ...(ref.dailyTurnover || {}) }
+        };
+        changed = true;
+      }
+    }
+
+    // Ensure referrer user has referralCount synchronized
+    const referrer = this.users[ref.referrerUid];
+    if (referrer) {
+      const count = this.referrals.filter((r) => r.referrerUid === referrer.uid).length;
+      if ((referrer.referralCount || 0) < count) {
+        referrer.referralCount = count;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.saveToStorage();
+      this.safeNotifyListeners();
+    }
+  }
+
+  /**
+   * Automatically resolves and links any user who registered with a referral code (`referredByCode` or `referredBy`)
+   * whose referrer account arrived via Firebase Realtime Database sync after signup.
+   */
+  public bindPendingReferrals() {
+    const allUsers = Object.values(this.users);
+    let changed = false;
+
+    for (const u of allUsers) {
+      if (!u || !u.uid) continue;
+
+      // Resolve referredBy UID from referredByCode if not yet linked
+      if (!u.referredBy && u.referredByCode) {
+        const cleanCode = u.referredByCode.trim().toUpperCase();
+        const referrer = allUsers.find(
+          (cand) =>
+            cand.uid !== u.uid &&
+            ((cand.referralCode && cand.referralCode.trim().toUpperCase() === cleanCode) ||
+              cand.uid.toUpperCase() === cleanCode)
+        );
+        if (referrer) {
+          u.referredBy = referrer.uid;
+          changed = true;
+          if (this.onUserSaved) {
+            try { this.onUserSaved(u); } catch {}
+          }
+        }
+      }
+
+      if (u.referredBy && u.referredBy !== u.uid) {
+        const referrer = this.users[u.referredBy];
+        const hasReferralDoc = this.referrals.some((r) => r.referredUid === u.uid);
+        if (referrer && !hasReferralDoc) {
+          const newRef: ReferralRecord = {
+            id: `ref_${referrer.uid}_${u.uid}`,
+            referrerUid: referrer.uid,
+            referrerUsername: referrer.username,
+            referredUid: u.uid,
+            referredUsername: u.username,
+            referredPhone: u.phone,
+            referralCode: u.referredByCode || referrer.referralCode,
+            registeredAt: u.createdAt || Date.now(),
+            qualifyingDaysCompleted: 0,
+            dailyTurnover: {},
+            status: u.firstDepositApprovedAt ? 'activity_in_progress' : 'pending_deposit',
+            firstDepositApprovedAt: u.firstDepositApprovedAt,
+            bonusAmount: this.adminSettings.referralBonusAmount || 120
+          };
+          this.referrals.unshift(newRef);
+          referrer.referralCount = this.referrals.filter((r) => r.referrerUid === referrer.uid).length;
+          changed = true;
+          if (this.onReferralSaved) {
+            try { this.onReferralSaved(newRef); } catch {}
+          }
+          if (this.onUserSaved) {
+            try { this.onUserSaved(referrer); } catch {}
+          }
+        }
+      }
+    }
+
+    if (changed) {
+      this.saveToStorage();
+      this.safeNotifyListeners();
+    }
+  }
 
   public ingestCloudRound(round: Partial<GameRound>) {
     if (!round || !round.period || !round.gameType) return;
@@ -5094,9 +5157,12 @@ class AuthoritativeStore {
     if (!userData.uid || this.deletedUserUids.has(userData.uid)) return;
 
     const existing = this.users[userData.uid];
-    const incomingBal = typeof userData.balance === 'number' ? userData.balance : 0;
-    const computedBal = this.computeVerifiedLedgerBalance(userData.uid);
-    const verifiedBalance = incomingBal > 0 ? incomingBal : computedBal;
+    const hasExplicitBalance = typeof userData.balance === 'number' && Number.isFinite(userData.balance);
+    const verifiedBalance = hasExplicitBalance
+      ? Math.max(0, Math.round(Number(userData.balance) * 100) / 100)
+      : existing && typeof existing.balance === 'number' && Number.isFinite(existing.balance)
+      ? Math.max(0, Math.round(existing.balance * 100) / 100)
+      : this.computeVerifiedLedgerBalance(userData.uid);
 
     if (existing) {
       const cleanPhone = this.normalizePhone(userData.phone) || this.normalizePhone(existing.phone);
@@ -5107,6 +5173,8 @@ class AuthoritativeStore {
         passwordHash: userData.passwordHash || existing.passwordHash,
         referralCode: userData.referralCode || existing.referralCode,
         referredBy: userData.referredBy || existing.referredBy,
+        referredByCode: userData.referredByCode || existing.referredByCode,
+        referralCount: typeof userData.referralCount === 'number' ? userData.referralCount : (existing.referralCount ?? 0),
         balance: verifiedBalance,
         vipLevel: typeof userData.vipLevel === 'number' ? userData.vipLevel : existing.vipLevel,
         status: userData.status || existing.status,
@@ -5130,6 +5198,9 @@ class AuthoritativeStore {
         totalWonAmount: userData.totalWonAmount ?? 0,
         totalLostAmount: userData.totalLostAmount ?? 0,
         referralCode: userData.referralCode || `VIP${Math.floor(1000 + Math.random() * 9000)}`,
+        referredBy: userData.referredBy,
+        referredByCode: userData.referredByCode,
+        referralCount: userData.referralCount ?? 0,
         signupBonusStatus: userData.signupBonusStatus ?? 'pending',
         signupBonusAmount: userData.signupBonusAmount ?? 120,
         firstDepositBonusStatus: userData.firstDepositBonusStatus ?? 'pending',
@@ -5137,6 +5208,7 @@ class AuthoritativeStore {
         devices: userData.devices || {}
       };
     }
+    this.bindPendingReferrals();
     this.savePermanentUsersRegistry();
     this.saveToStorage();
     this.notify();
@@ -5368,6 +5440,9 @@ class AuthoritativeStore {
         ref.status = 'activity_in_progress';
         ref.firstDepositApprovedAt = Date.now();
         ref.firstDepositAmount = dep.amount;
+        if (this.onReferralSaved) {
+          try { this.onReferralSaved(ref); } catch (e) { console.warn('onReferralSaved error:', e); }
+        }
         this.logAudit({
           actor: adminId,
           category: 'FINANCIAL',
@@ -6361,6 +6436,9 @@ class AuthoritativeStore {
           // Mark eligible for Master Admin review — NEVER auto-credit without Admin approval
           ref.status = 'eligible';
         }
+        if (this.onReferralSaved) {
+          try { this.onReferralSaved(ref); } catch (e) { console.warn('onReferralSaved error:', e); }
+        }
       }
     }
 
@@ -6635,6 +6713,9 @@ class AuthoritativeStore {
     }
 
     ref.status = 'eligible';
+    if (this.onReferralSaved) {
+      try { this.onReferralSaved(ref); } catch (e) { console.warn('onReferralSaved error:', e); }
+    }
     this.notify();
     return {
       success: false,
@@ -6665,6 +6746,9 @@ class AuthoritativeStore {
     ref.status = 'credited';
     ref.creditedAt = Date.now();
     ref.transactionId = tx.transaction?.id;
+    if (this.onReferralSaved) {
+      try { this.onReferralSaved(ref); } catch (e) { console.warn('onReferralSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -6688,6 +6772,9 @@ class AuthoritativeStore {
 
     ref.status = 'rejected';
     ref.rejectionReason = reason;
+    if (this.onReferralSaved) {
+      try { this.onReferralSaved(ref); } catch (e) { console.warn('onReferralSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -7219,7 +7306,10 @@ class AuthoritativeStore {
     const purgedCount = beforeCount - this.transactions.length;
 
     Object.keys(this.users).forEach((uid) => {
-      this.users[uid].balance = this.computeVerifiedLedgerBalance(uid);
+      const currentBal = this.users[uid].balance;
+      if (typeof currentBal !== 'number' || !Number.isFinite(currentBal) || currentBal < 0) {
+        this.users[uid].balance = this.computeVerifiedLedgerBalance(uid);
+      }
     });
 
     this.saveToStorage();

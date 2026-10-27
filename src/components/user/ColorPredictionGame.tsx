@@ -113,6 +113,11 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
   }, [selectedGameType]);
 
   const totalBetAmount = chipAmount * multiplier;
+  const liveUser = user ? (store.getUser(user.uid) || user) : null;
+  const liveWalletBalance =
+    liveUser && typeof liveUser.balance === 'number' && Number.isFinite(liveUser.balance)
+      ? Math.max(0, liveUser.balance)
+      : 0;
 
   const openBetModal = (type: 'color' | 'number' | 'size', value: string) => {
     if (!user) {
@@ -130,14 +135,23 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
   };
 
   const handlePlaceBet = () => {
-    if (!user) return;
+    const activeUser = user ? (store.getUser(user.uid) || user) : null;
+    if (!activeUser) return;
     if (isLocked) {
       showToast('Betting locked for this round. Please wait for the next period.', 'error');
       setBetModalOpen(false);
       return;
     }
-    if (user.balance < totalBetAmount) {
-      showToast('Insufficient wallet balance. Please deposit funds.', 'error');
+    const availableBalance =
+      typeof activeUser.balance === 'number' && Number.isFinite(activeUser.balance)
+        ? Math.max(0, Math.round(activeUser.balance * 100) / 100)
+        : 0;
+
+    if (availableBalance < totalBetAmount) {
+      showToast(
+        `Insufficient wallet balance. Available: ₹${availableBalance.toFixed(2)}, Requested: ₹${totalBetAmount.toFixed(2)}`,
+        'error'
+      );
       return;
     }
 
@@ -152,11 +166,12 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
     }
 
     const potentialPayout = totalBetAmount * potentialRate;
+    const latestRound = store.getCurrentRound(selectedGameType);
 
     const result = store.placeBet({
-      uid: user.uid,
-      username: user.username,
-      roundPeriod: currentRound.period,
+      uid: activeUser.uid,
+      username: activeUser.username,
+      roundPeriod: latestRound.period,
       gameType: selectedGameType,
       betType: selectedBetType,
       betValue: selectedBetValue,
@@ -503,7 +518,7 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
               <div className="text-right">
                 <span className="text-[11px] text-slate-400 block">Your Wallet</span>
                 <span className="font-mono font-bold text-sm text-slate-200">
-                  ₹{user ? user.balance.toFixed(2) : '0.00'}
+                  ₹{liveWalletBalance.toFixed(2)}
                 </span>
               </div>
             </div>

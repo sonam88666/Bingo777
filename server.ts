@@ -284,7 +284,12 @@ function computeServerVerifiedBalance(uId: string): number {
     totalWithdrawn -
     totalBet;
 
-  return Math.max(0, Math.round(net * 100) / 100);
+  const computed = Math.max(0, Math.round(net * 100) / 100);
+  const existingBal = serverUsers[uid]?.balance;
+  if (userTxs.length === 0 && typeof existingBal === 'number' && Number.isFinite(existingBal) && existingBal > 0) {
+    return Math.round(existingBal * 100) / 100;
+  }
+  return computed;
 }
 
 function saveServerStateToDisk(): void {
@@ -548,12 +553,31 @@ async function startServer() {
       referralCode ||
       `${finalUsername.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5)}${Math.floor(100 + Math.random() * 900)}`;
 
+    let resolvedReferredBy = referredBy || incomingUser.referredBy;
+    const incomingRefCode = (req.body?.referredByCode || incomingUser.referredByCode || '').trim().toUpperCase();
+    if (!resolvedReferredBy && incomingRefCode) {
+      const refOwner = Object.values(serverUsers).find(
+        (u) =>
+          normalizePhoneNumber(u.phone) !== cleanPhone &&
+          ((u.referralCode && u.referralCode.trim().toUpperCase() === incomingRefCode) ||
+            u.uid.toUpperCase() === incomingRefCode)
+      );
+      if (refOwner) {
+        resolvedReferredBy = refOwner.uid;
+      }
+    }
+
+    const incomingBal =
+      typeof incomingUser.balance === 'number' && Number.isFinite(incomingUser.balance) && incomingUser.balance >= 0
+        ? Math.round(incomingUser.balance * 100) / 100
+        : 0;
+
     const newServerUser: ServerUser = {
       uid: finalUid,
       phone: cleanPhone,
       username: finalUsername,
       passwordHash: rawPassword ? String(rawPassword) : undefined,
-      balance: 0,
+      balance: incomingBal,
       vipLevel: 1,
       status: incomingUser.status || 'active',
       createdAt: incomingUser.createdAt || Date.now(),
@@ -563,7 +587,7 @@ async function startServer() {
       totalWonAmount: 0,
       totalLostAmount: 0,
       referralCode: finalReferralCode,
-      referredBy: referredBy || incomingUser.referredBy,
+      referredBy: resolvedReferredBy,
       signupBonusStatus: 'pending',
       signupBonusAmount: serverAdminSettings.signupBonusAmount || 120,
       firstDepositBonusStatus: 'pending',
@@ -573,6 +597,30 @@ async function startServer() {
     };
 
     serverUsers[finalUid] = newServerUser;
+
+    // Record referral linkage on server if referredBy or referralRecord was provided
+    const reqRefRecord = req.body?.referralRecord;
+    if (reqRefRecord && reqRefRecord.id && reqRefRecord.referrerUid) {
+      serverReferrals.set(reqRefRecord.id, reqRefRecord);
+    } else if (resolvedReferredBy && serverUsers[resolvedReferredBy]) {
+      const referrer = serverUsers[resolvedReferredBy];
+      const refId = `ref_${referrer.uid}_${finalUid}`;
+      if (!serverReferrals.has(refId)) {
+        serverReferrals.set(refId, {
+          id: refId,
+          referrerUid: referrer.uid,
+          referrerUsername: referrer.username,
+          referredUid: finalUid,
+          referredUsername: finalUsername,
+          registeredAt: Date.now(),
+          qualifyingDaysCompleted: 0,
+          dailyTurnover: {},
+          status: 'pending_deposit',
+          bonusAmount: serverAdminSettings.referralBonusAmount || 120
+        });
+      }
+    }
+
     saveServerStateToDisk();
 
     return res.json({
@@ -842,13 +890,18 @@ async function startServer() {
         const existing = serverUsers[targetUid];
 
         const verifiedServerBal = computeServerVerifiedBalance(targetUid);
+        const incomingBal =
+          typeof incoming.balance === 'number' && Number.isFinite(incoming.balance) && incoming.balance >= 0
+            ? Math.round(incoming.balance * 100) / 100
+            : undefined;
+        const resolvedBal = incomingBal !== undefined ? incomingBal : verifiedServerBal;
 
         if (!existing) {
           serverUsers[targetUid] = {
             ...incoming,
             uid: targetUid,
             phone: cleanPhone,
-            balance: verifiedServerBal,
+            balance: resolvedBal,
             vipLevel: typeof incoming.vipLevel === 'number' ? incoming.vipLevel : 1,
             status: incoming.status || 'active',
             createdAt: incoming.createdAt || Date.now(),
@@ -856,13 +909,12 @@ async function startServer() {
           };
           changed = true;
         } else {
-          // Preserve passwordHash and never allow unverified client sync to inflate server balance
           if (incoming.passwordHash && !existing.passwordHash) {
             existing.passwordHash = incoming.passwordHash;
             changed = true;
           }
-          if (Math.abs((existing.balance || 0) - verifiedServerBal) >= 0.01) {
-            existing.balance = verifiedServerBal;
+          if (Math.abs((existing.balance || 0) - resolvedBal) >= 0.01) {
+            existing.balance = resolvedBal;
             changed = true;
           }
           if (incoming.status && incoming.status !== existing.status) {

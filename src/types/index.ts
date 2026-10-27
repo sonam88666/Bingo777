@@ -23,6 +23,8 @@ export interface UserRecord {
   role?: 'user' | 'master_admin';
   referralCode: string;
   referredBy?: string;
+  referredByCode?: string;
+  referralCount?: number;
   signupBonusStatus: 'pending' | 'credited';
   signupBonusAmount: number;
   signupBonusTxId?: string;
@@ -330,6 +332,7 @@ export interface ReferralRecord {
   referredUid: string;
   referredUsername: string;
   referredPhone: string;
+  referralCode?: string;
   registeredAt: number;
   firstDepositApprovedAt?: number;
   firstDepositAmount?: number;

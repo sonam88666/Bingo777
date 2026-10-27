@@ -1,5 +1,28 @@
 apply plugin: 'com.android.application'
 
+def resolvedVersionCode = (project.hasProperty('versionCode')
+    ? project.property('versionCode').toInteger()
+    : (System.getenv('VERSION_CODE') ? System.getenv('VERSION_CODE').toInteger() : 100))
+
+def resolvedVersionName = (project.hasProperty('versionName')
+    ? project.property('versionName').toString()
+    : (System.getenv('VERSION_NAME') ?: "1.0.${resolvedVersionCode}"))
+
+def keystorePath = project.hasProperty('KEYSTORE_FILE')
+    ? project.property('KEYSTORE_FILE').toString()
+    : (System.getenv('KEYSTORE_FILE') ?: 'app-release-key.jks')
+
+def keystoreFile = file(keystorePath)
+def ksPassword = project.hasProperty('KEYSTORE_PASSWORD')
+    ? project.property('KEYSTORE_PASSWORD').toString()
+    : (System.getenv('KEYSTORE_PASSWORD') ?: 'bingo777release')
+def kAlias = project.hasProperty('KEY_ALIAS')
+    ? project.property('KEY_ALIAS').toString()
+    : (System.getenv('KEY_ALIAS') ?: 'bingo777')
+def kPassword = project.hasProperty('KEY_PASSWORD')
+    ? project.property('KEY_PASSWORD').toString()
+    : (System.getenv('KEY_PASSWORD') ?: ksPassword)
+
 android {
     namespace = "com.bingo777.pro.game"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +30,8 @@ android {
         applicationId "com.bingo777.pro.game"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode resolvedVersionCode
+        versionName resolvedVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +39,31 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystoreFile.exists()) {
+                storeFile keystoreFile
+                storePassword ksPassword
+                keyAlias kAlias
+                keyPassword kPassword
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
+            shrinkResources false
+            if (keystoreFile.exists()) {
+                signingConfig signingConfigs.release
+            }
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            if (keystoreFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

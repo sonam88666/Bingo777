@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build & Sign Android APK
 
 on:
   push:
@@ -35,14 +35,61 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Build Debug APK with Gradle
+      - name: Prepare Persistent Release Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          mkdir -p android/app
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Decoding persistent release keystore from KEYSTORE_BASE64 secret..."
+            echo "$KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > android/app/app-release-key.jks
+          elif [ ! -f "android/app/app-release-key.jks" ]; then
+            echo "Generating fallback release keystore for signing..."
+            KS_PASS="${KEYSTORE_PASSWORD:-bingo777release}"
+            K_ALIAS="${KEY_ALIAS:-bingo777}"
+            K_PASS="${KEY_PASSWORD:-$KS_PASS}"
+            keytool -genkeypair -v \
+              -keystore android/app/app-release-key.jks \
+              -alias "$K_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$KS_PASS" \
+              -keypass "$K_PASS" \
+              -dname "CN=Bingo777, OU=Mobile, O=Bingo777, L=Mumbai, S=MH, C=IN"
+          fi
+
+      - name: Build Signed Release & Debug APK with Auto-Incremented versionCode
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          VERSION_CODE=$((100 + ${RUN_NUMBER:-1}))
+          VERSION_NAME="1.0.${VERSION_CODE}"
+          KS_PASS="${KEYSTORE_PASSWORD:-bingo777release}"
+          K_ALIAS="${KEY_ALIAS:-bingo777}"
+          K_PASS="${KEY_PASSWORD:-$KS_PASS}"
+          echo "Building signed APK with versionCode=${VERSION_CODE} versionName=${VERSION_NAME}..."
+          ./gradlew assembleRelease assembleDebug \
+            -PversionCode="${VERSION_CODE}" \
+            -PversionName="${VERSION_NAME}" \
+            -PKEYSTORE_FILE="app-release-key.jks" \
+            -PKEYSTORE_PASSWORD="${KS_PASS}" \
+            -PKEY_ALIAS="${K_ALIAS}" \
+            -PKEY_PASSWORD="${K_PASS}" \
+            --no-daemon
 
-      - name: Upload APK artifact
+      - name: Upload Signed Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bingo777-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: bingo777-signed-release-apk
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/apk/debug/*.apk

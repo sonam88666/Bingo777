@@ -24,6 +24,7 @@ import {
   DepositRecord,
   WithdrawalRecord,
   LiveBet,
+  ReferralRecord,
   AdminSettings,
   GameRound
 } from '../types';
@@ -87,6 +88,9 @@ class FirebaseSyncService {
     };
     store.onLiveBetSaved = (bet) => {
       this.pushLiveBetToFirestore(bet);
+    };
+    store.onReferralSaved = (ref) => {
+      this.pushReferralToFirestore(ref);
     };
     store.onAdminSettingsSaved = (settings) => {
       this.pushAdminSettingsToRtdb(settings);
@@ -385,6 +389,44 @@ class FirebaseSyncService {
       );
       this.globalUnsubscribes.push(betsUnsub);
     } catch {}
+
+    // 9. Real-time RTDB listener on /referrals
+    try {
+      const refsUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'referrals'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object' && raw.referrerUid && raw.referredUid) {
+              const refRec: ReferralRecord = {
+                id: raw.id || key,
+                referrerUid: raw.referrerUid,
+                referrerUsername: raw.referrerUsername || `Player_${String(raw.referrerUid).slice(-4)}`,
+                referredUid: raw.referredUid,
+                referredUsername: raw.referredUsername || `Player_${String(raw.referredUid).slice(-4)}`,
+                referredPhone: raw.referredPhone || '',
+                referralCode: raw.referralCode || undefined,
+                registeredAt: typeof raw.registeredAt === 'number' ? raw.registeredAt : Date.now(),
+                firstDepositApprovedAt: raw.firstDepositApprovedAt || undefined,
+                firstDepositAmount: raw.firstDepositAmount ? Number(raw.firstDepositAmount) : undefined,
+                qualifyingDaysCompleted: Number(raw.qualifyingDaysCompleted) || 0,
+                dailyTurnover: raw.dailyTurnover && typeof raw.dailyTurnover === 'object' ? raw.dailyTurnover : {},
+                status: raw.status || 'pending_deposit',
+                bonusAmount: Number(raw.bonusAmount) || 120,
+                creditedAt: raw.creditedAt || undefined,
+                transactionId: raw.transactionId || undefined,
+                rejectionReason: raw.rejectionReason || undefined
+              };
+              store.ingestCloudReferral(refRec);
+            }
+          });
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(refsUnsub);
+    } catch {}
   }
 
   /**
@@ -427,6 +469,13 @@ class FirebaseSyncService {
       for (const b of localBets.slice(0, 40)) {
         if (b && b.betId) {
           await this.pushLiveBetToFirestore(b);
+        }
+      }
+
+      const localReferrals = store.getAllReferrals();
+      for (const r of localReferrals.slice(0, 80)) {
+        if (r && r.id) {
+          await this.pushReferralToFirestore(r);
         }
       }
     } catch (e) {
@@ -678,6 +727,43 @@ class FirebaseSyncService {
       );
       this.globalUnsubscribes.push(unsubBets);
     } catch {}
+
+    // 6. Real-time Firestore listener for ALL Referrals
+    try {
+      const unsubRefs = onSnapshot(
+        collection(db, 'referrals'),
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added' || change.type === 'modified') {
+              const raw = change.doc.data();
+              if (raw && raw.referrerUid && raw.referredUid) {
+                store.ingestCloudReferral({
+                  id: raw.id || change.doc.id,
+                  referrerUid: raw.referrerUid,
+                  referrerUsername: raw.referrerUsername || `Player_${String(raw.referrerUid).slice(-4)}`,
+                  referredUid: raw.referredUid,
+                  referredUsername: raw.referredUsername || `Player_${String(raw.referredUid).slice(-4)}`,
+                  referredPhone: raw.referredPhone || '',
+                  referralCode: raw.referralCode || undefined,
+                  registeredAt: typeof raw.registeredAt === 'number' ? raw.registeredAt : Date.now(),
+                  firstDepositApprovedAt: raw.firstDepositApprovedAt || undefined,
+                  firstDepositAmount: raw.firstDepositAmount ? Number(raw.firstDepositAmount) : undefined,
+                  qualifyingDaysCompleted: Number(raw.qualifyingDaysCompleted) || 0,
+                  dailyTurnover: raw.dailyTurnover && typeof raw.dailyTurnover === 'object' ? raw.dailyTurnover : {},
+                  status: raw.status || 'pending_deposit',
+                  bonusAmount: Number(raw.bonusAmount) || 120,
+                  creditedAt: raw.creditedAt || undefined,
+                  transactionId: raw.transactionId || undefined,
+                  rejectionReason: raw.rejectionReason || undefined
+                });
+              }
+            }
+          });
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(unsubRefs);
+    } catch {}
   }
 
   private lastSyncedAviatorRoundKey: string = '';
@@ -865,11 +951,7 @@ class FirebaseSyncService {
       } catch {}
 
       // Retain only the 30 most recent completed periods in local UI state per mode
-      (['30s', '1min', '3min'] as const).forEach((m) => {
-        if (Array.isArray(store.pastRounds[m]) && store.pastRounds[m].length > 30) {
-          store.pastRounds[m] = store.pastRounds[m].slice(0, 30);
-        }
-      });
+      store.trimPastRounds(30);
 
       // 3. Flight Trajectory & Multiplier Ticks (/aviator_rounds):
       // Clear raw flight ticks from finished flights, keeping only the final crash multiplier for the last 20 rounds.
@@ -1158,6 +1240,7 @@ class FirebaseSyncService {
       status: user.status || 'active',
       role: user.role || 'user',
       referralCode: user.referralCode || '',
+      referralCount: Number(user.referralCount) || 0,
       totalBetsCount: user.totalBetsCount || 0,
       totalWonAmount: user.totalWonAmount || 0,
       totalLostAmount: user.totalLostAmount || 0,
@@ -1172,6 +1255,9 @@ class FirebaseSyncService {
     }
     if (user.referredBy) {
       userPayload.referredBy = user.referredBy;
+    }
+    if (user.referredByCode) {
+      userPayload.referredByCode = user.referredByCode;
     }
 
     // 1. Write immediately to Firebase Realtime Database (/users/{uid})
@@ -1344,6 +1430,85 @@ class FirebaseSyncService {
     await this.ensureAuth();
     try {
       await setDoc(doc(db, 'live_bets', bet.betId), payload, { merge: true });
+    } catch {}
+  }
+
+  /**
+   * Syncs a referral linkage record to RTDB (/referrals/{referralId}) and Firestore (/referrals/{referralId})
+   */
+  public async pushReferralToFirestore(ref: ReferralRecord): Promise<void> {
+    if (!ref || !ref.id || !ref.referrerUid || !ref.referredUid) return;
+    const payload = {
+      id: ref.id,
+      referrerUid: ref.referrerUid,
+      referrerUsername: ref.referrerUsername || '',
+      referredUid: ref.referredUid,
+      referredUsername: ref.referredUsername || '',
+      referredPhone: ref.referredPhone || '',
+      referralCode: ref.referralCode || '',
+      registeredAt: ref.registeredAt || Date.now(),
+      firstDepositApprovedAt: ref.firstDepositApprovedAt || null,
+      firstDepositAmount: ref.firstDepositAmount || null,
+      qualifyingDaysCompleted: ref.qualifyingDaysCompleted || 0,
+      dailyTurnover: ref.dailyTurnover || {},
+      status: ref.status || 'pending_deposit',
+      bonusAmount: ref.bonusAmount || 120,
+      creditedAt: ref.creditedAt || null,
+      transactionId: ref.transactionId || null,
+      rejectionReason: ref.rejectionReason || null,
+      updatedAt: Date.now()
+    };
+
+    try {
+      await rtdbSet(rtdbRef(rtdb, `referrals/${ref.id}`), payload);
+    } catch {}
+
+    await this.ensureAuth();
+    try {
+      await setDoc(doc(db, 'referrals', ref.id), payload, { merge: true });
+    } catch {}
+  }
+
+  /**
+   * Pulls all users and referrals from Firebase Realtime Database on demand
+   * (used before login/signup so referral codes from other devices are immediately matched).
+   */
+  public async pullUsersFromRtdb(): Promise<void> {
+    try {
+      const snap = await rtdbGet(rtdbRef(rtdb, 'users'));
+      if (snap.exists()) {
+        const val = snap.val();
+        if (val && typeof val === 'object') {
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object') {
+              const uid = raw.uid || key;
+              if (uid && !String(uid).startsWith('usr_demo_')) {
+                store.updateUserFromFirestore({
+                  ...raw,
+                  uid
+                });
+              }
+            }
+          });
+        }
+      }
+    } catch {}
+
+    try {
+      const refSnap = await rtdbGet(rtdbRef(rtdb, 'referrals'));
+      if (refSnap.exists()) {
+        const val = refSnap.val();
+        if (val && typeof val === 'object') {
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object' && raw.referrerUid && raw.referredUid) {
+              store.ingestCloudReferral({
+                ...raw,
+                id: raw.id || key
+              } as ReferralRecord);
+            }
+          });
+        }
+      }
     } catch {}
   }
 
