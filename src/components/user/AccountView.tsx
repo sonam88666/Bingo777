@@ -582,13 +582,13 @@ export const AccountView: React.FC<AccountViewProps> = ({
               <div className="text-left">
                 <div className="flex items-center space-x-2">
                   <span className="font-bold text-slate-200 group-hover:text-emerald-300 transition block">
-                    Download Android APK & Update (ऐप डाउनलोड करें)
+                    Download App & Updates (ऐप डाउनलोड व अपडेट)
                   </span>
                   <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 text-[9px] font-black uppercase">
-                    Bingo777.apk
+                    Direct Link
                   </span>
                 </div>
-                <span className="text-[11px] text-slate-400">Direct download signed Android APK (1.22 MB), Play Store AAB & Keystore</span>
+                <span className="text-[11px] text-slate-400">Download official Android application via direct link</span>
               </div>
             </div>
             <ChevronRight className="w-4 h-4 text-emerald-400 group-hover:translate-x-0.5 transition" />

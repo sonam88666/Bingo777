@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:translateX="15"
+        android:translateY="15"
+        android:scaleX="0.39"
+        android:scaleY="0.39">
+
+        <!-- Outer Shield Base (Gold) -->
+        <path
+            android:fillColor="#F59E0B"
+            android:strokeColor="#78350F"
+            android:strokeWidth="3"
+            android:pathData="M100,8 L180,34 C180,115 148,162 100,186 C52,162 20,115 20,34 L100,8 Z" />
+
+        <!-- Outer Shield Inset (Deep Navy) -->
+        <path
+            android:fillColor="#1E1B4B"
+            android:pathData="M100,14 L174,38 C174,112 144,156 100,179 C56,156 26,112 26,38 L100,14 Z" />
+
+        <!-- Inner Filigree Rim (Gold) -->
+        <path
+            android:fillColor="#FBBF24"
+            android:pathData="M100,18 L168,42 C168,110 140,151 100,173 C60,151 32,110 32,42 L100,18 Z" />
+
+        <!-- Ruby Shield Face -->
+        <path
+            android:fillColor="#881337"
+            android:pathData="M100,24 L162,46 C162,108 136,145 100,166 C64,145 38,108 38,46 L100,24 Z" />
+
+        <!-- Crown Top Gem -->
+        <path
+            android:fillColor="#FEF08A"
+            android:pathData="M100,34 L108,46 L100,54 L92,46 Z" />
+
+        <!-- Golden Banner Ribbon -->
+        <path
+            android:fillColor="#F59E0B"
+            android:strokeColor="#78350F"
+            android:strokeWidth="1.5"
+            android:pathData="M52,64 C76,52 124,52 148,64 L144,76 C122,66 78,66 56,76 Z" />
+
+        <!-- Left '7' Shadow -->
+        <path
+            android:fillColor="#78350F"
+            android:pathData="M56,94 H84 L69,146 H54 L69,98 H56 Z" />
+        <!-- Left '7' Face -->
+        <path
+            android:fillColor="#FEF08A"
+            android:strokeColor="#F59E0B"
+            android:strokeWidth="1"
+            android:pathData="M54,92 H82 L66,144 H52 L67,96 H54 Z" />
+
+        <!-- Center Dominant '7' Shadow -->
+        <path
+            android:fillColor="#78350F"
+            android:pathData="M87,88 H123 L104,150 H87 L104,93 H87 Z" />
+        <!-- Center Dominant '7' Face -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:strokeColor="#F59E0B"
+            android:strokeWidth="1.5"
+            android:pathData="M85,85 H121 L101,148 H84 L101,90 H85 Z" />
+
+        <!-- Right '7' Shadow -->
+        <path
+            android:fillColor="#78350F"
+            android:pathData="M124,94 H152 L137,146 H122 L137,98 H124 Z" />
+        <!-- Right '7' Face -->
+        <path
+            android:fillColor="#FEF08A"
+            android:strokeColor="#F59E0B"
+            android:strokeWidth="1"
+            android:pathData="M122,92 H150 L134,144 H120 L135,96 H122 Z" />
+    </group>
+</vector>

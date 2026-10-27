@@ -8,7 +8,8 @@ import {
   Smartphone,
   Clock,
   Download,
-  AlertTriangle
+  AlertTriangle,
+  ExternalLink
 } from 'lucide-react';
 import { useToast } from '../common/Toast';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
@@ -27,9 +28,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
   const adminSettings = store.getAdminSettings();
   const [apkDownloadEnabled, setApkDownloadEnabled] = useState<boolean>(adminSettings.apkDownloadEnabled !== false);
   const [apkVersion, setApkVersion] = useState<string>(adminSettings.apkVersionName || 'v2.6.0 Pro');
-  const [apkSize, setApkSize] = useState<string>(adminSettings.apkFileSize || '18.4 MB');
-  const [apkFileName, setApkFileName] = useState<string>(adminSettings.apkFileName || 'Bingo777.apk');
-  const [apkDownloadUrl, setApkDownloadUrl] = useState<string>(adminSettings.apkDownloadUrl || '/api/download-apk');
+  const [apkDownloadUrl, setApkDownloadUrl] = useState<string>(adminSettings.apkDownloadUrl || '');
   const [apkReleaseNotes, setApkReleaseNotes] = useState<string>(adminSettings.apkReleaseNotes || 'Includes Dragon Tiger 3D, Ludo 1v1 Live & All Casino Games');
 
   const buildDate = 'October 2026';
@@ -41,8 +40,6 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
         if (data) {
           if (typeof data.enabled === 'boolean') setApkDownloadEnabled(data.enabled);
           if (data.version) setApkVersion(data.version.startsWith('v') ? data.version : `v${data.version}`);
-          if (data.sizeFormatted) setApkSize(data.sizeFormatted);
-          if (data.fileName) setApkFileName(data.fileName);
           if (data.downloadUrl) setApkDownloadUrl(data.downloadUrl);
           if (data.releaseNotes) setApkReleaseNotes(data.releaseNotes);
         }
@@ -96,34 +93,19 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
     }
   };
 
-  const handleDownloadApk = async (e: React.MouseEvent) => {
+  const handleDownloadApk = (e: React.MouseEvent) => {
     e.preventDefault();
     if (!apkDownloadEnabled) {
-      showToast('APK download is temporarily paused by Admin.', 'error');
+      showToast('App download is temporarily paused by Admin.', 'error');
       return;
     }
-    showToast(`Starting ${apkFileName} download...`, 'info');
-    try {
-      if (apkDownloadUrl.startsWith('http')) {
-        window.location.href = apkDownloadUrl;
-        return;
-      }
-      const res = await fetch(apkDownloadUrl);
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = apkFileName;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-      }, 200);
-      showToast(`${apkFileName} downloaded successfully!`, 'success');
-    } catch {
-      window.location.href = apkDownloadUrl;
+    const targetUrl = (apkDownloadUrl || adminSettings.apkDownloadUrl || '').trim();
+    if (!targetUrl || targetUrl === '/api/download-apk') {
+      showToast('Download link is not set by Admin yet. Please check back shortly.', 'info');
+      return;
     }
+    showToast('Opening download link...', 'info');
+    window.open(targetUrl, '_blank') || (window.location.href = targetUrl);
   };
 
   return (
@@ -136,14 +118,14 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
             <div>
               <div className="flex items-center space-x-2">
                 <h3 className="font-brand font-black text-base text-slate-100">
-                  Bingo777 Android APK
+                  Bingo777 Android App
                 </h3>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[9px] font-black uppercase">
                   {apkVersion}
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Official Single APK File for Website & Mobile
+                Official Direct Download & Update
               </p>
             </div>
           </div>
@@ -157,15 +139,15 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
           </button>
         </div>
 
-        {/* Primary Card: Single Official Android APK Download */}
+        {/* Primary Card: Direct App Download Link */}
         <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-950/60 via-slate-900 to-slate-950 border border-emerald-500/40 space-y-3 shadow-lg">
           <div>
             <span className="text-[10px] uppercase font-black tracking-wider text-emerald-400 flex items-center space-x-1">
               <CheckCircle2 className="w-3 h-3" />
-              <span>Official Android Application ({apkSize})</span>
+              <span>Official Android App</span>
             </span>
             <h4 className="font-brand font-black text-base text-slate-100 mt-0.5">
-              {apkFileName}
+              Bingo777 Pro ({apkVersion})
             </h4>
             <p className="text-[11px] text-slate-400">
               {apkReleaseNotes}
@@ -173,19 +155,19 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
           </div>
 
           {apkDownloadEnabled ? (
-            <a
-              href={apkDownloadUrl}
-              download={apkFileName}
+            <button
+              type="button"
               onClick={handleDownloadApk}
               className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-400 hover:from-emerald-400 hover:to-teal-300 active:scale-[0.98] text-slate-950 font-black text-sm shadow-xl shadow-emerald-500/20 flex items-center justify-center space-x-2 transition cursor-pointer"
             >
               <Download className="w-4 h-4 stroke-[2.5]" />
-              <span>Download {apkFileName} ({apkSize})</span>
-            </a>
+              <span>Download App (ऐप डाउनलोड करें)</span>
+              <ExternalLink className="w-3.5 h-3.5 ml-1 opacity-75" />
+            </button>
           ) : (
             <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center space-x-2">
               <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
-              <span>Direct APK download is currently paused by Admin.</span>
+              <span>Direct app download is currently paused by Admin.</span>
             </div>
           )}
 
@@ -201,8 +183,8 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
             {showGuide && (
               <div className="mt-2 p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] text-slate-300 space-y-1.5 leading-relaxed">
                 <p className="font-bold text-amber-300">Android APK Install Guide:</p>
-                <p>1. APK download hone ke baad Notification bar ya Chrome ke <strong>Downloads</strong> me jayein.</p>
-                <p>2. <strong>{apkFileName}</strong> pe click karein.</p>
+                <p>1. Download link khulne ke baad file download karein.</p>
+                <p>2. Download complete hone ke baad file par tap karein.</p>
                 <p>3. Agar <em>"Install unknown apps"</em> bole to <strong>Settings</strong> me jakar <strong>"Allow from this source"</strong> ON karein.</p>
                 <p>4. Agar Google Play Protect ka warning aaye to <strong>"More details"</strong> pe click karke <strong>"Install anyway"</strong> dabayein.</p>
               </div>

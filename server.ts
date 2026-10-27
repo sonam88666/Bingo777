@@ -3787,20 +3787,12 @@ async function startServer() {
   // ANDROID APK DIRECT DOWNLOAD ROUTE (ADMIN MANAGED)
   // ----------------------------------------------------
   app.get('/api/apk-info', (_req, res) => {
-    const apkPath = path.resolve(__dirname, 'public', 'Bingo777.apk');
-    const exists = fs.existsSync(apkPath);
-    const sizeBytes = exists ? fs.statSync(apkPath).size : 0;
     const settings = serverAdminSettings as any;
-
     res.json({
-      available: settings.apkDownloadEnabled !== false,
+      available: settings.apkDownloadEnabled !== false && Boolean(settings.apkDownloadUrl),
       enabled: settings.apkDownloadEnabled !== false,
-      fileName: settings.apkFileName || 'Bingo777.apk',
-      sizeBytes,
-      sizeFormatted: settings.apkFileSize || (exists ? `${(sizeBytes / (1024 * 1024)).toFixed(2)} MB` : '18.4 MB'),
-      packageId: 'com.bingo777.pro.game',
-      version: settings.apkVersionName || '2.6.0',
-      downloadUrl: settings.apkDownloadUrl || '/api/download-apk',
+      version: settings.apkVersionName || 'v2.6.0 Pro',
+      downloadUrl: settings.apkDownloadUrl || '',
       releaseNotes: settings.apkReleaseNotes || 'Includes 3D Dragon Tiger, Ludo 1v1 Live, Aviator & All Casino Games',
       forceUpdate: Boolean(settings.apkForceUpdatePrompt)
     });
@@ -3816,18 +3808,11 @@ async function startServer() {
       res.status(403).json({ error: 'Android APK download is currently paused by Master Admin.' });
       return;
     }
-    if (settings.apkDownloadUrl && settings.apkDownloadUrl.startsWith('http')) {
-      res.redirect(settings.apkDownloadUrl);
+    if (settings.apkDownloadUrl && (settings.apkDownloadUrl.startsWith('http://') || settings.apkDownloadUrl.startsWith('https://'))) {
+      res.redirect(302, settings.apkDownloadUrl);
       return;
     }
-    const apkPath = path.resolve(__dirname, 'public', 'Bingo777.apk');
-    if (!fs.existsSync(apkPath)) {
-      res.status(404).json({ error: 'Bingo777.apk not found on server.' });
-      return;
-    }
-    res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-    res.setHeader('Content-Disposition', `attachment; filename="${settings.apkFileName || 'Bingo777.apk'}"`);
-    res.sendFile(apkPath);
+    res.status(404).json({ error: 'No APK download link configured. Please set the APK link in Admin Settings.' });
   };
 
   app.get('/api/download-apk', handleSendApk);

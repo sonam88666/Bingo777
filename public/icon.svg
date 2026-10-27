@@ -1,17 +1,67 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#1e293b"/>
-      <stop offset="100%" stop-color="#020617"/>
+    <radialGradient id="canvasBg" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#1E1B4B" />
+      <stop offset="60%" stop-color="#020617" />
+      <stop offset="100%" stop-color="#000000" />
     </radialGradient>
-    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#fef08a"/>
-      <stop offset="50%" stop-color="#eab308"/>
-      <stop offset="100%" stop-color="#ca8a04"/>
+    <linearGradient id="b777_gold_rim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFBEB" />
+      <stop offset="25%" stop-color="#FBBF24" />
+      <stop offset="50%" stop-color="#D97706" />
+      <stop offset="75%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#78350F" />
+    </linearGradient>
+    <linearGradient id="b777_gold_inner" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FEF08A" />
+      <stop offset="50%" stop-color="#B45309" />
+      <stop offset="100%" stop-color="#FDE047" />
+    </linearGradient>
+    <radialGradient id="b777_shield_bg" cx="50%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#991B1B" />
+      <stop offset="45%" stop-color="#450A0A" />
+      <stop offset="85%" stop-color="#0F172A" />
+      <stop offset="100%" stop-color="#020617" />
+    </radialGradient>
+    <linearGradient id="b777_num_front" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="20%" stop-color="#FEF08A" />
+      <stop offset="55%" stop-color="#F59E0B" />
+      <stop offset="85%" stop-color="#B45309" />
+      <stop offset="100%" stop-color="#78350F" />
+    </linearGradient>
+    <linearGradient id="b777_side_shadow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#78350F" />
+      <stop offset="100%" stop-color="#451A03" />
+    </linearGradient>
+    <linearGradient id="b777_gloss" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.45" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <circle cx="256" cy="256" r="180" fill="none" stroke="url(#gold)" stroke-width="24"/>
-  <circle cx="256" cy="256" r="130" fill="url(#gold)" opacity="0.2"/>
-  <text x="256" y="290" font-family="Arial, sans-serif" font-weight="900" font-size="160" fill="url(#gold)" text-anchor="middle" letter-spacing="4">777</text>
+
+  <rect width="512" height="512" rx="112" fill="url(#canvasBg)" />
+
+  <g transform="translate(36, 36) scale(2.2)">
+    <path d="M100 8 L180 34 C180 115 148 162 100 186 C52 162 20 115 20 34 L100 8 Z" fill="url(#b777_gold_rim)" stroke="#92400E" stroke-width="2" />
+    <path d="M100 14 L174 38 C174 112 144 156 100 179 C56 156 26 112 26 38 L100 14 Z" fill="#1E1B4B" />
+    <path d="M100 18 L168 42 C168 110 140 151 100 173 C60 151 32 110 32 42 L100 18 Z" fill="url(#b777_gold_inner)" />
+    <path d="M100 24 L162 46 C162 108 136 145 100 166 C64 145 38 108 38 46 L100 24 Z" fill="url(#b777_shield_bg)" />
+    <path d="M100 25 L160 47 C155 76 130 92 100 92 C70 92 45 76 40 47 L100 25 Z" fill="url(#b777_gloss)" />
+
+    <g transform="translate(0, -2)">
+      <path d="M48 64 Q100 48 152 64 L148 80 Q100 66 52 80 Z" fill="url(#b777_gold_rim)" stroke="#78350F" stroke-width="1.5" />
+      <text x="100" y="74" text-anchor="middle" fill="#0F172A" font-size="14" font-weight="900" font-family="Arial, sans-serif" letter-spacing="3">B I N G O</text>
+    </g>
+
+    <path d="M56 94 H84 L69 146 H54 L69 98 H56 Z" fill="url(#b777_side_shadow)" />
+    <path d="M54 92 H82 L66 144 H52 L67 96 H54 Z" fill="url(#b777_num_front)" stroke="#FEF08A" stroke-width="0.8" />
+
+    <path d="M87 88 H123 L104 150 H87 L104 93 H87 Z" fill="url(#b777_side_shadow)" />
+    <path d="M85 85 H121 L101 148 H84 L101 90 H85 Z" fill="url(#b777_num_front)" stroke="#FFFBEB" stroke-width="1.2" />
+
+    <path d="M124 94 H152 L137 146 H122 L137 98 H124 Z" fill="url(#b777_side_shadow)" />
+    <path d="M122 92 H150 L134 144 H120 L135 96 H122 Z" fill="url(#b777_num_front)" stroke="#FEF08A" stroke-width="0.8" />
+  </g>
 </svg>

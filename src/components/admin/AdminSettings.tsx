@@ -947,63 +947,61 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-3">
               <div>
-                <label className="text-slate-300 font-semibold block mb-1">APK Version Name</label>
+                <label className="text-slate-300 font-semibold block mb-1">
+                  App Download Direct Link (URL) *
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={formState.apkDownloadUrl || ''}
+                    onChange={(e) => setFormState({ ...formState, apkDownloadUrl: e.target.value.trim() })}
+                    placeholder="https://drive.google.com/... ya https://github.com/.../app-debug.apk"
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 font-mono text-xs text-sky-400 focus:outline-none focus:border-sky-500"
+                  />
+                  {formState.apkDownloadUrl && formState.apkDownloadUrl.startsWith('http') && (
+                    <a
+                      href={formState.apkDownloadUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-2 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 rounded-xl font-bold text-xs flex items-center space-x-1 shrink-0 transition"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Test Link</span>
+                    </a>
+                  )}
+                </div>
+                <span className="text-[11px] text-slate-400 mt-1 block">
+                  Aap yahan apni APK ka direct link (Google Drive, GitHub Release, MediaFire, etc.) paste karein. User download button dabane par sidhe is link se app download kar sakega.
+                </span>
+              </div>
+
+              <div>
+                <label className="text-slate-300 font-semibold block mb-1">
+                  App Version Name
+                </label>
                 <input
                   type="text"
                   value={formState.apkVersionName || 'v2.6.0 Pro'}
                   onChange={(e) => setFormState({ ...formState, apkVersionName: e.target.value })}
-                  placeholder="e.g. v2.6.0 Pro or v3.0.0"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 font-mono font-bold text-emerald-400 focus:outline-none focus:border-emerald-500"
+                  placeholder="e.g. v2.6.0 Pro"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 font-mono font-bold text-emerald-400 focus:outline-none focus:border-emerald-500 text-xs"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 font-semibold block mb-1">APK File Name</label>
-                <input
-                  type="text"
-                  value={formState.apkFileName || 'Bingo777.apk'}
-                  onChange={(e) => setFormState({ ...formState, apkFileName: e.target.value })}
-                  placeholder="Bingo777.apk"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 font-mono font-bold text-slate-100 focus:outline-none focus:border-amber-500"
+                <label className="text-slate-300 font-semibold block mb-1">
+                  Update Release Notes / Description
+                </label>
+                <textarea
+                  rows={2}
+                  value={formState.apkReleaseNotes || 'Includes 3D Dragon Tiger, Ludo 1v1 Live, Aviator & All Casino Games'}
+                  onChange={(e) => setFormState({ ...formState, apkReleaseNotes: e.target.value })}
+                  placeholder="Naye features aur update details likhein..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
                 />
               </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="text-slate-300 font-semibold block mb-1">APK Download Direct Link / URL</label>
-                <input
-                  type="text"
-                  value={formState.apkDownloadUrl || '/api/download-apk'}
-                  onChange={(e) => setFormState({ ...formState, apkDownloadUrl: e.target.value.trim() })}
-                  placeholder="/api/download-apk or https://..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 font-mono text-xs text-sky-400 focus:outline-none focus:border-sky-500"
-                />
-                <span className="text-[10px] text-slate-500 mt-0.5 block">Default is server route (/api/download-apk) or enter external CDN link</span>
-              </div>
-
-              <div>
-                <label className="text-slate-300 font-semibold block mb-1">Display File Size</label>
-                <input
-                  type="text"
-                  value={formState.apkFileSize || '18.4 MB'}
-                  onChange={(e) => setFormState({ ...formState, apkFileSize: e.target.value })}
-                  placeholder="e.g. 18.4 MB"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 font-mono text-xs text-slate-100 focus:outline-none focus:border-amber-500"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-slate-300 font-semibold block mb-1">Update Release Notes / Description</label>
-              <textarea
-                rows={2}
-                value={formState.apkReleaseNotes || 'Includes 3D Dragon Tiger, Ludo 1v1 Live, Aviator & All Casino Games'}
-                onChange={(e) => setFormState({ ...formState, apkReleaseNotes: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
-              />
             </div>
           </div>
         </div>
