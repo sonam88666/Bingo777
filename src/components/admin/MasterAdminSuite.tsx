@@ -44,6 +44,7 @@ import { AdminFirebaseRules } from './AdminFirebaseRules';
 import { AdminNewsPollApproval } from './AdminNewsPollApproval';
 import { AdminMlmManager } from './AdminMlmManager';
 import { store } from '../../services/store';
+import { firebaseSync } from '../../services/firebaseSync';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
 
@@ -64,6 +65,10 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
   const { showToast } = useToast();
 
   React.useEffect(() => {
+    // Initialize automated 60-minute background cleanup routine on Admin Console startup
+    firebaseSync.startAutomatedHourlyCleanupRoutine();
+    firebaseSync.runHourlyDatabaseCleanup().catch(() => {});
+
     return store.subscribe(() => setTick((t) => t + 1));
   }, []);
 

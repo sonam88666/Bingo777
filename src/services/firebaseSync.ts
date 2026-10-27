@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  deleteDoc,
   collection,
   onSnapshot,
   serverTimestamp,
@@ -12,7 +13,8 @@ import {
   rtdbSet,
   rtdbGet,
   rtdbOnValue,
-  rtdbUpdate
+  rtdbUpdate,
+  rtdbRemove
 } from '../firebase';
 import { onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
 import { getDocs } from 'firebase/firestore';
@@ -36,11 +38,14 @@ class FirebaseSyncService {
   private authPromise: Promise<boolean> | null = null;
   private listenersAttached = false;
   private rtdbListenersAttached = false;
+  private hourlyCleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private isCleanupRunning = false;
 
   constructor() {
     this.bindStoreHooks();
     this.attachRealtimeDatabaseListeners();
     this.initAuthListener();
+    this.startAutomatedHourlyCleanupRoutine();
   }
 
   /**
@@ -699,12 +704,295 @@ class FirebaseSyncService {
 
     try {
       await rtdbSet(rtdbRef(rtdb, 'current_round/aviator'), payload);
+      if (round.status === 'crashed' && typeof round.crashMultiplier === 'number') {
+        await rtdbSet(rtdbRef(rtdb, `aviator_rounds/${round.roundId}`), {
+          roundId: round.roundId,
+          status: 'crashed',
+          crashMultiplier: round.crashMultiplier,
+          crashedAt: Date.now(),
+          updatedAt: Date.now()
+        });
+      }
     } catch {}
 
     try {
       await this.ensureAuth();
       await setDoc(doc(db, 'aviator_rounds', 'latest'), payload, { merge: true });
     } catch {}
+  }
+
+  /**
+   * Automated 1-hour (60-minute) background cleanup routine to keep Firebase Realtime Database
+   * lightweight and prevent latency during high-frequency rounds.
+   *
+   * CRITICAL RULE — NEVER DELETES:
+   * - /users (master accounts, balances, credentials)
+   * - /deposits or /withdrawals (financial payment records)
+   * - /transactions (audit ledger)
+   * - /admin_settings
+   */
+  public startAutomatedHourlyCleanupRoutine(): void {
+    if (typeof window === 'undefined') return;
+    if (this.hourlyCleanupTimer) return;
+
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+
+    // Run initial cleanup pass after auth warmup, then every 60 minutes
+    setTimeout(() => {
+      this.runHourlyDatabaseCleanup().catch(() => {});
+    }, 5000);
+
+    this.hourlyCleanupTimer = setInterval(() => {
+      this.runHourlyDatabaseCleanup().catch(() => {});
+    }, ONE_HOUR_MS);
+  }
+
+  public async runHourlyDatabaseCleanup(): Promise<{
+    purgedLiveBets: number;
+    purgedRounds: number;
+    purgedAviatorRounds: number;
+    purgedLogs: number;
+    purgedPolls: number;
+  }> {
+    if (this.isCleanupRunning) {
+      return {
+        purgedLiveBets: 0,
+        purgedRounds: 0,
+        purgedAviatorRounds: 0,
+        purgedLogs: 0,
+        purgedPolls: 0
+      };
+    }
+    this.isCleanupRunning = true;
+
+    const now = store.getServerNow();
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    let purgedLiveBets = 0;
+    let purgedRounds = 0;
+    let purgedAviatorRounds = 0;
+    let purgedLogs = 0;
+    let purgedPolls = 0;
+
+    try {
+      await this.ensureAuth();
+
+      // 1. Settled Live Bets (/live_bets):
+      // Purge all bets where status !== 'pending' that were settled more than 1 hour ago. Keep pending bets intact.
+      try {
+        const betsSnap = await rtdbGet(rtdbRef(rtdb, 'live_bets'));
+        if (betsSnap.exists()) {
+          const val = betsSnap.val();
+          if (val && typeof val === 'object') {
+            for (const [betKey, rawBet] of Object.entries(val) as [string, any][]) {
+              if (!rawBet || typeof rawBet !== 'object') continue;
+              const status = String(rawBet.status || 'pending');
+              const settledOrUpdatedAt = Number(rawBet.settledAt || rawBet.updatedAt || rawBet.timestamp || 0);
+              if (status !== 'pending' && settledOrUpdatedAt > 0 && now - settledOrUpdatedAt > ONE_HOUR_MS) {
+                await rtdbRemove(rtdbRef(rtdb, `live_bets/${betKey}`)).catch(() => {});
+                await deleteDoc(doc(db, 'live_bets', betKey)).catch(() => {});
+                purgedLiveBets++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      // Also clean in-memory store.liveBets using the same 1-hour rule for non-pending bets
+      if (Array.isArray(store.liveBets) && store.liveBets.length > 0) {
+        store.liveBets = store.liveBets.filter((b) => {
+          if (b.status === 'pending') return true;
+          return now - (b.timestamp || 0) <= ONE_HOUR_MS;
+        });
+      }
+
+      // 2. Expired Game Rounds (/wingo_rounds, /past_rounds):
+      // Retain only the most recent 30 completed periods for the UI history list and delete older round records.
+      try {
+        const pastSnap = await rtdbGet(rtdbRef(rtdb, 'past_rounds'));
+        if (pastSnap.exists()) {
+          const val = pastSnap.val();
+          if (val && typeof val === 'object') {
+            const entries = Object.entries(val) as [string, any][];
+            // Sort by endTime / period descending so the newest 30 completed periods are retained
+            entries.sort((a, b) => {
+              const timeB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
+              const timeA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
+              if (timeB !== timeA) return timeB - timeA;
+              return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
+            });
+
+            if (entries.length > 30) {
+              const toDelete = entries.slice(30);
+              for (const [roundKey] of toDelete) {
+                await rtdbRemove(rtdbRef(rtdb, `past_rounds/${roundKey}`)).catch(() => {});
+                purgedRounds++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      try {
+        const wingoSnap = await rtdbGet(rtdbRef(rtdb, 'wingo_rounds'));
+        if (wingoSnap.exists()) {
+          const val = wingoSnap.val();
+          if (val && typeof val === 'object') {
+            const activeReservedKeys = new Set([
+              '30s',
+              '1min',
+              '3min',
+              'resolved_30s',
+              'resolved_1min',
+              'resolved_3min'
+            ]);
+            const historicalEntries = (Object.entries(val) as [string, any][]).filter(
+              ([k]) => !activeReservedKeys.has(k)
+            );
+            historicalEntries.sort((a, b) => {
+              const timeB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
+              const timeA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
+              if (timeB !== timeA) return timeB - timeA;
+              return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
+            });
+            if (historicalEntries.length > 30) {
+              for (const [oldKey] of historicalEntries.slice(30)) {
+                await rtdbRemove(rtdbRef(rtdb, `wingo_rounds/${oldKey}`)).catch(() => {});
+                purgedRounds++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      // Retain only the 30 most recent completed periods in local UI state per mode
+      (['30s', '1min', '3min'] as const).forEach((m) => {
+        if (Array.isArray(store.pastRounds[m]) && store.pastRounds[m].length > 30) {
+          store.pastRounds[m] = store.pastRounds[m].slice(0, 30);
+        }
+      });
+
+      // 3. Flight Trajectory & Multiplier Ticks (/aviator_rounds):
+      // Clear raw flight ticks from finished flights, keeping only the final crash multiplier for the last 20 rounds.
+      try {
+        const avSnap = await rtdbGet(rtdbRef(rtdb, 'aviator_rounds'));
+        if (avSnap.exists()) {
+          const val = avSnap.val();
+          if (val && typeof val === 'object') {
+            const entries = (Object.entries(val) as [string, any][]).filter(([k]) => k !== 'latest');
+            entries.sort((a, b) => {
+              const timeB = Number(b[1]?.crashedAt || b[1]?.updatedAt || b[1]?.roundNumber || 0);
+              const timeA = Number(a[1]?.crashedAt || a[1]?.updatedAt || a[1]?.roundNumber || 0);
+              return timeB - timeA;
+            });
+
+            // Keep top 20 finished rounds with raw flight ticks stripped; delete older ones
+            for (let i = 0; i < entries.length; i++) {
+              const [roundKey, rawRound] = entries[i];
+              if (i >= 20) {
+                await rtdbRemove(rtdbRef(rtdb, `aviator_rounds/${roundKey}`)).catch(() => {});
+                purgedAviatorRounds++;
+              } else if (
+                rawRound &&
+                typeof rawRound === 'object' &&
+                (rawRound.ticks || rawRound.trajectory || rawRound.flightTicks || rawRound.liveTicks || rawRound.bets)
+              ) {
+                await rtdbSet(rtdbRef(rtdb, `aviator_rounds/${roundKey}`), {
+                  roundId: rawRound.roundId || roundKey,
+                  roundNumber: rawRound.roundNumber || null,
+                  status: 'crashed',
+                  crashMultiplier: Number(rawRound.crashMultiplier) || 1.0,
+                  crashedAt: rawRound.crashedAt || rawRound.updatedAt || now,
+                  updatedAt: now
+                }).catch(() => {});
+                purgedAviatorRounds++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      // 4. Routine Diagnostic & Server Logs (/systemLogs, /audit_logs):
+      // Delete routine system, RSS discovery, and settlement logs older than 60 minutes (SERVER_CLEANUP, AUTO_PUBLISHED).
+      const isRoutineDiagnosticLog = (item: any): boolean => {
+        const typeStr = String(item?.type || item?.action || item?.category || '').toUpperCase();
+        const msgStr = String(item?.message || item?.details || '').toUpperCase();
+        return (
+          typeStr.includes('SERVER_CLEANUP') ||
+          typeStr.includes('AUTO_PUBLISHED') ||
+          typeStr.includes('RSS') ||
+          typeStr.includes('SETTLEMENT') ||
+          typeStr.includes('DIAGNOSTIC') ||
+          typeStr.includes('ROUTINE') ||
+          msgStr.includes('SERVER_CLEANUP') ||
+          msgStr.includes('AUTO_PUBLISHED') ||
+          msgStr.includes('RSS') ||
+          msgStr.includes('ROUND SETTLED')
+        );
+      };
+
+      for (const logPath of ['systemLogs', 'audit_logs']) {
+        try {
+          const logsSnap = await rtdbGet(rtdbRef(rtdb, logPath));
+          if (logsSnap.exists()) {
+            const val = logsSnap.val();
+            if (val && typeof val === 'object') {
+              for (const [logKey, rawLog] of Object.entries(val) as [string, any][]) {
+                if (!rawLog || typeof rawLog !== 'object') continue;
+                const ts = Number(rawLog.timestamp || rawLog.createdAt || rawLog.updatedAt || 0);
+                if (ts > 0 && now - ts > ONE_HOUR_MS && (logPath === 'systemLogs' || isRoutineDiagnosticLog(rawLog))) {
+                  await rtdbRemove(rtdbRef(rtdb, `${logPath}/${logKey}`)).catch(() => {});
+                  purgedLogs++;
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
+      // 5. Expired Polls (/activePolls):
+      // Purge archived polls where status === 'ARCHIVED' and verification window has passed.
+      try {
+        const pollsSnap = await rtdbGet(rtdbRef(rtdb, 'activePolls'));
+        if (pollsSnap.exists()) {
+          const val = pollsSnap.val();
+          if (val && typeof val === 'object') {
+            for (const [pollKey, rawPoll] of Object.entries(val) as [string, any][]) {
+              if (!rawPoll || typeof rawPoll !== 'object') continue;
+              const status = String(rawPoll.status || '').toUpperCase();
+              const verificationEnd = Number(
+                rawPoll.verificationWindowEndsAt ||
+                  rawPoll.autoDeleteAt ||
+                  rawPoll.closesAt ||
+                  rawPoll.archivedAt ||
+                  0
+              );
+              if (status === 'ARCHIVED' && (verificationEnd === 0 || now > verificationEnd)) {
+                await rtdbRemove(rtdbRef(rtdb, `activePolls/${pollKey}`)).catch(() => {});
+                purgedPolls++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      // Also trigger server-side cleanup endpoint if backend is reachable
+      try {
+        await fetch('/api/admin/cleanup/run-hourly-purge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        }).catch(() => {});
+      } catch {}
+    } finally {
+      this.isCleanupRunning = false;
+    }
+
+    return {
+      purgedLiveBets,
+      purgedRounds,
+      purgedAviatorRounds,
+      purgedLogs,
+      purgedPolls
+    };
   }
 
   public async attachRealtimeAdminSettingsSync() {

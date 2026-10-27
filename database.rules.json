@@ -69,6 +69,21 @@
       ".write": true
     },
 
+    "aviator_rounds": {
+      ".read": true,
+      ".write": true
+    },
+
+    "activePolls": {
+      ".read": true,
+      ".write": true
+    },
+
+    "systemLogs": {
+      ".read": true,
+      ".write": true
+    },
+
     "deposits": {
       ".read": true,
       ".write": true,
@@ -99,20 +114,10 @@
     "feature_modules": {
       ".read": true,
       ".write": true,
-      "$moduleId": {
+      "$featureId": {
         ".read": true,
         ".write": true
       }
-    },
-
-    "deleted_features_backup": {
-      ".read": true,
-      ".write": true
-    },
-
-    "deleted_users_backup": {
-      ".read": true,
-      ".write": true
     },
 
     "support_chat": {
@@ -120,18 +125,30 @@
       ".write": true,
       "$uid": {
         ".read": true,
-        ".write": true
+        ".write": true,
+        "$messageId": {
+          ".read": true,
+          ".write": true
+        }
       }
     },
 
     "audit_logs": {
       ".read": true,
-      ".write": true
+      ".write": true,
+      "$logId": {
+        ".read": true,
+        ".write": true
+      }
     },
 
     "admin_commands": {
       ".read": true,
-      ".write": true
+      ".write": true,
+      "$cmdId": {
+        ".read": true,
+        ".write": true
+      }
     }
   }
 }

@@ -3777,6 +3777,258 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
+  // ----------------------------------------------------
+  // AUTOMATED 1-HOUR (60-MINUTE) REALTIME DATABASE CLEANUP ROUTINE
+  // ----------------------------------------------------
+  // CRITICAL RULE — NEVER DELETES:
+  // - /users (master accounts, balances, credentials)
+  // - /deposits or /withdrawals (financial payment records)
+  // - /transactions (audit ledger)
+  // - /admin_settings
+  const RTDB_BASE_URL = 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com';
+  const ONE_HOUR_MS = 60 * 60 * 1000;
+
+  async function runServerHourlyCleanup() {
+    const now = Date.now();
+    let purgedLiveBets = 0;
+    let purgedRounds = 0;
+    let purgedAviatorRounds = 0;
+    let purgedLogs = 0;
+    let purgedPolls = 0;
+
+    try {
+      // 1. Settled Live Bets (/live_bets):
+      // Purge all bets where status !== 'pending' settled more than 1 hour ago. Keep pending bets intact.
+      try {
+        const betsRes = await fetch(`${RTDB_BASE_URL}/live_bets.json`);
+        if (betsRes.ok) {
+          const betsData = await betsRes.json();
+          if (betsData && typeof betsData === 'object') {
+            for (const [betKey, rawBet] of Object.entries(betsData) as [string, any][]) {
+              if (!rawBet || typeof rawBet !== 'object') continue;
+              const status = String(rawBet.status || 'pending');
+              const settledTime = Number(rawBet.settledAt || rawBet.updatedAt || rawBet.timestamp || 0);
+              if (status !== 'pending' && settledTime > 0 && now - settledTime > ONE_HOUR_MS) {
+                await fetch(`${RTDB_BASE_URL}/live_bets/${encodeURIComponent(betKey)}.json`, {
+                  method: 'DELETE'
+                }).catch(() => {});
+                purgedLiveBets++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      // 2. Expired Game Rounds (/wingo_rounds, /past_rounds):
+      // Retain only the most recent 30 completed periods for the UI history list and delete older round records.
+      try {
+        const pastRes = await fetch(`${RTDB_BASE_URL}/past_rounds.json`);
+        if (pastRes.ok) {
+          const pastData = await pastRes.json();
+          if (pastData && typeof pastData === 'object') {
+            const entries = Object.entries(pastData) as [string, any][];
+            entries.sort((a, b) => {
+              const tB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
+              const tA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
+              if (tB !== tA) return tB - tA;
+              return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
+            });
+            if (entries.length > 30) {
+              for (const [roundKey] of entries.slice(30)) {
+                await fetch(`${RTDB_BASE_URL}/past_rounds/${encodeURIComponent(roundKey)}.json`, {
+                  method: 'DELETE'
+                }).catch(() => {});
+                purgedRounds++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      try {
+        const wingoRes = await fetch(`${RTDB_BASE_URL}/wingo_rounds.json`);
+        if (wingoRes.ok) {
+          const wingoData = await wingoRes.json();
+          if (wingoData && typeof wingoData === 'object') {
+            const activeReserved = new Set([
+              '30s',
+              '1min',
+              '3min',
+              'resolved_30s',
+              'resolved_1min',
+              'resolved_3min'
+            ]);
+            const entries = (Object.entries(wingoData) as [string, any][]).filter(
+              ([k]) => !activeReserved.has(k)
+            );
+            entries.sort((a, b) => {
+              const tB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
+              const tA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
+              if (tB !== tA) return tB - tA;
+              return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
+            });
+            if (entries.length > 30) {
+              for (const [oldKey] of entries.slice(30)) {
+                await fetch(`${RTDB_BASE_URL}/wingo_rounds/${encodeURIComponent(oldKey)}.json`, {
+                  method: 'DELETE'
+                }).catch(() => {});
+                purgedRounds++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      // 3. Flight Trajectory & Multiplier Ticks (/aviator_rounds):
+      // Clear raw flight ticks from finished flights, keeping only the final crash multiplier for the last 20 rounds.
+      purgedAviatorRounds += serverAviatorEngine.purgeOldFlightData();
+      try {
+        const avRes = await fetch(`${RTDB_BASE_URL}/aviator_rounds.json`);
+        if (avRes.ok) {
+          const avData = await avRes.json();
+          if (avData && typeof avData === 'object') {
+            const entries = (Object.entries(avData) as [string, any][]).filter(([k]) => k !== 'latest');
+            entries.sort((a, b) => {
+              const tB = Number(b[1]?.crashedAt || b[1]?.updatedAt || b[1]?.roundNumber || 0);
+              const tA = Number(a[1]?.crashedAt || a[1]?.updatedAt || a[1]?.roundNumber || 0);
+              return tB - tA;
+            });
+            for (let i = 0; i < entries.length; i++) {
+              const [rKey, rawRound] = entries[i];
+              if (i >= 20) {
+                await fetch(`${RTDB_BASE_URL}/aviator_rounds/${encodeURIComponent(rKey)}.json`, {
+                  method: 'DELETE'
+                }).catch(() => {});
+                purgedAviatorRounds++;
+              } else if (
+                rawRound &&
+                typeof rawRound === 'object' &&
+                (rawRound.ticks || rawRound.trajectory || rawRound.flightTicks || rawRound.liveTicks || rawRound.bets)
+              ) {
+                await fetch(`${RTDB_BASE_URL}/aviator_rounds/${encodeURIComponent(rKey)}.json`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    roundId: rawRound.roundId || rKey,
+                    roundNumber: rawRound.roundNumber || null,
+                    status: 'crashed',
+                    crashMultiplier: Number(rawRound.crashMultiplier) || 1.0,
+                    crashedAt: rawRound.crashedAt || rawRound.updatedAt || now,
+                    updatedAt: now
+                  })
+                }).catch(() => {});
+                purgedAviatorRounds++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      // 4. Routine Diagnostic & Server Logs (/systemLogs, /audit_logs):
+      // Delete routine system, RSS discovery, and settlement logs older than 60 minutes (SERVER_CLEANUP, AUTO_PUBLISHED).
+      const isRoutineServerLog = (item: any): boolean => {
+        const typeStr = String(item?.type || item?.action || item?.category || '').toUpperCase();
+        const msgStr = String(item?.message || item?.details || '').toUpperCase();
+        return (
+          typeStr.includes('SERVER_CLEANUP') ||
+          typeStr.includes('AUTO_PUBLISHED') ||
+          typeStr.includes('RSS') ||
+          typeStr.includes('SETTLEMENT') ||
+          typeStr.includes('DIAGNOSTIC') ||
+          typeStr.includes('ROUTINE') ||
+          msgStr.includes('SERVER_CLEANUP') ||
+          msgStr.includes('AUTO_PUBLISHED') ||
+          msgStr.includes('RSS') ||
+          msgStr.includes('ROUND SETTLED')
+        );
+      };
+
+      const beforeAuditLen = serverAuditLogs.length;
+      for (let i = serverAuditLogs.length - 1; i >= 0; i--) {
+        const log = serverAuditLogs[i];
+        if (now - (log.timestamp || 0) > ONE_HOUR_MS && isRoutineServerLog(log)) {
+          serverAuditLogs.splice(i, 1);
+        }
+      }
+      purgedLogs += beforeAuditLen - serverAuditLogs.length;
+
+      for (const logPath of ['systemLogs', 'audit_logs']) {
+        try {
+          const logsRes = await fetch(`${RTDB_BASE_URL}/${logPath}.json`);
+          if (logsRes.ok) {
+            const logsData = await logsRes.json();
+            if (logsData && typeof logsData === 'object') {
+              for (const [lKey, rawLog] of Object.entries(logsData) as [string, any][]) {
+                if (!rawLog || typeof rawLog !== 'object') continue;
+                const ts = Number(rawLog.timestamp || rawLog.createdAt || rawLog.updatedAt || 0);
+                if (ts > 0 && now - ts > ONE_HOUR_MS && (logPath === 'systemLogs' || isRoutineServerLog(rawLog))) {
+                  await fetch(`${RTDB_BASE_URL}/${logPath}/${encodeURIComponent(lKey)}.json`, {
+                    method: 'DELETE'
+                  }).catch(() => {});
+                  purgedLogs++;
+                }
+              }
+            }
+          }
+        } catch {}
+      }
+
+      // 5. Expired Polls (/activePolls):
+      // Purge archived polls where status === 'ARCHIVED' and verification window has passed.
+      try {
+        const pollsRes = await fetch(`${RTDB_BASE_URL}/activePolls.json`);
+        if (pollsRes.ok) {
+          const pollsData = await pollsRes.json();
+          if (pollsData && typeof pollsData === 'object') {
+            for (const [pKey, rawPoll] of Object.entries(pollsData) as [string, any][]) {
+              if (!rawPoll || typeof rawPoll !== 'object') continue;
+              const status = String(rawPoll.status || '').toUpperCase();
+              const verifyEnd = Number(
+                rawPoll.verificationWindowEndsAt ||
+                  rawPoll.autoDeleteAt ||
+                  rawPoll.closesAt ||
+                  rawPoll.archivedAt ||
+                  0
+              );
+              if (status === 'ARCHIVED' && (verifyEnd === 0 || now > verifyEnd)) {
+                await fetch(`${RTDB_BASE_URL}/activePolls/${encodeURIComponent(pKey)}.json`, {
+                  method: 'DELETE'
+                }).catch(() => {});
+                purgedPolls++;
+              }
+            }
+          }
+        }
+      } catch {}
+    } catch (err) {
+      console.warn('[HourlyCleanup] Routine warning:', err);
+    }
+
+    return {
+      ok: true,
+      success: true,
+      executedAt: now,
+      purgedLiveBets,
+      purgedRounds,
+      purgedAviatorRounds,
+      purgedLogs,
+      purgedPolls
+    };
+  }
+
+  app.post('/api/admin/cleanup/run-hourly-purge', async (_req, res) => {
+    const summary = await runServerHourlyCleanup();
+    return res.json(summary);
+  });
+
+  // Execute automated cleanup every 60 minutes (and initial pass 10s after server startup)
+  setTimeout(() => {
+    runServerHourlyCleanup().catch(() => {});
+  }, 10000);
+  setInterval(() => {
+    runServerHourlyCleanup().catch(() => {});
+  }, ONE_HOUR_MS);
+
   // Authoritative background heartbeat & disconnect monitor for all active Ludo rooms
   setInterval(checkLudoRoomsDisconnectStatus, 1000);
 

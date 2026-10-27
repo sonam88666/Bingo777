@@ -6,6 +6,7 @@ import {
   getDocFromServer,
   setDoc,
   getDoc,
+  deleteDoc,
   collection,
   onSnapshot,
   serverTimestamp
@@ -16,7 +17,8 @@ import {
   set as rtdbSet,
   get as rtdbGet,
   onValue as rtdbOnValue,
-  update as rtdbUpdate
+  update as rtdbUpdate,
+  remove as rtdbRemove
 } from 'firebase/database';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -93,6 +95,7 @@ export {
   doc,
   getDoc,
   setDoc,
+  deleteDoc,
   collection,
   onSnapshot,
   serverTimestamp,
@@ -102,6 +105,6 @@ export {
   rtdbSet,
   rtdbGet,
   rtdbOnValue,
-  rtdbUpdate
+  rtdbUpdate,
+  rtdbRemove
 };
-

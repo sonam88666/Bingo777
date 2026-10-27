@@ -325,11 +325,11 @@ export class ServerAviatorEngine {
       }
     });
 
-    // Deduplicated push to pastCrashes and roundHistory
+    // Deduplicated push to pastCrashes and roundHistory (retain last 20 rounds)
     if (!this.roundHistory.some((r) => r.roundId === this.currentRound.roundId)) {
       this.pastCrashes.unshift(cleanCrash);
-      if (this.pastCrashes.length > 30) {
-        this.pastCrashes.pop();
+      if (this.pastCrashes.length > 20) {
+        this.pastCrashes = this.pastCrashes.slice(0, 20);
       }
 
       this.roundHistory.unshift({
@@ -349,10 +349,27 @@ export class ServerAviatorEngine {
         startedAt: this.currentRound.flightStartTime || now,
         crashedAt: now
       });
-      if (this.roundHistory.length > 50) {
-        this.roundHistory.pop();
+      if (this.roundHistory.length > 20) {
+        this.roundHistory = this.roundHistory.slice(0, 20);
       }
     }
+  }
+
+  public purgeOldFlightData(): number {
+    let purged = 0;
+    if (this.pastCrashes.length > 20) {
+      purged += this.pastCrashes.length - 20;
+      this.pastCrashes = this.pastCrashes.slice(0, 20);
+    }
+    if (this.roundHistory.length > 20) {
+      purged += this.roundHistory.length - 20;
+      this.roundHistory = this.roundHistory.slice(0, 20);
+    }
+    if (this.settledRoundIds.size > 50) {
+      const keep = new Set(this.roundHistory.map((r) => r.roundId));
+      this.settledRoundIds = keep;
+    }
+    return purged;
   }
 
   public getPublicState(includeAdminSecret: boolean = false) {
