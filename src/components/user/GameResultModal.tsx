@@ -352,12 +352,7 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
           }`} 
         />
 
-        {/* Queued Results Indicator (if multiple consecutive rounds settled) */}
-        {queuedCount > 1 && (
-          <div className="absolute top-3.5 left-4 z-20 px-2.5 py-1 rounded-full bg-slate-950/80 border border-slate-700 text-[10px] font-mono font-bold text-amber-300">
-            1 of {queuedCount} Results
-          </div>
-        )}
+        {/* Clean Top Spacer */}
 
         {/* Replay 3D Sound Button + Close Button Top Right */}
         <div className="absolute top-3.5 right-3.5 z-20 flex items-center gap-1.5">
@@ -580,13 +575,12 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
           </div>
         </div>
 
-        {/* Footer Guarantee with Unique Result ID */}
-        <div className="py-2 px-4 bg-slate-950 border-t border-slate-800/80 text-center text-[10px] text-slate-500 flex items-center justify-between">
+        {/* Footer Guarantee */}
+        <div className="py-2 px-4 bg-slate-950 border-t border-slate-800/80 text-center text-[10px] text-slate-500 flex items-center justify-center">
           <span className="inline-flex items-center space-x-1">
             <ShieldCheck className="w-3 h-3 text-emerald-400" />
-            <span className="text-emerald-400 font-bold">Verified Settlement</span>
+            <span className="text-emerald-400 font-bold">Instant Wallet Settlement</span>
           </span>
-          <span className="font-mono text-slate-500">ID: {settlement.resultId}</span>
         </div>
       </div>
     </div>

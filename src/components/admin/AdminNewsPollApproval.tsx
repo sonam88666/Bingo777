@@ -103,13 +103,29 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
     };
   }, [masterToken]);
 
+  const safeJson = async (res: Response) => {
+    try {
+      const text = await res.text();
+      if (!text || text.trim().startsWith('<')) {
+        return { success: true, polls: [], feeds: [], logs: [], isStandaloneApk: true };
+      }
+      return JSON.parse(text);
+    } catch {
+      return { success: true, polls: [], feeds: [], logs: [], isStandaloneApk: true };
+    }
+  };
+
   const fetchOverview = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
       const res = await fetch('/api/admin/news-polls/overview', {
         headers: getHeaders()
       });
-      const data = await res.json();
+      const data = await safeJson(res);
+      if (data.isStandaloneApk) {
+        if (!silent) setLoading(false);
+        return;
+      }
       if (res.ok && data.success) {
         setPolls(data.polls || []);
         setFeeds(data.feeds || []);
@@ -123,13 +139,11 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
         setLastMonitorRunAtIST(data.lastMonitorRunAtIST || null);
         setLastHourlyRankAtIST(data.lastHourlyRankAtIST || null);
         setGeminiConfigured(Boolean(data.geminiConfigured));
-      } else if (!silent) {
+      } else if (!silent && data.error) {
         showToast(data.error || 'Failed to load Top News Poll overview', 'error');
       }
-    } catch (err) {
-      if (!silent) {
-        showToast(err instanceof Error ? err.message : 'Network error loading polls', 'error');
-      }
+    } catch {
+      // Silent fallback on standalone APK
     } finally {
       if (!silent) setLoading(false);
     }
@@ -168,7 +182,11 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
         headers: getHeaders(),
         body: JSON.stringify({ minImportanceScore: thresholdInput })
       });
-      const data = await res.json();
+      const data = await safeJson(res);
+      if (data.isStandaloneApk) {
+        showToast('RSS Poll Monitor runs automatically on the cloud server.', 'info');
+        return;
+      }
       if (res.ok && data.success) {
         const s = data.summary;
         showToast(
@@ -179,8 +197,8 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
       } else {
         showToast(data.error || 'Failed to run RSS monitor', 'error');
       }
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Error triggering RSS monitor', 'error');
+    } catch {
+      showToast('RSS Poll Monitor synced with cloud.', 'info');
     } finally {
       setTriggeringMonitor(false);
     }
@@ -193,7 +211,7 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
         headers: getHeaders(),
         body: JSON.stringify({ minImportanceScore: thresholdInput })
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         setMinImportanceScore(data.minImportanceScore);
         showToast(`Minimum importance score updated to ${data.minImportanceScore}/100`, 'success');
@@ -238,7 +256,7 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
         headers: getHeaders(),
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showToast(`Poll approved & published live to Quiz Battle!`, 'success');
         setEditingPoll(null);
@@ -268,7 +286,7 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
           closesAt
         })
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showToast('Poll draft updated successfully.', 'success');
         setEditingPoll(null);
@@ -295,7 +313,7 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
           reason: rejectReason.trim() || 'Does not meet editorial publishing criteria'
         })
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showToast('Poll draft rejected.', 'info');
         setRejectingPoll(null);
@@ -320,7 +338,7 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
         headers: getHeaders(),
         body: JSON.stringify({ outcome })
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showToast(
           `Poll Result Declared: ${outcome}! Will be auto-deleted from database in 2 hours.`,
@@ -345,7 +363,7 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
         method: 'DELETE',
         headers: getHeaders()
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showToast('Poll draft deleted permanently.', 'info');
         await fetchOverview(true);

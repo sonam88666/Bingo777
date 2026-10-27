@@ -69,8 +69,17 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
 
   const adminSettings = store.getAdminSettings();
 
+  const [confirmMaintTap, setConfirmMaintTap] = useState(false);
+
   const handleToggleMaintenance = async () => {
     const nextState = !adminSettings.maintenanceMode;
+    if (nextState && !confirmMaintTap) {
+      setConfirmMaintTap(true);
+      showToast('Tap Maintenance button once more within 4s to confirm turning ON Maintenance Mode.', 'info');
+      setTimeout(() => setConfirmMaintTap(false), 4000);
+      return;
+    }
+    setConfirmMaintTap(false);
     store.updateAdminSettings({ maintenanceMode: nextState }, adminId);
     await apiClient
       .toggleMaintenanceMode(

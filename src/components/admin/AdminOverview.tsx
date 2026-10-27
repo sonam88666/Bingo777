@@ -31,7 +31,15 @@ export const AdminOverview: React.FC<AdminOverviewProps> = ({ onNavigateTab }) =
     });
   }, []);
 
+  const [confirmMaintTap, setConfirmMaintTap] = useState(false);
+
   const handleToggleMaintenance = async (nextState: boolean) => {
+    if (nextState && !confirmMaintTap) {
+      setConfirmMaintTap(true);
+      setTimeout(() => setConfirmMaintTap(false), 4000);
+      return;
+    }
+    setConfirmMaintTap(false);
     const updated = { ...adminSettings, maintenanceMode: nextState };
     setAdminSettings(updated);
     store.updateAdminSettings(updated, 'MasterAdmin_01');
@@ -188,7 +196,13 @@ export const AdminOverview: React.FC<AdminOverviewProps> = ({ onNavigateTab }) =
                 : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
             }`}
           >
-            <span>{adminSettings.maintenanceMode ? 'Turn OFF Maintenance' : 'Toggle Maintenance ON'}</span>
+            <span>
+              {adminSettings.maintenanceMode
+                ? 'Turn OFF Maintenance'
+                : confirmMaintTap
+                ? '⚠️ Tap Again to Confirm ON'
+                : 'Toggle Maintenance ON'}
+            </span>
           </button>
 
           <button

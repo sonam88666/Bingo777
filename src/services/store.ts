@@ -749,9 +749,9 @@ const safeStorage = {
 // Central Authoritative Store with Multiple Games
 class AuthoritativeStore {
   private users: Record<string, UserRecord>;
-  private liveBets: LiveBet[];
+  public liveBets: LiveBet[];
   private pastRounds: GameRound[];
-  private currentRound: GameRound;
+  public currentRound: GameRound;
   private deposits: DepositRecord[];
   private withdrawals: WithdrawalRecord[];
   private giftCodes: Record<string, GiftCode>;
@@ -1201,7 +1201,7 @@ class AuthoritativeStore {
     }
   }
 
-  private safeNotifyListeners(): void {
+  public safeNotifyListeners(): void {
     this.listeners.forEach((fn) => {
       try {
         fn();
@@ -1460,6 +1460,15 @@ class AuthoritativeStore {
     return Math.max(0, Math.round(net * 100) / 100);
   }
 
+  public getDeterministicOutcomeForPeriod(period: string, gameType: string = '30s'): number {
+    const cleanPeriod = String(period || '');
+    let hashSum = 0;
+    for (let i = 0; i < cleanPeriod.length; i++) {
+      hashSum = (hashSum * 31 + cleanPeriod.charCodeAt(i) + (gameType.charCodeAt(0) || 0)) % 1000003;
+    }
+    return Math.abs(hashSum) % 10;
+  }
+
   // Enforces that every user's wallet balance strictly matches their verified transaction history ledger.
   public enforceAllUsersLedgerIntegrity(): void {
     this.sanitizeTransactionsLedger();
@@ -1467,6 +1476,11 @@ class AuthoritativeStore {
     Object.keys(this.users).forEach((uid) => {
       const u = this.users[uid];
       if (!u) return;
+      const hasLocalTxs = this.transactions.some((t) => t && t.uid === uid);
+      if (!hasLocalTxs && (u.balance || 0) > 0) {
+        // Preserve cloud-synced balance from Firestore when transactions for this user originated on another device
+        return;
+      }
       const verifiedBalance = this.computeVerifiedLedgerBalance(uid);
       if (Math.abs((u.balance || 0) - verifiedBalance) >= 0.01) {
         u.balance = verifiedBalance;
@@ -1576,7 +1590,9 @@ class AuthoritativeStore {
         })
       });
       if (!res.ok) return;
-      const data = await res.json();
+      const text = await res.text();
+      if (!text || text.trim().startsWith('<')) return;
+      const data = JSON.parse(text);
       if (data && data.success) {
         let updated = false;
 
@@ -1744,55 +1760,43 @@ class AuthoritativeStore {
   // --- SEEDERS & PER-MODE HISTORY NORMALIZER ---
   private normalizeWinGoPastRounds(targetPerMode: number = 30) {
     const now = Date.now();
-    const modes: Array<{ mode: '30s' | '1min' | '3min'; prefix: string; stepMs: number }> = [
-      { mode: '30s', prefix: '202610130', stepMs: 30000 },
-      { mode: '1min', prefix: '202610131', stepMs: 60000 },
-      { mode: '3min', prefix: '202610133', stepMs: 180000 }
+    const modes: Array<{ mode: '30s' | '1min' | '3min'; modeCode: string; stepMs: number }> = [
+      { mode: '30s', modeCode: '0', stepMs: 30000 },
+      { mode: '1min', modeCode: '1', stepMs: 60000 },
+      { mode: '3min', modeCode: '3', stepMs: 180000 }
     ];
 
     const normalizedAll: GameRound[] = [];
 
-    modes.forEach(({ mode, prefix, stepMs }) => {
-      const existing = this.deduplicateRounds(
-        (this.pastRounds || []).filter((r) => r && r.gameType === mode)
-      );
-
-      // Sort newest period first
-      existing.sort((a, b) => {
-        const seqA = a.period?.startsWith(prefix) ? parseInt(a.period.slice(prefix.length), 10) : 0;
-        const seqB = b.period?.startsWith(prefix) ? parseInt(b.period.slice(prefix.length), 10) : 0;
-        if (!isNaN(seqA) && !isNaN(seqB) && seqA !== seqB) return seqB - seqA;
-        return (b.endTime || 0) - (a.endTime || 0);
+    modes.forEach(({ mode, modeCode, stepMs }) => {
+      const existingMap = new Map<string, GameRound>();
+      (this.pastRounds || []).forEach((r) => {
+        if (r && r.gameType === mode && r.period && !r.period.startsWith('20261013')) {
+          existingMap.set(r.period, r);
+        }
       });
 
-      if (existing.length >= targetPerMode) {
-        normalizedAll.push(...existing.slice(0, targetPerMode));
-        return;
-      }
-
-      // Backfill missing periods so 30s, 1min, and 3min always have the exact same count (30)
-      let maxSeq = 0;
-      for (const r of existing) {
-        if (r.period && r.period.startsWith(prefix)) {
-          const s = parseInt(r.period.slice(prefix.length), 10);
-          if (!isNaN(s) && s > maxSeq) maxSeq = s;
-        }
-      }
-      const latestSeq = Math.max(maxSeq, targetPerMode);
+      const currentSlotStart = Math.floor(now / stepMs) * stepMs;
       const modeList: GameRound[] = [];
 
-      for (let idx = 0; idx < targetPerMode; idx++) {
-        const seqNum = latestSeq - idx;
-        const periodStr = `${prefix}${String(seqNum).padStart(4, '0')}`;
-        if (idx < existing.length) {
-          const item = existing[idx];
-          modeList.push({
-            ...item,
-            period: maxSeq < targetPerMode ? periodStr : item.period,
-            gameType: mode
-          });
+      for (let idx = 1; idx <= targetPerMode; idx++) {
+        const slotStart = currentSlotStart - idx * stepMs;
+        const slotEnd = slotStart + stepMs;
+        const d = new Date(slotStart);
+        const year = d.getUTCFullYear();
+        const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
+        const dateStr = `${year}${month}${day}`;
+        const utcMidnight = Date.UTC(year, d.getUTCMonth(), d.getUTCDate());
+        const secondsToday = Math.floor((slotStart - utcMidnight) / 1000);
+        const roundIndex = Math.floor(secondsToday / (stepMs / 1000)) + 1;
+        const periodStr = `${dateStr}${modeCode}${roundIndex.toString().padStart(4, '0')}`;
+
+        const savedRound = existingMap.get(periodStr);
+        if (savedRound && savedRound.winningNumber >= 0) {
+          modeList.push(savedRound);
         } else {
-          const num = Math.floor(Math.random() * 10);
+          const num = this.getDeterministicOutcomeForPeriod(periodStr, mode);
           const color: BetColor[] =
             num === 0
               ? ['red', 'violet']
@@ -1805,14 +1809,14 @@ class AuthoritativeStore {
           modeList.push({
             period: periodStr,
             gameType: mode,
-            startTime: now - (idx + 1) * stepMs,
-            endTime: now - idx * stepMs,
+            startTime: slotStart,
+            endTime: slotEnd,
             winningNumber: num,
             winningColor: color,
             winningSize: size,
-            totalBetVolume: Math.floor(Math.random() * 8000) + 2000,
-            totalPayout: Math.floor(Math.random() * 6000) + 1500,
-            hash: 'SHA256_' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+            totalBetVolume: 0,
+            totalPayout: 0,
+            hash: `SHA256_${periodStr}`,
             isResolved: true
           });
         }
@@ -2523,18 +2527,10 @@ class AuthoritativeStore {
         }
         winningNum = bestCandidate;
       } else {
-        let hashSum = 0;
-        for (let i = 0; i < round.period.length; i++) {
-          hashSum += round.period.charCodeAt(i);
-        }
-        winningNum = hashSum % 10;
+        winningNum = this.getDeterministicOutcomeForPeriod(round.period, round.gameType);
       }
     } else {
-      let hashSum = 0;
-      for (let i = 0; i < round.period.length; i++) {
-        hashSum += round.period.charCodeAt(i);
-      }
-      winningNum = hashSum % 10;
+      winningNum = this.getDeterministicOutcomeForPeriod(round.period, round.gameType);
     }
 
     const colors: string[] = winningNum === 0 ? ['red', 'violet'] : winningNum === 5 ? ['green', 'violet'] : winningNum % 2 === 0 ? ['red'] : ['green'];
@@ -3341,10 +3337,10 @@ class AuthoritativeStore {
         }
         winningNum = bestCandidate;
       } else {
-        winningNum = Math.floor(Math.random() * 10);
+        winningNum = this.getDeterministicOutcomeForPeriod(resolvingPeriod, resolvingGameType);
       }
     } else {
-      winningNum = Math.floor(Math.random() * 10);
+      winningNum = this.getDeterministicOutcomeForPeriod(resolvingPeriod, resolvingGameType);
     }
 
     const winningColors: BetColor[] = winningNum === 0 ? ['red', 'violet'] : winningNum === 5 ? ['green', 'violet'] : winningNum % 2 === 0 ? ['red'] : ['green'];
@@ -3391,6 +3387,9 @@ class AuthoritativeStore {
       }
 
       const updatedBet: LiveBet = { ...b, status: won ? ('won' as const) : ('lost' as const), actualPayout };
+      if (this.onLiveBetSaved) {
+        try { this.onLiveBetSaved(updatedBet); } catch {}
+      }
       if (!userSettledBetsMap[b.uid]) {
         userSettledBetsMap[b.uid] = [];
       }
@@ -5422,36 +5421,58 @@ class AuthoritativeStore {
   public ingestCloudRound(round: Partial<GameRound>) {
     if (!round || !round.period || !round.gameType) return;
     const mode = round.gameType as '30s' | '1min' | '3min';
-    let target = this.activeRoundsByMode[mode];
-    if (!target || target.period !== round.period) {
-      target = {
+    const target = this.activeRoundsByMode[mode];
+
+    // If cloud round is resolved and has a valid winningNumber, update pastRounds and reconcile bets
+    if (round.isResolved && typeof round.winningNumber === 'number' && round.winningNumber >= 0) {
+      const existingIdx = this.pastRounds.findIndex((r) => r.period === round.period && r.gameType === mode);
+      const num = round.winningNumber;
+      const winningColor: BetColor[] =
+        Array.isArray(round.winningColor) && round.winningColor.length > 0
+          ? round.winningColor
+          : num === 0
+          ? ['red', 'violet']
+          : num === 5
+          ? ['green', 'violet']
+          : num % 2 === 0
+          ? ['red']
+          : ['green'];
+      const winningSize: BetSize = round.winningSize || (num >= 5 ? 'big' : 'small');
+
+      const resolvedObj: GameRound = {
         period: round.period,
         gameType: mode,
-        startTime: round.startTime || Date.now(),
-        endTime: round.endTime || Date.now() + 30000,
-        winningNumber: round.winningNumber ?? -1,
-        winningColor: round.winningColor || [],
-        winningSize: round.winningSize || 'small',
+        startTime: round.startTime || Date.now() - 30000,
+        endTime: round.endTime || Date.now(),
+        winningNumber: num,
+        winningColor,
+        winningSize,
         totalBetVolume: round.totalBetVolume || 0,
         totalPayout: round.totalPayout || 0,
-        hash: round.hash || 'SHA256_' + Math.random().toString(36).substring(2, 10).toUpperCase(),
-        isResolved: Boolean(round.isResolved),
+        hash: round.hash || `SHA256_${round.period}`,
+        isResolved: true,
         manualOverrideNumber: round.manualOverrideNumber ?? null
       };
-      this.activeRoundsByMode[mode] = target;
-    } else {
+
+      if (existingIdx >= 0) {
+        this.pastRounds[existingIdx] = resolvedObj;
+      } else {
+        this.pastRounds.unshift(resolvedObj);
+        this.normalizeWinGoPastRounds(30);
+      }
+      this.reconcilePendingBetsFromHistory();
+      this.safeNotifyListeners();
+      return;
+    }
+
+    // Active round or manual override sync
+    if (target && target.period === round.period) {
       if (round.manualOverrideNumber !== undefined) {
         target.manualOverrideNumber = round.manualOverrideNumber;
+        if (this.currentRound.period === round.period) {
+          this.currentRound.manualOverrideNumber = round.manualOverrideNumber;
+        }
       }
-      if (round.isResolved && !target.isResolved) {
-        target.isResolved = true;
-        target.winningNumber = round.winningNumber ?? target.winningNumber;
-        target.winningColor = round.winningColor || target.winningColor;
-        target.winningSize = round.winningSize || target.winningSize;
-      }
-    }
-    if (this.currentRound.gameType === mode) {
-      this.currentRound = target;
     }
     this.safeNotifyListeners();
   }

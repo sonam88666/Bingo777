@@ -42,6 +42,18 @@ export class FinancialApiClient {
     return headers;
   }
 
+  private async safeJson<T = unknown>(res: Response): Promise<ApiResponse<T>> {
+    try {
+      const text = await res.text();
+      if (!text || text.trim().startsWith('<')) {
+        return { success: false, code: 'CLOUD_FIRESTORE_DIRECT', error: 'Using direct Cloud Firestore sync' };
+      }
+      return JSON.parse(text) as ApiResponse<T>;
+    } catch {
+      return { success: false, code: 'CLOUD_FIRESTORE_DIRECT', error: 'Using direct Cloud Firestore sync' };
+    }
+  }
+
   // 0. Permanent User Registration, Login & Sync (Backend Disk Persistence)
   public async registerUser(payload: {
     user?: unknown;
@@ -59,7 +71,7 @@ export class FinancialApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network error registering user' };
     }
@@ -72,7 +84,7 @@ export class FinancialApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, password, device })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network error logging in user' };
     }
@@ -85,7 +97,7 @@ export class FinancialApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ users, transactions })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network error syncing users' };
     }
@@ -102,7 +114,7 @@ export class FinancialApiClient {
           'x-master-admin-key': token
         }
       });
-      const data = await res.json();
+      const data = await this.safeJson<{ actor: string; permissions: string[] }>(res);
       if (res.ok && data.success) {
         sessionStorage.setItem('bingo777_master_admin_token', token);
       }
@@ -126,7 +138,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ depositId, adminId, masterAdminToken: masterToken, depositRecord, customInrAmount })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure approving deposit' };
     }
@@ -146,7 +158,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ depositId, adminId, reason, masterAdminToken: masterToken, depositRecord })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure rejecting deposit' };
     }
@@ -165,7 +177,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ withdrawalId, adminId, masterAdminToken: masterToken, withdrawalRecord })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure approving withdrawal' };
     }
@@ -185,7 +197,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ withdrawalId, adminId, reason, masterAdminToken: masterToken, withdrawalRecord })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure rejecting withdrawal' };
     }
@@ -207,7 +219,7 @@ export class FinancialApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uid, amount, paymentMethod, referenceId, username, phone, usdtAmount })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure requesting deposit' };
     }
@@ -229,7 +241,7 @@ export class FinancialApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uid, amount, payoutMethod, accountDetails, username, phone, usdtAmount })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure requesting withdrawal' };
     }
@@ -248,7 +260,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ uid, forceReconcile, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure during reconciliation' };
     }
@@ -267,7 +279,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ uid, adminId, reason, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure deleting user' };
     }
@@ -287,7 +299,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ uid, delta, reason, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure adjusting balance' };
     }
@@ -301,7 +313,7 @@ export class FinancialApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ referralId, callerUid })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure claiming referral bonus' };
     }
@@ -312,7 +324,7 @@ export class FinancialApiClient {
     try {
       const url = referrerUid ? `${this.baseUrl}/api/referrals?referrerUid=${encodeURIComponent(referrerUid)}` : `${this.baseUrl}/api/referrals`;
       const res = await fetch(url);
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure loading referrals' };
     }
@@ -326,7 +338,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ settings, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure updating settings' };
     }
@@ -356,7 +368,7 @@ export class FinancialApiClient {
           masterAdminToken: masterToken
         })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch {
       // Fallback to updating settings
       return this.updateSettings(
@@ -381,7 +393,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ referralId, action, reason, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure during referral review' };
     }
@@ -401,7 +413,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ uid, status, reason, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure updating user status' };
     }
@@ -422,7 +434,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ featureId, enabled, visibleInUserApp, reason, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure toggling feature' };
     }
@@ -439,7 +451,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ enabled, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure toggling all games' };
     }
@@ -461,7 +473,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ code, amount, maxUses, expiryDays, minVipLevel, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure creating gift code' };
     }
@@ -479,7 +491,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ code, ...updates, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure updating gift code' };
     }
@@ -497,7 +509,7 @@ export class FinancialApiClient {
         headers: this.getAuthHeaders(masterToken),
         body: JSON.stringify({ code, reason, adminId, masterAdminToken: masterToken })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure deleting gift code' };
     }
@@ -510,7 +522,7 @@ export class FinancialApiClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ uid, code })
       });
-      return await res.json();
+      return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure claiming gift code' };
     }

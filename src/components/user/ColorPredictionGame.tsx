@@ -85,7 +85,6 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
       // Auto resolve when time expires and unlock next round
       if (diff === 0) {
         store.resolveRound(undefined, selectedGameType);
-        showToast(`Win Go ${selectedGameType} round ended! Results updated.`, 'info');
       }
     };
 
