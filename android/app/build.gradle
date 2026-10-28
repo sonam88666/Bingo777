@@ -1,16 +1,19 @@
 apply plugin: 'com.android.application'
 
+def runNumber = System.getenv('GITHUB_RUN_NUMBER') ? System.getenv('GITHUB_RUN_NUMBER').toInteger() : 0
 def resolvedVersionCode = (project.hasProperty('versionCode')
     ? project.property('versionCode').toInteger()
-    : (System.getenv('VERSION_CODE') ? System.getenv('VERSION_CODE').toInteger() : 100))
+    : (System.getenv('VERSION_CODE')
+        ? System.getenv('VERSION_CODE').toInteger()
+        : (runNumber > 0 ? (200 + runNumber) : 2)))
 
 def resolvedVersionName = (project.hasProperty('versionName')
     ? project.property('versionName').toString()
-    : (System.getenv('VERSION_NAME') ?: "1.0.${resolvedVersionCode}"))
+    : (System.getenv('VERSION_NAME') ?: "2.0.${resolvedVersionCode}"))
 
 def keystorePath = project.hasProperty('KEYSTORE_FILE')
     ? project.property('KEYSTORE_FILE').toString()
-    : (System.getenv('KEYSTORE_FILE') ?: 'app-release-key.jks')
+    : (System.getenv('KEYSTORE_FILE') ?: 'release-key.jks')
 
 def keystoreFile = file(keystorePath)
 def ksPassword = project.hasProperty('KEYSTORE_PASSWORD')
@@ -26,6 +29,7 @@ def kPassword = project.hasProperty('KEY_PASSWORD')
 android {
     namespace = "com.bingo777.pro.game"
     compileSdk = rootProject.ext.compileSdkVersion
+
     defaultConfig {
         applicationId "com.bingo777.pro.game"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -33,14 +37,12 @@ android {
         versionCode resolvedVersionCode
         versionName resolvedVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        ndk {
-            abiFilters 'armeabi-v7a', 'arm64-v8a'
-        }
         aaptOptions {
-             // Exclude chat video attachments, large unused media, and source maps from packaged APK
-            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:!*.mp4:!*.map:aistudio'
+            // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~:!aistudio'
         }
     }
+
     signingConfigs {
         release {
             if (keystoreFile.exists()) {
@@ -50,15 +52,20 @@ android {
                 keyPassword kPassword
                 enableV1Signing true
                 enableV2Signing true
+                enableV3Signing true
+                enableV4Signing true
             }
         }
     }
+
     buildTypes {
         release {
-            minifyEnabled true
-            shrinkResources true
+            minifyEnabled false
+            shrinkResources false
             if (keystoreFile.exists()) {
                 signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
             }
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
@@ -70,6 +77,7 @@ android {
             }
         }
     }
+
     packagingOptions {
         resources {
             excludes += [
@@ -89,7 +97,7 @@ android {
 }
 
 repositories {
-    flatDir{
+    flatDir {
         dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
     }
 }

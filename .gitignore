@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Production build output (generated in CI via bun run build)
+dist/
+
+# Local AI Studio media attachments & internal artifacts
+public/assets/aistudio/
+.aistudio/
+
+# Local state & environment files
+.news_poll_system_state.json
+.bingo777_persistent_db.json
+.env
+.env.*
+!.env.example
+
+# Logs & OS files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store

@@ -1,8 +1,0 @@
-[{
-      "relation": ["delegate_permission/common.handle_all_urls"],
-      "target": {
-        "namespace": "android_app",
-        "package_name": "app.bingo777.twa",
-        "sha256_cert_fingerprints": ["B2:3C:2A:AB:70:3E:47:DF:81:17:ED:80:FA:FA:9E:32:55:D6:A1:72:60:B4:97:29:CF:04:FB:62:48:34:31:AF"]
-      }
-    }]

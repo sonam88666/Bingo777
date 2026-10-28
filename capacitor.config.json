@@ -2,5 +2,12 @@
   "appId": "com.bingo777.pro.game",
   "appName": "Bingo777 Pro",
   "webDir": "dist",
-  "bundledWebRuntime": false
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
 }
