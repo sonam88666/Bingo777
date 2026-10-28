@@ -34,7 +34,16 @@ import { UserRecord } from '../../types';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
 import { soundFx } from '../../services/soundFx';
-import { rtdb, rtdbRef, rtdbSet, rtdbGet, rtdbOnValue } from '../../firebase';
+import {
+  rtdb,
+  rtdbRef,
+  rtdbSet,
+  rtdbGet,
+  rtdbOnValue,
+  rtdbUpdate,
+  rtdbRemove,
+  rtdbRunTransaction
+} from '../../firebase';
 import { useAdminSettings } from '../../context/AdminSettingsContext';
 
 export type LudoColor = 'red' | 'green' | 'yellow' | 'blue';
@@ -130,6 +139,8 @@ interface LudoPlayerState {
 
 interface LudoRoomState {
   roomId: string;
+  hostUid?: string;
+  stake?: number;
   entryFee: number;
   maxPlayers?: 2 | 3 | 4;
   seatOrder?: LudoPlayerKey[];
@@ -137,6 +148,12 @@ interface LudoRoomState {
   houseMargin: number;
   isPrivate: boolean;
   status: 'waiting' | 'playing' | 'finished' | 'cancelled';
+  players?: { p1: string; p2?: string };
+  currentTurn?: string;
+  boardState?: {
+    p1: [number, number, number, number];
+    p2: [number, number, number, number];
+  };
   player1: LudoPlayerState;
   player2: LudoPlayerState | null;
   player3?: LudoPlayerState | null;
@@ -1328,19 +1345,157 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     [speakerEnabled, speakVoiceOutLoud]
   );
 
+  const normalizePawnsTuple = (rawPawns: unknown, fallback: [number, number, number, number] = [0, 0, 0, 0]): [number, number, number, number] => {
+    if (Array.isArray(rawPawns) && rawPawns.length >= 4) {
+      return [
+        Math.max(0, Math.min(57, Number(rawPawns[0]) || 0)),
+        Math.max(0, Math.min(57, Number(rawPawns[1]) || 0)),
+        Math.max(0, Math.min(57, Number(rawPawns[2]) || 0)),
+        Math.max(0, Math.min(57, Number(rawPawns[3]) || 0))
+      ];
+    }
+    if (rawPawns && typeof rawPawns === 'object') {
+      const obj = rawPawns as Record<string, unknown>;
+      return [
+        Math.max(0, Math.min(57, Number(obj['0']) || 0)),
+        Math.max(0, Math.min(57, Number(obj['1']) || 0)),
+        Math.max(0, Math.min(57, Number(obj['2']) || 0)),
+        Math.max(0, Math.min(57, Number(obj['3']) || 0))
+      ];
+    }
+    return [...fallback] as [number, number, number, number];
+  };
+
+  // Board Render Safety Helper: guarantees all player states, token arrays, movablePawns, and chatMessages exist before mounting board
+  const normalizeLudoRoomState = useCallback((raw: any): LudoRoomState => {
+    const now = Date.now();
+    const maxP: 2 | 3 | 4 = raw?.maxPlayers === 3 ? 3 : raw?.maxPlayers === 4 ? 4 : 2;
+    const fee = Number(raw?.stake ?? raw?.entryFee) || 50;
+    const totalPool = fee * maxP;
+    const houseCut = Math.round(totalPool * 0.1 * 100) / 100;
+    const defaultPrize = Math.round((totalPool - houseCut) * 100) / 100;
+
+    const p1Raw = raw?.player1 || {};
+    const p1Pawns = normalizePawnsTuple(p1Raw.pawns ?? raw?.boardState?.p1, [0, 0, 0, 0]);
+    const safePlayer1: LudoPlayerState = {
+      uid: p1Raw.uid || raw?.hostUid || raw?.players?.p1 || 'player_1',
+      username: p1Raw.username || 'Player 1',
+      location: p1Raw.location || 'India',
+      flag: p1Raw.flag || '🇮🇳',
+      color: 'red',
+      pawns: p1Pawns,
+      score: typeof p1Raw.score === 'number' ? p1Raw.score : 0,
+      captures: typeof p1Raw.captures === 'number' ? p1Raw.captures : 0,
+      homeCount: p1Pawns.filter((s) => s === 57).length,
+      movesLeft: typeof p1Raw.movesLeft === 'number' ? p1Raw.movesLeft : 30,
+      lastDice: typeof p1Raw.lastDice === 'number' ? p1Raw.lastDice : null,
+      consecutiveSixes: typeof p1Raw.consecutiveSixes === 'number' ? p1Raw.consecutiveSixes : 0,
+      isBot: Boolean(p1Raw.isBot),
+      lastActiveAt: p1Raw.lastActiveAt || now
+    };
+
+    const p2Color: LudoColor = maxP === 2 ? 'yellow' : 'green';
+    let safePlayer2: LudoPlayerState | null = null;
+    if (raw?.player2 || raw?.status === 'playing' || raw?.players?.p2) {
+      const p2Raw = raw?.player2 || {};
+      const p2Pawns = normalizePawnsTuple(p2Raw.pawns ?? raw?.boardState?.p2, [0, 0, 0, 0]);
+      safePlayer2 = {
+        uid: p2Raw.uid || raw?.players?.p2 || 'player_2',
+        username: p2Raw.username || 'Challenger_2',
+        location: p2Raw.location || 'India',
+        flag: p2Raw.flag || '🇮🇳',
+        color: p2Raw.color || p2Color,
+        pawns: p2Pawns,
+        score: typeof p2Raw.score === 'number' ? p2Raw.score : 0,
+        captures: typeof p2Raw.captures === 'number' ? p2Raw.captures : 0,
+        homeCount: p2Pawns.filter((s) => s === 57).length,
+        movesLeft: typeof p2Raw.movesLeft === 'number' ? p2Raw.movesLeft : 30,
+        lastDice: typeof p2Raw.lastDice === 'number' ? p2Raw.lastDice : null,
+        consecutiveSixes: typeof p2Raw.consecutiveSixes === 'number' ? p2Raw.consecutiveSixes : 0,
+        isBot: Boolean(p2Raw.isBot),
+        lastActiveAt: p2Raw.lastActiveAt || now
+      };
+    }
+
+    const rawMovables = raw?.movablePawns;
+    const safeMovables: number[] = Array.isArray(rawMovables)
+      ? rawMovables.map((n: unknown) => Number(n)).filter((n: number) => Number.isFinite(n))
+      : rawMovables && typeof rawMovables === 'object'
+      ? Object.values(rawMovables).map((n: unknown) => Number(n)).filter((n: number) => Number.isFinite(n))
+      : [];
+
+    const rawChat = raw?.chatMessages;
+    const safeChat: LudoChatMessage[] = Array.isArray(rawChat)
+      ? rawChat.filter(Boolean)
+      : rawChat && typeof rawChat === 'object'
+      ? (Object.values(rawChat).filter(Boolean) as LudoChatMessage[])
+      : [];
+
+    const defaultSeatOrder: LudoPlayerKey[] =
+      maxP === 2
+        ? ['player1', 'player2']
+        : maxP === 3
+        ? ['player1', 'player2', 'player3']
+        : ['player1', 'player2', 'player3', 'player4'];
+
+    const safeTurn: LudoPlayerKey =
+      raw?.turn === 'player2' || raw?.turn === 'player3' || raw?.turn === 'player4'
+        ? raw.turn
+        : raw?.currentTurn && safePlayer2 && raw.currentTurn === safePlayer2.uid
+        ? 'player2'
+        : 'player1';
+
+    return {
+      ...raw,
+      roomId: String(raw?.roomId || 'LUDO1000'),
+      hostUid: raw?.hostUid || safePlayer1.uid,
+      stake: fee,
+      entryFee: fee,
+      maxPlayers: maxP,
+      seatOrder: Array.isArray(raw?.seatOrder) && raw.seatOrder.length >= 2 ? raw.seatOrder : defaultSeatOrder,
+      prizePool: Number(raw?.prizePool) || defaultPrize,
+      houseMargin: Number(raw?.houseMargin) || houseCut,
+      isPrivate: Boolean(raw?.isPrivate),
+      status: raw?.status || 'waiting',
+      players: {
+        p1: safePlayer1.uid,
+        ...(safePlayer2 ? { p2: safePlayer2.uid } : {})
+      },
+      currentTurn: safeTurn === 'player2' && safePlayer2 ? safePlayer2.uid : safePlayer1.uid,
+      boardState: {
+        p1: safePlayer1.pawns,
+        p2: safePlayer2 ? safePlayer2.pawns : [0, 0, 0, 0]
+      },
+      player1: safePlayer1,
+      player2: safePlayer2,
+      player3: raw?.player3 ? { ...raw.player3, pawns: normalizePawnsTuple(raw.player3.pawns, [0, 0, 0, 0]) } : null,
+      player4: raw?.player4 ? { ...raw.player4, pawns: normalizePawnsTuple(raw.player4.pawns, [0, 0, 0, 0]) } : null,
+      turn: safeTurn,
+      diceValue: typeof raw?.diceValue === 'number' ? raw.diceValue : null,
+      hasRolled: Boolean(raw?.hasRolled),
+      movablePawns: safeMovables,
+      lastAction: raw?.lastAction || 'Match in progress',
+      winner: raw?.winner || null,
+      chatMessages: safeChat,
+      createdAt: raw?.createdAt || now,
+      updatedAt: raw?.updatedAt || now
+    };
+  }, []);
+
   const extractPawnsByColorFromRoom = useCallback(
     (targetRoom: LudoRoomState): Record<LudoColor, [number, number, number, number]> => {
       const result: Record<LudoColor, [number, number, number, number]> = {
-        red: [1, 1, 0, 0],
-        green: [1, 1, 0, 0],
-        yellow: [1, 1, 0, 0],
-        blue: [1, 1, 0, 0]
+        red: [0, 0, 0, 0],
+        green: [0, 0, 0, 0],
+        yellow: [0, 0, 0, 0],
+        blue: [0, 0, 0, 0]
       };
+      if (!targetRoom) return result;
       const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
       keys.forEach((k) => {
         const p = targetRoom[k];
-        if (p) {
-          result[p.color] = [...p.pawns] as [number, number, number, number];
+        if (p && p.color) {
+          result[p.color] = normalizePawnsTuple(p.pawns, [0, 0, 0, 0]);
         }
       });
       return result;
@@ -1351,6 +1506,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
   // Helper to sync visual pawns immediately when joining or resuming a room
   const syncVisualPawnsFromRoom = useCallback(
     (targetRoom: LudoRoomState) => {
+      const safeRoom = normalizeLudoRoomState(targetRoom);
       walkGenRef.current += 1;
       if (stepTimerRef.current) {
         clearTimeout(stepTimerRef.current);
@@ -1366,7 +1522,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       setIsTokenWalking(false);
       setHoppingToken(null);
 
-      const nextVisual = extractPawnsByColorFromRoom(targetRoom);
+      const nextVisual = extractPawnsByColorFromRoom(safeRoom);
       visualPawnsRef.current = {
         red: [...nextVisual.red] as [number, number, number, number],
         green: [...nextVisual.green] as [number, number, number, number],
@@ -1382,7 +1538,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       setVisualPawns(nextVisual);
       setPawnTopLeftCoords(buildPawnCoordsMap(nextVisual));
     },
-    [extractPawnsByColorFromRoom]
+    [extractPawnsByColorFromRoom, normalizeLudoRoomState]
   );
 
   // ==================== LIVE WEBRTC VOICE CHAT & HYBRID AUDIO RELAY ENGINE ====================
@@ -2408,7 +2564,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         ) {
           return;
         }
-        const updatedRoom: LudoRoomState = data.room;
+        const updatedRoom: LudoRoomState = normalizeLudoRoomState(data.room);
 
         const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
         const myRoleNow: LudoPlayerKey =
@@ -2513,7 +2669,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         }
 
         // Process incoming chat messages & challenger spoken voice replies
-        updatedRoom.chatMessages.forEach((msg) => {
+        (updatedRoom.chatMessages || []).forEach((msg) => {
           if (!seenChatIdsRef.current.has(msg.id)) {
             seenChatIdsRef.current.add(msg.id);
             if (msg.messageType !== 'system') {
@@ -2632,7 +2788,203 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     checkAndSettleFinishedRoom
   ]);
 
-  // 1vs1 Real User Matchmaking Countdown & Automatic Fallback to Challenger
+  // Central Real-Time 2-Device Matchmaking Queue Listener (/ludo_matchmaking/{stake} & /ludo_user_match/{uid})
+  useEffect(() => {
+    if (!room || room.status !== 'waiting' || room.isPrivate || !user?.uid) return;
+    const stakeKey = String(room.entryFee || selectedEntry || 50);
+    let unsubQueue: (() => void) | null = null;
+    let unsubUserMatch: (() => void) | null = null;
+    let isMatched = false;
+
+    const transitionToMatchedRoom = async (targetRoomId: string) => {
+      if (isMatched) return;
+      isMatched = true;
+      try {
+        const snap = await rtdbGet(rtdbRef(rtdb, `ludo_rooms/${targetRoomId}`));
+        if (snap.exists()) {
+          const matchedRoom = normalizeLudoRoomState(snap.val());
+          const opp =
+            matchedRoom.player1.uid === user.uid ? matchedRoom.player2 : matchedRoom.player1;
+          if (opp) {
+            setMatchedRealOpponent({
+              name: opp.username,
+              loc: opp.location || 'India',
+              flag: opp.flag || '🇮🇳'
+            });
+            setShowRealMatchCelebration(true);
+            playTone(880, 240, 'sine');
+            setTimeout(() => setShowRealMatchCelebration(false), 2600);
+          }
+          syncVisualPawnsFromRoom(matchedRoom);
+          setRoom(matchedRoom);
+        }
+      } catch {}
+    };
+
+    try {
+      // 1. Listen for direct match notification on /ludo_user_match/{uid}
+      unsubUserMatch = rtdbOnValue(
+        rtdbRef(rtdb, `ludo_user_match/${user.uid}`),
+        (snap) => {
+          if (!snap.exists()) return;
+          const matchData = snap.val();
+          if (matchData?.roomId && Date.now() - (matchData.matchedAt || 0) < 30000) {
+            rtdbRemove(rtdbRef(rtdb, `ludo_user_match/${user.uid}`)).catch(() => {});
+            void transitionToMatchedRoom(String(matchData.roomId));
+          }
+        },
+        () => {}
+      );
+
+      // 2. Listen to /ludo_matchmaking/{stake} for 2 active players at the same stake
+      unsubQueue = rtdbOnValue(
+        rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}`),
+        (snap) => {
+          if (!snap.exists() || isMatched) return;
+          const entriesMap = snap.val() as Record<
+            string,
+            {
+              uid: string;
+              username: string;
+              location: string;
+              flag?: string;
+              stake: number;
+              roomId?: string;
+              joinedAt: number;
+            }
+          >;
+          const now = Date.now();
+          const activePlayers = Object.values(entriesMap || {})
+            .filter((e) => e && e.uid && now - (e.joinedAt || 0) < 60000)
+            .sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0) || a.uid.localeCompare(b.uid));
+
+          if (activePlayers.length >= 2) {
+            const p1Entry = activePlayers[0];
+            const p2Entry = activePlayers[1];
+            if (p1Entry.uid !== user.uid && p2Entry.uid !== user.uid) return;
+
+            const sharedRoomId =
+              p1Entry.roomId || `LUDO${Math.floor(1000 + Math.random() * 9000)}`;
+
+            // Deterministic leader (p1Entry) creates the room and removes both from queue
+            if (p1Entry.uid === user.uid) {
+              isMatched = true;
+              const fee = Number(stakeKey) || 50;
+              const totalPool = fee * 2;
+              const houseCut = Math.round(totalPool * 0.1 * 100) / 100;
+              const prizePool = Math.round((totalPool - houseCut) * 100) / 100;
+
+              const newMatchedRoom = normalizeLudoRoomState({
+                roomId: sharedRoomId,
+                hostUid: p1Entry.uid,
+                stake: fee,
+                entryFee: fee,
+                maxPlayers: 2,
+                seatOrder: ['player1', 'player2'],
+                prizePool,
+                houseMargin: houseCut,
+                isPrivate: false,
+                status: 'playing',
+                players: { p1: p1Entry.uid, p2: p2Entry.uid },
+                currentTurn: p1Entry.uid,
+                turn: 'player1',
+                boardState: {
+                  p1: [0, 0, 0, 0],
+                  p2: [0, 0, 0, 0]
+                },
+                player1: {
+                  uid: p1Entry.uid,
+                  username: p1Entry.username || 'Player 1',
+                  location: p1Entry.location || 'India',
+                  flag: p1Entry.flag || '🇮🇳',
+                  color: 'red',
+                  pawns: [0, 0, 0, 0],
+                  score: 0,
+                  captures: 0,
+                  homeCount: 0,
+                  movesLeft: 30,
+                  lastDice: null,
+                  consecutiveSixes: 0,
+                  isBot: false,
+                  lastActiveAt: now
+                },
+                player2: {
+                  uid: p2Entry.uid,
+                  username: p2Entry.username || 'Player 2',
+                  location: p2Entry.location || 'India',
+                  flag: p2Entry.flag || '🇮🇳',
+                  color: 'yellow',
+                  pawns: [0, 0, 0, 0],
+                  score: 0,
+                  captures: 0,
+                  homeCount: 0,
+                  movesLeft: 30,
+                  lastDice: null,
+                  consecutiveSixes: 0,
+                  isBot: false,
+                  lastActiveAt: now
+                },
+                diceValue: null,
+                hasRolled: false,
+                movablePawns: [],
+                lastAction: `Match started! ${p1Entry.username}'s turn to roll the 3D dice.`,
+                winner: null,
+                chatMessages: [],
+                createdAt: now,
+                updatedAt: now
+              });
+
+              rtdbSet(rtdbRef(rtdb, `ludo_rooms/${sharedRoomId}`), newMatchedRoom)
+                .then(() => {
+                  rtdbRemove(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}/${p1Entry.uid}`)).catch(() => {});
+                  rtdbRemove(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}/${p2Entry.uid}`)).catch(() => {});
+                  rtdbSet(rtdbRef(rtdb, `ludo_user_match/${p1Entry.uid}`), {
+                    roomId: sharedRoomId,
+                    matchedAt: now
+                  }).catch(() => {});
+                  rtdbSet(rtdbRef(rtdb, `ludo_user_match/${p2Entry.uid}`), {
+                    roomId: sharedRoomId,
+                    matchedAt: now
+                  }).catch(() => {});
+                  setMatchedRealOpponent({
+                    name: p2Entry.username,
+                    loc: p2Entry.location || 'India',
+                    flag: p2Entry.flag || '🇮🇳'
+                  });
+                  setShowRealMatchCelebration(true);
+                  playTone(880, 240, 'sine');
+                  setTimeout(() => setShowRealMatchCelebration(false), 2600);
+                  syncVisualPawnsFromRoom(newMatchedRoom);
+                  setRoom(newMatchedRoom);
+                })
+                .catch(() => {});
+            }
+          }
+        },
+        () => {}
+      );
+    } catch {}
+
+    return () => {
+      if (unsubQueue) unsubQueue();
+      if (unsubUserMatch) unsubUserMatch();
+      if (user?.uid) {
+        rtdbRemove(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}/${user.uid}`)).catch(() => {});
+      }
+    };
+  }, [
+    room?.roomId,
+    room?.status,
+    room?.isPrivate,
+    room?.entryFee,
+    selectedEntry,
+    user?.uid,
+    normalizeLudoRoomState,
+    syncVisualPawnsFromRoom,
+    playTone
+  ]);
+
+  // 1vs1 Real User Matchmaking Countdown & Safe Fallback to Challenger without crashing board
   useEffect(() => {
     if (!room || room.status !== 'waiting' || room.isPrivate) {
       setMatchmakingCountdown(10);
@@ -2640,24 +2992,29 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     }
 
     setMatchmakingCountdown(10);
-    setMatchmakingStatusText('Scanning servers for real players online...');
+    setMatchmakingStatusText('Scanning /ludo_matchmaking queue for real 1v1 players online...');
 
     const interval = setInterval(() => {
       setMatchmakingCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          setMatchmakingStatusText('No real player online at this stake. Matching with Online Challenger...');
+          if (user?.uid) {
+            const stakeKey = String(room.entryFee || 50);
+            rtdbRemove(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}/${user.uid}`)).catch(() => {});
+          }
+          setMatchmakingStatusText('Connecting to table...');
           fetch(`/api/ludo/room/${room.roomId}/pair-instant`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
           })
             .then((res) => res.json())
             .then((data) => {
-              if (data.success && data.room) {
-                data.room.chatMessages?.forEach((m: LudoChatMessage) => seenChatIdsRef.current.add(m.id));
-                syncVisualPawnsFromRoom(data.room);
-                setRoom(data.room);
-                rtdbSet(rtdbRef(rtdb, `ludo_rooms/${data.room.roomId}`), data.room).catch(() => {});
+              if (data && data.success && data.room) {
+                const safePaired = normalizeLudoRoomState(data.room);
+                safePaired.chatMessages.forEach((m: LudoChatMessage) => seenChatIdsRef.current.add(m.id));
+                syncVisualPawnsFromRoom(safePaired);
+                setRoom(safePaired);
+                rtdbSet(rtdbRef(rtdb, `ludo_rooms/${safePaired.roomId}`), safePaired).catch(() => {});
                 playTone(580, 180, 'sine');
               } else {
                 pairLocalWaitingRoomWithChallenger(room);
@@ -2671,20 +3028,29 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
         const nextVal = prev - 1;
         if (nextVal >= 7) {
-          setMatchmakingStatusText('Scanning servers for real 1vs1 players online...');
+          setMatchmakingStatusText('Scanning /ludo_matchmaking queue for real 1vs1 players online...');
         } else if (nextVal >= 4) {
           setMatchmakingStatusText(`Checking 1vs1 real player queue at ₹${room.entryFee} stake...`);
         } else {
-          setMatchmakingStatusText('Broadcasting match challenge to active players...');
+          setMatchmakingStatusText('Preparing 3D Ludo Royale board...');
         }
         return nextVal;
       });
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [room?.roomId, room?.status, room?.isPrivate, room?.entryFee, playTone, syncVisualPawnsFromRoom]);
+  }, [
+    room?.roomId,
+    room?.status,
+    room?.isPrivate,
+    room?.entryFee,
+    user?.uid,
+    playTone,
+    normalizeLudoRoomState,
+    syncVisualPawnsFromRoom
+  ]);
 
-  // Helper to pair a waiting room with realistic Challenger(s) via RTDB / client engine when backend is offline
+  // Helper to pair a waiting room with realistic Challenger(s) via RTDB / client engine with pre-initialized [0,0,0,0] tokens
   const pairLocalWaitingRoomWithChallenger = useCallback(
     (targetRoom: LudoRoomState) => {
       if (!targetRoom || targetRoom.status !== 'waiting') return;
@@ -2711,7 +3077,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
           ? ['player1', 'player2', 'player3']
           : ['player1', 'player2', 'player3', 'player4'];
 
-      const updated: LudoRoomState = JSON.parse(JSON.stringify(targetRoom));
+      const updated: LudoRoomState = normalizeLudoRoomState(targetRoom);
       updated.seatOrder = seatOrder;
 
       seatOrder.forEach((seatKey, idx) => {
@@ -2724,8 +3090,8 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
             location: pick.loc,
             flag: pick.flag,
             color: seatColors[seatKey],
-            pawns: [1, 1, 0, 0],
-            score: 12,
+            pawns: [0, 0, 0, 0],
+            score: 0,
             captures: 0,
             homeCount: 0,
             movesLeft: 30,
@@ -2739,21 +3105,32 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
       updated.status = 'playing';
       updated.turn = 'player1';
+      updated.currentTurn = updated.player1.uid;
+      updated.players = {
+        p1: updated.player1.uid,
+        ...(updated.player2 ? { p2: updated.player2.uid } : {})
+      };
+      updated.boardState = {
+        p1: updated.player1.pawns,
+        p2: updated.player2 ? updated.player2.pawns : [0, 0, 0, 0]
+      };
       updated.hasRolled = false;
       updated.diceValue = null;
       updated.movablePawns = [];
+      updated.chatMessages = updated.chatMessages || [];
       updated.updatedAt = now;
       updated.lastAction = `Match started! ${updated.player1.username}'s turn to roll the 3D dice.`;
 
-      syncVisualPawnsFromRoom(updated);
-      setRoom(updated);
-      rtdbSet(rtdbRef(rtdb, `ludo_rooms/${updated.roomId}`), updated).catch(() => {});
+      const safeNormalized = normalizeLudoRoomState(updated);
+      syncVisualPawnsFromRoom(safeNormalized);
+      setRoom(safeNormalized);
+      rtdbSet(rtdbRef(rtdb, `ludo_rooms/${safeNormalized.roomId}`), safeNormalized).catch(() => {});
       playTone(620, 180, 'sine');
     },
-    [playTone, syncVisualPawnsFromRoom]
+    [playTone, normalizeLudoRoomState, syncVisualPawnsFromRoom]
   );
 
-  // Firebase Realtime Database (/ludo_rooms/{roomId}) live listener + Challenger Bot Turn Engine for APK / Offline resiliency
+  // Firebase Realtime Database (/ludo_rooms/{roomId}) live listener for instant 2-device synchronization
   useEffect(() => {
     if (!room?.roomId) return;
     let unsub: (() => void) | null = null;
@@ -2762,9 +3139,31 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         rtdbRef(rtdb, `ludo_rooms/${room.roomId}`),
         (snap) => {
           if (!snap.exists()) return;
-          const remoteRoom = snap.val() as LudoRoomState;
-          if (!remoteRoom || !remoteRoom.roomId) return;
-          if (remoteRoom.updatedAt > (roomRef.current?.updatedAt || 0)) {
+          const rawRemote = snap.val();
+          if (!rawRemote || !rawRemote.roomId) return;
+          const remoteRoom = normalizeLudoRoomState(rawRemote);
+
+          const wasWaiting = roomRef.current?.status === 'waiting';
+          const isNewer =
+            remoteRoom.updatedAt > (roomRef.current?.updatedAt || 0) ||
+            (wasWaiting && remoteRoom.status === 'playing');
+
+          if (isNewer) {
+            if (wasWaiting && remoteRoom.status === 'playing' && remoteRoom.player2) {
+              const opp =
+                remoteRoom.player1.uid === user?.uid ? remoteRoom.player2 : remoteRoom.player1;
+              if (opp && !opp.isBot) {
+                setMatchedRealOpponent({
+                  name: opp.username,
+                  loc: opp.location || 'India',
+                  flag: opp.flag || '🇮🇳'
+                });
+                setShowRealMatchCelebration(true);
+                playTone(880, 240, 'sine');
+                setTimeout(() => setShowRealMatchCelebration(false), 2600);
+              }
+            }
+
             if (
               !isRollingLockRef.current &&
               !isMovingLockRef.current &&
@@ -2782,7 +3181,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     return () => {
       if (unsub) unsub();
     };
-  }, [room?.roomId, syncVisualPawnsFromRoom, checkAndSettleFinishedRoom]);
+  }, [room?.roomId, user?.uid, normalizeLudoRoomState, syncVisualPawnsFromRoom, checkAndSettleFinishedRoom, playTone]);
 
   // Automatic Challenger Turn Executor when playing on client/RTDB fallback (if backend hasn't acted within 1.9s)
   useEffect(() => {
@@ -2922,7 +3321,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       setUnreadChatCount(0);
       chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [showChatDrawer, room?.chatMessages.length]);
+  }, [showChatDrawer, room?.chatMessages?.length]);
 
   const handleToggleChatEnabled = () => {
     const next = !chatEnabled;
@@ -2941,20 +3340,21 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
   // Resume an existing active or waiting match without re-charging entry stake
   const handleResumeRoom = (targetRoom: LudoRoomState) => {
+    const safeRoom = normalizeLudoRoomState(targetRoom);
     isRollingLockRef.current = false;
     isMovingLockRef.current = false;
     rollingPlayerKeyRef.current = null;
     actionLockUntilRef.current = 0;
     seenChatIdsRef.current.clear();
-    targetRoom.chatMessages?.forEach((m: LudoChatMessage) => seenChatIdsRef.current.add(m.id));
-    if (targetRoom.lastRoll?.rollId) {
-      seenRollIdsRef.current.add(targetRoom.lastRoll.rollId);
+    safeRoom.chatMessages.forEach((m: LudoChatMessage) => seenChatIdsRef.current.add(m.id));
+    if (safeRoom.lastRoll?.rollId) {
+      seenRollIdsRef.current.add(safeRoom.lastRoll.rollId);
     }
-    syncVisualPawnsFromRoom(targetRoom);
+    syncVisualPawnsFromRoom(safeRoom);
     setStepTrail([]);
     setShowForfeitConfirm(false);
-    setRoom(targetRoom);
-    showToast(`Resumed Room ${targetRoom.roomId}`, 'success');
+    setRoom(safeRoom);
+    showToast(`Resumed Room ${safeRoom.roomId}`, 'success');
   };
 
   // Cancel Waiting Room & Refund Entry Fee Safely
@@ -3012,15 +3412,27 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       });
       const data = await res.json();
       if (data.success && data.room) {
-        setRoom(data.room);
+        const safeRoom = normalizeLudoRoomState(data.room);
+        setRoom(safeRoom);
+        rtdbSet(rtdbRef(rtdb, `ludo_rooms/${safeRoom.roomId}`), safeRoom).catch(() => {});
         showToast('You forfeited the match.', 'info');
+        return;
       }
-    } catch {
-      setRoom(null);
-    }
+    } catch {}
+    const winnerRole: LudoPlayerKey = room.player1.uid === user.uid ? 'player2' : 'player1';
+    const forfeitedRoom = normalizeLudoRoomState({
+      ...room,
+      status: 'finished',
+      winner: winnerRole,
+      winReason: `${user.username} forfeited the match`,
+      updatedAt: Date.now()
+    });
+    setRoom(forfeitedRoom);
+    rtdbSet(rtdbRef(rtdb, `ludo_rooms/${forfeitedRoom.roomId}`), forfeitedRoom).catch(() => {});
+    showToast('You forfeited the match.', 'info');
   };
 
-  // Start or Join a Room (supports 2, 3, or 4 Players) with Firebase RTDB & Client Fallback so APK never fails
+  // Start or Join a Room via Firebase Realtime Database (/ludo_matchmaking/{stake} & /ludo_rooms/{roomCode})
   const handleCreateOrJoinRoom = async (
     mode: 'quick_live' | 'create_private' | 'join_code',
     customCode?: string,
@@ -3033,24 +3445,33 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     }
     if (isJoiningRoom) return;
 
+    // Read live balance from active user state and Realtime Database users/{uid}/balance
     const liveU = store.getUser(user.uid) || (user.phone ? store.findUserByPhone(user.phone) : undefined) || user;
-    const availableBal = Math.max(liveU?.balance || 0, user.balance || 0);
+    let rtdbBal = 0;
+    try {
+      const balSnap = await rtdbGet(rtdbRef(rtdb, `users/${user.uid}/balance`));
+      if (balSnap.exists() && Number.isFinite(Number(balSnap.val()))) {
+        rtdbBal = Number(balSnap.val());
+      }
+    } catch {}
+    const availableBal = Math.max(liveU?.balance || 0, user.balance || 0, rtdbBal);
     const feeToCharge = customFee || selectedEntry;
     const playersCount = customMaxPlayers || selectedMaxPlayers;
-    if (availableBal < feeToCharge) {
-      showToast(`Insufficient wallet balance. Required: ₹${feeToCharge}`, 'error');
-      onOpenDeposit();
-      return;
-    }
 
-    if (mode === 'join_code' && !(customCode || joinCodeInput).trim()) {
+    const rawCodeInput = (customCode || joinCodeInput || '').trim().toUpperCase();
+    // Normalize LUD0 (digit zero) <-> LUDO (letter O) so codes like LUD03547 and LUDO3547 always match
+    const normalizedCanonicalCode = rawCodeInput.replace(/^LUD0/, 'LUDO');
+    const alternateZeroCode = normalizedCanonicalCode.replace(/^LUDO/, 'LUD0');
+
+    if (mode === 'join_code' && !rawCodeInput) {
       showToast('Please enter a valid Room Code.', 'error');
       return;
     }
 
     setIsJoiningRoom(true);
     try {
-      let apiRoom: LudoRoomState | null = null;
+      const now = Date.now();
+      let finalRoom: LudoRoomState | null = null;
       let newlyStaked = true;
       let stakeTxId: string | undefined;
       let isRealMatch = false;
@@ -3058,124 +3479,393 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       let opponentLocation: string | undefined;
       let opponentFlag: string | undefined;
 
-      try {
-        const res = await fetch('/api/ludo/room/create-or-join', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+      // =========================================================================
+      // MODE 1: JOIN PRIVATE ROOM BY CODE (/ludo_rooms/{roomCode})
+      // =========================================================================
+      if (mode === 'join_code') {
+        let targetRemoteRoom: LudoRoomState | null = null;
+
+        // 1. Check direct RTDB path /ludo_rooms/{code} (both LUDOxxxx and LUD0xxxx)
+        try {
+          const directSnap = await rtdbGet(rtdbRef(rtdb, `ludo_rooms/${normalizedCanonicalCode}`));
+          if (directSnap.exists()) {
+            targetRemoteRoom = normalizeLudoRoomState(directSnap.val());
+          } else {
+            const altSnap = await rtdbGet(rtdbRef(rtdb, `ludo_rooms/${alternateZeroCode}`));
+            if (altSnap.exists()) {
+              targetRemoteRoom = normalizeLudoRoomState(altSnap.val());
+            } else {
+              const allSnap = await rtdbGet(rtdbRef(rtdb, 'ludo_rooms'));
+              if (allSnap.exists()) {
+                const allRooms = allSnap.val() as Record<string, any>;
+                for (const r of Object.values(allRooms || {})) {
+                  if (!r || !r.roomId) continue;
+                  const rCode = String(r.roomId).toUpperCase().replace(/^LUD0/, 'LUDO');
+                  if (rCode === normalizedCanonicalCode) {
+                    targetRemoteRoom = normalizeLudoRoomState(r);
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+
+        // 2. Also check local API server if not found in RTDB
+        if (!targetRemoteRoom) {
+          try {
+            const res = await fetch('/api/ludo/room/create-or-join', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                uid: user.uid,
+                username: user.username,
+                location: playerLocation,
+                entryFee: feeToCharge,
+                maxPlayers: playersCount,
+                mode: 'join_code',
+                roomCode: normalizedCanonicalCode
+              })
+            });
+            const data = await res.json();
+            if (res.ok && data.success && data.room) {
+              targetRemoteRoom = normalizeLudoRoomState(data.room);
+              newlyStaked = data.newlyStaked !== false;
+              stakeTxId = data.stakeTxId;
+            }
+          } catch {}
+        }
+
+        if (!targetRemoteRoom) {
+          showToast(`Private Room "${rawCodeInput}" not found. Check the code on Device 1.`, 'error');
+          setIsJoiningRoom(false);
+          return;
+        }
+
+        const roomStake = Number(targetRemoteRoom.stake ?? targetRemoteRoom.entryFee) || feeToCharge;
+        if (availableBal < roomStake) {
+          showToast(`Insufficient wallet balance to join ₹${roomStake} room.`, 'error');
+          onOpenDeposit();
+          setIsJoiningRoom(false);
+          return;
+        }
+
+        // If user is already in this room, resume it
+        if (targetRemoteRoom.player1.uid === user.uid || targetRemoteRoom.player2?.uid === user.uid) {
+          newlyStaked = false;
+          finalRoom = targetRemoteRoom;
+        } else {
+          if (targetRemoteRoom.status !== 'waiting') {
+            showToast(`Room ${targetRemoteRoom.roomId} is already full or in progress.`, 'error');
+            setIsJoiningRoom(false);
+            return;
+          }
+
+          // Deduct stake atomically via rtdbRunTransaction on users/{uid}/balance
+          try {
+            await rtdbRunTransaction(rtdbRef(rtdb, `users/${user.uid}/balance`), (currBal) => {
+              const b = Number(currBal);
+              const base = Number.isFinite(b) && b >= roomStake ? b : availableBal;
+              return Math.max(0, Math.round((base - roomStake) * 100) / 100);
+            });
+          } catch {}
+
+          const p2Color: LudoColor = (targetRemoteRoom.maxPlayers || 2) === 2 ? 'yellow' : 'green';
+          const joinedRoom = normalizeLudoRoomState({
+            ...targetRemoteRoom,
+            stake: roomStake,
+            entryFee: roomStake,
+            status: 'playing',
+            turn: 'player1',
+            currentTurn: targetRemoteRoom.player1.uid,
+            players: {
+              p1: targetRemoteRoom.player1.uid,
+              p2: user.uid
+            },
+            boardState: {
+              p1: targetRemoteRoom.player1.pawns || [0, 0, 0, 0],
+              p2: [0, 0, 0, 0]
+            },
+            player2: {
+              uid: user.uid,
+              username: user.username,
+              location: playerLocation,
+              flag: '🇮🇳',
+              color: p2Color,
+              pawns: [0, 0, 0, 0],
+              score: 0,
+              captures: 0,
+              homeCount: 0,
+              movesLeft: 30,
+              lastDice: null,
+              consecutiveSixes: 0,
+              isBot: false,
+              lastActiveAt: now
+            },
+            diceValue: null,
+            hasRolled: false,
+            movablePawns: [],
+            lastAction: `${user.username} joined Room ${targetRemoteRoom.roomId}! ${targetRemoteRoom.player1.username}'s turn to roll.`,
+            updatedAt: now
+          });
+
+          await rtdbSet(rtdbRef(rtdb, `ludo_rooms/${joinedRoom.roomId}`), joinedRoom).catch(() => {});
+          finalRoom = joinedRoom;
+          isRealMatch = true;
+          opponentName = joinedRoom.player1.username;
+          opponentLocation = joinedRoom.player1.location;
+          opponentFlag = joinedRoom.player1.flag || '🇮🇳';
+        }
+      }
+
+      // =========================================================================
+      // MODE 2: CREATE PRIVATE ROOM (/ludo_rooms/{roomCode})
+      // =========================================================================
+      else if (mode === 'create_private') {
+        if (availableBal < feeToCharge) {
+          showToast(`Insufficient wallet balance. Required: ₹${feeToCharge}`, 'error');
+          onOpenDeposit();
+          setIsJoiningRoom(false);
+          return;
+        }
+
+        // Deduct stake via rtdbRunTransaction on users/{uid}/balance
+        try {
+          await rtdbRunTransaction(rtdbRef(rtdb, `users/${user.uid}/balance`), (currBal) => {
+            const b = Number(currBal);
+            const base = Number.isFinite(b) && b >= feeToCharge ? b : availableBal;
+            return Math.max(0, Math.round((base - feeToCharge) * 100) / 100);
+          });
+        } catch {}
+
+        let generatedCode = `LUDO${Math.floor(1000 + Math.random() * 9000)}`;
+        try {
+          const res = await fetch('/api/ludo/room/create-or-join', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              uid: user.uid,
+              username: user.username,
+              location: playerLocation,
+              entryFee: feeToCharge,
+              maxPlayers: playersCount,
+              mode: 'create_private'
+            })
+          });
+          const data = await res.json();
+          if (res.ok && data.success && data.room?.roomId) {
+            generatedCode = String(data.room.roomId).toUpperCase().replace(/^LUD0/, 'LUDO');
+            stakeTxId = data.stakeTxId;
+          }
+        } catch {}
+
+        const totalPool = feeToCharge * playersCount;
+        const houseCut = Math.round(totalPool * 0.1 * 100) / 100;
+        const prizePool = Math.round((totalPool - houseCut) * 100) / 100;
+
+        const privateRoom = normalizeLudoRoomState({
+          roomId: generatedCode,
+          hostUid: user.uid,
+          stake: feeToCharge,
+          entryFee: feeToCharge,
+          maxPlayers: playersCount,
+          seatOrder: ['player1', 'player2'],
+          prizePool,
+          houseMargin: houseCut,
+          isPrivate: true,
+          status: 'waiting',
+          players: { p1: user.uid },
+          currentTurn: user.uid,
+          boardState: {
+            p1: [0, 0, 0, 0],
+            p2: [0, 0, 0, 0]
+          },
+          player1: {
             uid: user.uid,
             username: user.username,
             location: playerLocation,
-            entryFee: feeToCharge,
-            maxPlayers: playersCount,
-            mode,
-            roomCode: customCode || joinCodeInput
-          })
+            flag: '🇮🇳',
+            color: 'red',
+            pawns: [0, 0, 0, 0],
+            score: 0,
+            captures: 0,
+            homeCount: 0,
+            movesLeft: 30,
+            lastDice: null,
+            consecutiveSixes: 0,
+            isBot: false,
+            lastActiveAt: now
+          },
+          player2: null,
+          turn: 'player1',
+          diceValue: null,
+          hasRolled: false,
+          movablePawns: [],
+          lastAction: 'Waiting for friend to enter Private Room Code...',
+          winner: null,
+          chatMessages: [],
+          createdAt: now,
+          updatedAt: now
         });
-        const text = await res.text();
-        if (text && !text.trim().startsWith('<')) {
-          const data = JSON.parse(text);
-          if (res.ok && data.success && data.room) {
-            apiRoom = data.room;
-            newlyStaked = data.newlyStaked !== false;
-            stakeTxId = data.stakeTxId;
-            isRealMatch = Boolean(data.isRealMatch);
-            opponentName = data.opponentName;
-            opponentLocation = data.opponentLocation;
-            opponentFlag = data.opponentFlag;
-          }
-        }
-      } catch {
-        // Fallback to Firebase RTDB /ludo_rooms matchmaking when local Express API is unreachable (e.g. Android APK)
+
+        // ALWAYS write Private Room to /ludo_rooms/{roomCode} in Firebase Realtime Database!
+        await rtdbSet(rtdbRef(rtdb, `ludo_rooms/${privateRoom.roomId}`), privateRoom).catch(() => {});
+        finalRoom = privateRoom;
       }
 
-      if (!apiRoom) {
-        const now = Date.now();
-        const codeCandidate = (customCode || joinCodeInput || '').trim().toUpperCase();
+      // =========================================================================
+      // MODE 3: PLAY 2P LUDO LIVE MATCHMAKING (/ludo_matchmaking/{stake})
+      // =========================================================================
+      else {
+        if (availableBal < feeToCharge) {
+          showToast(`Insufficient wallet balance. Required: ₹${feeToCharge}`, 'error');
+          onOpenDeposit();
+          setIsJoiningRoom(false);
+          return;
+        }
 
-        // Check Firebase RTDB /ludo_rooms for an existing waiting room to join
+        // Deduct stake atomically via rtdbRunTransaction on users/{uid}/balance
         try {
-          const roomsSnap = await rtdbGet(rtdbRef(rtdb, 'ludo_rooms'));
-          if (roomsSnap.exists()) {
-            const allRooms = roomsSnap.val() as Record<string, LudoRoomState>;
-            for (const cand of Object.values(allRooms)) {
-              if (!cand || cand.status !== 'waiting') continue;
-              const matchesMode =
-                mode === 'join_code'
-                  ? cand.roomId.toUpperCase() === codeCandidate
-                  : !cand.isPrivate &&
-                    cand.entryFee === feeToCharge &&
-                    (cand.maxPlayers || 2) === playersCount &&
-                    cand.player1?.uid !== user.uid &&
-                    now - cand.createdAt < 120000;
-              if (matchesMode) {
-                const joinedRoom: LudoRoomState = JSON.parse(JSON.stringify(cand));
-                const p2Color: LudoColor = (joinedRoom.maxPlayers || 2) === 2 ? 'yellow' : 'green';
-                joinedRoom.player2 = {
-                  uid: user.uid,
-                  username: user.username,
-                  location: playerLocation,
-                  flag: '🇮🇳',
-                  color: p2Color,
-                  pawns: [1, 1, 0, 0],
-                  score: 12,
-                  captures: 0,
-                  homeCount: 0,
-                  movesLeft: 30,
-                  lastDice: null,
-                  consecutiveSixes: 0,
-                  isBot: false,
-                  lastActiveAt: now
-                };
-                if ((joinedRoom.maxPlayers || 2) === 2) {
-                  joinedRoom.status = 'playing';
-                  joinedRoom.turn = 'player1';
-                }
-                joinedRoom.updatedAt = now;
-                await rtdbSet(rtdbRef(rtdb, `ludo_rooms/${joinedRoom.roomId}`), joinedRoom).catch(() => {});
-                apiRoom = joinedRoom;
-                isRealMatch = true;
-                opponentName = joinedRoom.player1.username;
-                opponentLocation = joinedRoom.player1.location;
-                opponentFlag = joinedRoom.player1.flag || '🇮🇳';
+          await rtdbRunTransaction(rtdbRef(rtdb, `users/${user.uid}/balance`), (currBal) => {
+            const b = Number(currBal);
+            const base = Number.isFinite(b) && b >= feeToCharge ? b : availableBal;
+            return Math.max(0, Math.round((base - feeToCharge) * 100) / 100);
+          });
+        } catch {}
+
+        const stakeKey = String(feeToCharge);
+        let matchedOpponentEntry: any = null;
+
+        // Check if another player is already waiting in /ludo_matchmaking/{stake}
+        try {
+          const queueSnap = await rtdbGet(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}`));
+          if (queueSnap.exists()) {
+            const entries = queueSnap.val() as Record<string, any>;
+            for (const cand of Object.values(entries || {})) {
+              if (cand && cand.uid && cand.uid !== user.uid && now - (cand.joinedAt || 0) < 60000) {
+                matchedOpponentEntry = cand;
                 break;
               }
             }
           }
         } catch {}
 
-        if (!apiRoom) {
-          const generatedId =
-            mode === 'join_code' && codeCandidate
-              ? codeCandidate
-              : `LUDO${Math.floor(1000 + Math.random() * 9000)}`;
+        if (matchedOpponentEntry) {
+          // Immediately create shared room in /ludo_rooms/{roomId} and notify both players!
+          const sharedRoomId =
+            matchedOpponentEntry.roomId || `LUDO${Math.floor(1000 + Math.random() * 9000)}`;
+          const totalPool = feeToCharge * 2;
+          const houseCut = Math.round(totalPool * 0.1 * 100) / 100;
+          const prizePool = Math.round((totalPool - houseCut) * 100) / 100;
+
+          const activeMatchRoom = normalizeLudoRoomState({
+            roomId: sharedRoomId,
+            hostUid: matchedOpponentEntry.uid,
+            stake: feeToCharge,
+            entryFee: feeToCharge,
+            maxPlayers: 2,
+            seatOrder: ['player1', 'player2'],
+            prizePool,
+            houseMargin: houseCut,
+            isPrivate: false,
+            status: 'playing',
+            players: {
+              p1: matchedOpponentEntry.uid,
+              p2: user.uid
+            },
+            currentTurn: matchedOpponentEntry.uid,
+            turn: 'player1',
+            boardState: {
+              p1: [0, 0, 0, 0],
+              p2: [0, 0, 0, 0]
+            },
+            player1: {
+              uid: matchedOpponentEntry.uid,
+              username: matchedOpponentEntry.username || 'Player 1',
+              location: matchedOpponentEntry.location || 'India',
+              flag: matchedOpponentEntry.flag || '🇮🇳',
+              color: 'red',
+              pawns: [0, 0, 0, 0],
+              score: 0,
+              captures: 0,
+              homeCount: 0,
+              movesLeft: 30,
+              lastDice: null,
+              consecutiveSixes: 0,
+              isBot: false,
+              lastActiveAt: now
+            },
+            player2: {
+              uid: user.uid,
+              username: user.username,
+              location: playerLocation,
+              flag: '🇮🇳',
+              color: 'yellow',
+              pawns: [0, 0, 0, 0],
+              score: 0,
+              captures: 0,
+              homeCount: 0,
+              movesLeft: 30,
+              lastDice: null,
+              consecutiveSixes: 0,
+              isBot: false,
+              lastActiveAt: now
+            },
+            diceValue: null,
+            hasRolled: false,
+            movablePawns: [],
+            lastAction: `Match started! ${matchedOpponentEntry.username}'s turn to roll the 3D dice.`,
+            winner: null,
+            chatMessages: [],
+            createdAt: now,
+            updatedAt: now
+          });
+
+          await rtdbSet(rtdbRef(rtdb, `ludo_rooms/${sharedRoomId}`), activeMatchRoom).catch(() => {});
+          await rtdbRemove(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}/${matchedOpponentEntry.uid}`)).catch(() => {});
+          await rtdbRemove(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}/${user.uid}`)).catch(() => {});
+          await rtdbSet(rtdbRef(rtdb, `ludo_user_match/${matchedOpponentEntry.uid}`), {
+            roomId: sharedRoomId,
+            matchedAt: now
+          }).catch(() => {});
+
+          finalRoom = activeMatchRoom;
+          isRealMatch = true;
+          opponentName = matchedOpponentEntry.username;
+          opponentLocation = matchedOpponentEntry.location || 'India';
+          opponentFlag = matchedOpponentEntry.flag || '🇮🇳';
+        } else {
+          // Add this player to /ludo_matchmaking/{stake}/{uid} and create waiting room in /ludo_rooms/{roomId}
+          const waitingRoomId = `LUDO${Math.floor(1000 + Math.random() * 9000)}`;
           const totalPool = feeToCharge * playersCount;
           const houseCut = Math.round(totalPool * 0.1 * 100) / 100;
           const prizePool = Math.round((totalPool - houseCut) * 100) / 100;
-          const seatOrder: LudoPlayerKey[] =
-            playersCount === 2
-              ? ['player1', 'player2']
-              : playersCount === 3
-              ? ['player1', 'player2', 'player3']
-              : ['player1', 'player2', 'player3', 'player4'];
 
-          apiRoom = {
-            roomId: generatedId,
+          const waitingRoom = normalizeLudoRoomState({
+            roomId: waitingRoomId,
+            hostUid: user.uid,
+            stake: feeToCharge,
             entryFee: feeToCharge,
             maxPlayers: playersCount,
-            seatOrder,
+            seatOrder: ['player1', 'player2'],
             prizePool,
             houseMargin: houseCut,
-            isPrivate: mode === 'create_private',
+            isPrivate: false,
             status: 'waiting',
+            players: { p1: user.uid },
+            currentTurn: user.uid,
+            boardState: {
+              p1: [0, 0, 0, 0],
+              p2: [0, 0, 0, 0]
+            },
             player1: {
               uid: user.uid,
               username: user.username,
               location: playerLocation,
               flag: '🇮🇳',
               color: 'red',
-              pawns: [1, 1, 0, 0],
-              score: 12,
+              pawns: [0, 0, 0, 0],
+              score: 0,
               captures: 0,
               homeCount: 0,
               movesLeft: 30,
@@ -3185,55 +3875,87 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
               lastActiveAt: now
             },
             player2: null,
-            player3: null,
-            player4: null,
             turn: 'player1',
             diceValue: null,
             hasRolled: false,
             movablePawns: [],
-            lastAction: 'Waiting for opponent to join...',
+            lastAction: 'Searching for opponent at same stake...',
             winner: null,
             chatMessages: [],
             createdAt: now,
             updatedAt: now
-          };
+          });
 
-          await rtdbSet(rtdbRef(rtdb, `ludo_rooms/${apiRoom.roomId}`), apiRoom).catch(() => {});
+          await rtdbSet(rtdbRef(rtdb, `ludo_rooms/${waitingRoomId}`), waitingRoom).catch(() => {});
+          await rtdbSet(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}/${user.uid}`), {
+            uid: user.uid,
+            username: user.username,
+            location: playerLocation,
+            flag: '🇮🇳',
+            stake: feeToCharge,
+            roomId: waitingRoomId,
+            joinedAt: now
+          }).catch(() => {});
+
+          finalRoom = waitingRoom;
         }
+      }
+
+      if (!finalRoom) {
+        showToast('Could not initialize Ludo table. Please try again.', 'error');
+        return;
       }
 
       if (newlyStaked) {
         const betResult = store.recordGameBet(
           user.uid,
-          apiRoom.entryFee,
-          `Ludo ${apiRoom.maxPlayers || playersCount}P Live Battle`,
-          stakeTxId || `${apiRoom.roomId}_${user.uid}`
+          finalRoom.entryFee,
+          `Ludo ${finalRoom.maxPlayers || playersCount}P Live Battle`,
+          stakeTxId || `${finalRoom.roomId}_${user.uid}`
         );
         if (!betResult.success) {
           showToast(betResult.error || 'Failed to deduct entry fee', 'error');
           return;
         }
+        // Log to /live_bets for Admin Console visibility
+        rtdbSet(rtdbRef(rtdb, `live_bets/ludo_${finalRoom.roomId}_${user.uid}`), {
+          betId: `ludo_${finalRoom.roomId}_${user.uid}`,
+          uid: user.uid,
+          username: user.username,
+          gameId: 'ludo_battle',
+          roundPeriod: finalRoom.roomId,
+          gameType: '1min',
+          betType: 'color',
+          betValue: mode,
+          amount: finalRoom.entryFee,
+          multiplier: 1.8,
+          potentialPayout: finalRoom.prizePool,
+          status: 'pending',
+          actualPayout: 0,
+          timestamp: now
+        }).catch(() => {});
       }
 
+      const safeFinalRoom = normalizeLudoRoomState(finalRoom);
       isRollingLockRef.current = false;
       isMovingLockRef.current = false;
       rollingPlayerKeyRef.current = null;
       actionLockUntilRef.current = 0;
       seenChatIdsRef.current.clear();
-      apiRoom.chatMessages?.forEach((m: LudoChatMessage) => seenChatIdsRef.current.add(m.id));
-      if (apiRoom.lastRoll?.rollId) {
-        seenRollIdsRef.current.add(apiRoom.lastRoll.rollId);
+      safeFinalRoom.chatMessages.forEach((m: LudoChatMessage) => seenChatIdsRef.current.add(m.id));
+      if (safeFinalRoom.lastRoll?.rollId) {
+        seenRollIdsRef.current.add(safeFinalRoom.lastRoll.rollId);
       }
       setConfirmedDiceByPlayer({ player1: null, player2: null, player3: null, player4: null });
       setRollingPlayerKey(null);
-      syncVisualPawnsFromRoom(apiRoom);
+      syncVisualPawnsFromRoom(safeFinalRoom);
       setStepTrail([]);
       setShowForfeitConfirm(false);
 
       if (isRealMatch && opponentName) {
         setMatchedRealOpponent({
           name: opponentName,
-          loc: opponentLocation || 'Global',
+          loc: opponentLocation || 'India',
           flag: opponentFlag || '🇮🇳'
         });
         setShowRealMatchCelebration(true);
@@ -3245,7 +3967,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         setMatchmakingCountdown(10);
       }
 
-      setRoom(apiRoom);
+      setRoom(safeFinalRoom);
       playTone(520, 160, 'sine');
     } catch {
       showToast('Could not initialize Ludo table. Please try again.', 'error');
@@ -3256,6 +3978,10 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
   const handleInstantStartFromWaiting = async () => {
     if (!room) return;
+    if (user?.uid) {
+      const stakeKey = String(room.entryFee || 50);
+      rtdbRemove(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}/${user.uid}`)).catch(() => {});
+    }
     try {
       const res = await fetch(`/api/ludo/room/${room.roomId}/pair-instant`, {
         method: 'POST',
@@ -3265,9 +3991,10 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       if (text && !text.trim().startsWith('<')) {
         const data = JSON.parse(text);
         if (data.success && data.room) {
-          syncVisualPawnsFromRoom(data.room);
-          setRoom(data.room);
-          rtdbSet(rtdbRef(rtdb, `ludo_rooms/${data.room.roomId}`), data.room).catch(() => {});
+          const safePaired = normalizeLudoRoomState(data.room);
+          syncVisualPawnsFromRoom(safePaired);
+          setRoom(safePaired);
+          rtdbSet(rtdbRef(rtdb, `ludo_rooms/${safePaired.roomId}`), safePaired).catch(() => {});
           playTone(620, 180, 'sine');
           return;
         }
@@ -3295,7 +4022,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
       const myRole: LudoPlayerKey = keys.find((k) => currentRoom[k]?.uid === user.uid) || 'player1';
       if (currentRoom.turn !== myRole || !currentRoom.hasRolled) return;
-      if (!currentRoom.movablePawns.includes(pawnIndex)) return;
+      if (!(currentRoom.movablePawns || []).includes(pawnIndex)) return;
 
       isMovingLockRef.current = true;
       setIsTokenWalking(true);
@@ -3310,9 +4037,10 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       setRoom((prev) => (prev ? { ...prev, movablePawns: [] } : prev));
 
       // Compute post-move state and defer turn switch until the token finishes stepping onto its final cell!
-      const optimisticRoom = applyLocalPawnMove(currentRoom, myRole, pawnIndex);
+      const optimisticRoom = normalizeLudoRoomState(applyLocalPawnMove(currentRoom, myRole, pawnIndex));
       deferredRoomAfterMoveRef.current = optimisticRoom;
       targetPawnsRef.current = extractPawnsByColorFromRoom(optimisticRoom);
+      rtdbSet(rtdbRef(rtdb, `ludo_rooms/${optimisticRoom.roomId}`), optimisticRoom).catch(() => {});
       startOrContinueTokenWalk();
 
       try {
@@ -3323,19 +4051,21 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         });
         const data = await res.json();
         if (data.success && data.room) {
-          targetPawnsRef.current = extractPawnsByColorFromRoom(data.room);
+          const safeServerRoom = normalizeLudoRoomState(data.room);
+          rtdbSet(rtdbRef(rtdb, `ludo_rooms/${safeServerRoom.roomId}`), safeServerRoom).catch(() => {});
+          targetPawnsRef.current = extractPawnsByColorFromRoom(safeServerRoom);
           if (stepLoopRunningRef.current || isMovingLockRef.current) {
-            deferredRoomAfterMoveRef.current = data.room;
+            deferredRoomAfterMoveRef.current = safeServerRoom;
           } else {
-            setRoom(data.room);
-            checkAndSettleFinishedRoom(data.room);
+            setRoom(safeServerRoom);
+            checkAndSettleFinishedRoom(safeServerRoom);
           }
         }
       } catch {
-        // Optimistic move already queued in deferredRoomAfterMoveRef
+        // Optimistic move already synced to RTDB and queued in deferredRoomAfterMoveRef
       }
     },
-    [user, applyLocalPawnMove, extractPawnsByColorFromRoom, startOrContinueTokenWalk, checkAndSettleFinishedRoom]
+    [user, applyLocalPawnMove, normalizeLudoRoomState, extractPawnsByColorFromRoom, startOrContinueTokenWalk, checkAndSettleFinishedRoom]
   );
 
   // Roll Dice Handler - Plays continuous 1.52s 3D Dice Cube animation and reveals number ONLY after landing
@@ -3383,6 +4113,8 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       const data = await res.json();
 
       if (data.success && data.room) {
+        const safeRolledRoom = normalizeLudoRoomState(data.room);
+        rtdbSet(rtdbRef(rtdb, `ludo_rooms/${safeRolledRoom.roomId}`), safeRolledRoom).catch(() => {});
         if (data.rollId) {
           seenRollIdsRef.current.add(data.rollId);
         }
@@ -3400,23 +4132,23 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
           if (data.tripleSixForfeit) {
             playTone(240, 260, 'sawtooth');
             showToast(`Rolled ${data.rolled} — Three 6s in a row! Turn forfeited.`, 'info');
-            setRoom(data.room);
-            checkAndSettleFinishedRoom(data.room);
+            setRoom(safeRolledRoom);
+            checkAndSettleFinishedRoom(safeRolledRoom);
             return;
           }
           if (data.noValidMoves) {
             playTone(300, 220, 'triangle');
             showToast(`Rolled ${data.rolled} — No legal move available.`, 'info');
-            setRoom(data.room);
-            checkAndSettleFinishedRoom(data.room);
+            setRoom(safeRolledRoom);
+            checkAndSettleFinishedRoom(safeRolledRoom);
             return;
           }
 
           playTone(data.rolled === 6 ? 860 : 580, 190, 'sine');
-          setRoom(data.room);
+          setRoom(safeRolledRoom);
 
           // Auto-move after 480ms settle pause if there is only 1 legal token move
-          const movables: number[] = data.room.movablePawns || [];
+          const movables: number[] = safeRolledRoom.movablePawns || [];
           if (movables.length === 1) {
             setTimeout(() => {
               handleMovePawn(movables[0]);
@@ -3441,24 +4173,53 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       playTone(localRolled === 6 ? 860 : 580, 190, 'sine');
       setRoom((prev) => {
         if (!prev) return prev;
-        const copy: LudoRoomState = JSON.parse(JSON.stringify(prev));
+        const copy: LudoRoomState = normalizeLudoRoomState(prev);
         const me = copy[myRole];
         if (!me) return prev;
 
         copy.diceValue = localRolled;
         me.lastDice = localRolled;
+        copy.lastRoll = {
+          rollId: `roll_${Date.now()}_${myRole}`,
+          player: myRole,
+          color: me.color,
+          value: localRolled,
+          outcome: 'normal',
+          timestamp: Date.now()
+        };
+        seenRollIdsRef.current.add(copy.lastRoll.rollId);
+
         const movables = computeClientMovablePawns(me.pawns, localRolled);
         if (movables.length === 0) {
           me.movesLeft = Math.max(0, me.movesLeft - 1);
           copy.diceValue = null;
           copy.hasRolled = false;
           copy.movablePawns = [];
+          const order: LudoPlayerKey[] = copy.seatOrder || ['player1', 'player2'];
+          const startIdx = Math.max(0, order.indexOf(myRole));
+          for (let offset = 1; offset <= order.length; offset++) {
+            const candKey = order[(startIdx + offset) % order.length];
+            if (copy[candKey] && copy[candKey]!.movesLeft > 0) {
+              copy.turn = candKey;
+              copy.currentTurn = copy[candKey]!.uid;
+              break;
+            }
+          }
           copy.lastAction = `${me.username} rolled ${localRolled} (No valid move available)`;
+          copy.updatedAt = Date.now();
+          rtdbSet(rtdbRef(rtdb, `ludo_rooms/${copy.roomId}`), copy).catch(() => {});
           return copy;
         }
         copy.hasRolled = true;
         copy.movablePawns = movables;
         copy.lastAction = `${me.username} rolled a ${localRolled}! Tap any glowing 3D token to move.`;
+        copy.updatedAt = Date.now();
+        rtdbSet(rtdbRef(rtdb, `ludo_rooms/${copy.roomId}`), copy).catch(() => {});
+        if (movables.length === 1) {
+          setTimeout(() => {
+            handleMovePawn(movables[0]);
+          }, 480);
+        }
         return copy;
       });
     }, remainingFallback);
@@ -3651,8 +4412,8 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
   const pathStepDots: Array<{ row: number; col: number; stepNum: number }> = [];
 
   if (room && room.status === 'playing' && isMyTurn && room.hasRolled && room.diceValue && activeMyPlayer) {
-    room.movablePawns.forEach((pIdx, mOrder) => {
-      const curStep = activeMyPlayer.pawns[pIdx];
+    (room.movablePawns || []).forEach((pIdx, mOrder) => {
+      const curStep = (activeMyPlayer.pawns || [0, 0, 0, 0])[pIdx] ?? 0;
       const nextStep = curStep === 0 ? 1 : curStep + room.diceValue!;
       if (nextStep <= 57) {
         if (mOrder === 0 && curStep >= 1) {
@@ -3667,12 +4428,12 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
           const gIdx = getGlobalTrackIndex(activeMyPlayer.color, nextStep);
           if (gIdx !== null && !SAFE_TRACK_INDICES.has(gIdx)) {
             const myCountAfterMove =
-              activeMyPlayer.pawns.filter((s) => getGlobalTrackIndex(activeMyPlayer.color, s) === gIdx).length + 1;
+              (activeMyPlayer.pawns || [0, 0, 0, 0]).filter((s) => getGlobalTrackIndex(activeMyPlayer.color, s) === gIdx).length + 1;
             for (const k of allSeatKeys) {
               if (k === myRole) continue;
               const op = room[k];
               if (!op) continue;
-              const oppCountAtDest = op.pawns.filter((os) => getGlobalTrackIndex(op.color, os) === gIdx).length;
+              const oppCountAtDest = (op.pawns || [0, 0, 0, 0]).filter((os) => getGlobalTrackIndex(op.color, os) === gIdx).length;
               if (oppCountAtDest === 1 || (oppCountAtDest > 0 && myCountAfterMove >= oppCountAtDest)) {
                 isCut = true;
                 break;
@@ -5029,7 +5790,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
                   {(['red', 'green', 'yellow', 'blue'] as LudoColor[]).map((col) => {
                     const seatInfo = playerByColor[col];
                     if (!seatInfo) return null;
-                    return visualPawns[col].map((step, idx) => {
+                    return (visualPawns[col] || [0, 0, 0, 0]).map((step, idx) => {
                       const coord = pawnTopLeftCoords[col]?.[idx] ?? getPawnCellCoord(col, step, idx);
                       const { shiftX, shiftY, isStacked } = getCombinedCellStackOffset(col, idx);
                       const canMove =
@@ -5039,7 +5800,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
                         !isTokenWalking &&
                         hoppingToken === null &&
                         rollingPlayerKey === null &&
-                        room.movablePawns.includes(idx);
+                        (room.movablePawns || []).includes(idx);
                       const isThisHopping = hoppingToken?.color === col && hoppingToken.idx === idx;
                       const badgeLabel = room.diceValue ? (step === 0 ? 'OPEN' : `+${room.diceValue}`) : null;
 
@@ -5322,7 +6083,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
             {room.status === 'playing' &&
               isMyTurn &&
               room.hasRolled &&
-              room.movablePawns.length > 0 &&
+              (room.movablePawns || []).length > 0 &&
               !isTokenWalking &&
               hoppingToken === null &&
               rollingPlayerKey === null && (
@@ -5337,8 +6098,8 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
                   </div>
                   <div className="grid grid-cols-4 gap-1.5">
                     {[0, 1, 2, 3].map((pIdx) => {
-                      const isMovable = room.movablePawns.includes(pIdx);
-                      const curStep = activeMyPlayer?.pawns[pIdx] ?? 0;
+                      const isMovable = (room.movablePawns || []).includes(pIdx);
+                      const curStep = (activeMyPlayer?.pawns || [0, 0, 0, 0])[pIdx] ?? 0;
                       return (
                         <button
                           key={pIdx}
@@ -5439,7 +6200,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
                 </div>
 
                 <div className="max-h-44 overflow-y-auto px-4 py-2 space-y-2">
-                  {room.chatMessages.map((msg) => {
+                  {(room.chatMessages || []).map((msg) => {
                     if (msg.messageType === 'system') {
                       return (
                         <div key={msg.id} className="text-center text-[10px] text-amber-300/80 py-0.5">

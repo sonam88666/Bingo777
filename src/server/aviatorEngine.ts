@@ -37,11 +37,12 @@ export class ServerAviatorEngine {
   private config: AviatorEngineConfig = {
     enabled: true,
     paused: false,
-    rtpPercent: 97,
+    rtpPercent: 95,
     minBet: 50,
     maxBet: 50000,
     maxPayoutPerBet: 500000,
-    maxMultiplierCap: 1000,
+    maxMultiplierCap: 50,
+    streakBreakerEnabled: true,
     waitingDurationMs: 5000,
     crashedDisplayMs: 3500,
     allowAutoCashout: true,
@@ -122,22 +123,27 @@ export class ServerAviatorEngine {
     const roundId = `av_${rNum}_${now.toString(36).slice(-4)}`;
     this.currentServerSeed = this.generateCryptoSeed();
 
+    const prevCrash = this.pastCrashes[0] || 1.5;
     const pf = computeProvablyFairCrash({
       serverSeed: this.currentServerSeed,
       clientSeed: this.config.clientSeed,
       roundNumber: rNum,
       nonce: rNum,
       rtpPercent: this.config.rtpPercent,
-      maxMultiplierCap: this.config.maxMultiplierCap
+      maxMultiplierCap: this.config.maxMultiplierCap,
+      previousCrashMultiplier: prevCrash,
+      streakBreakerEnabled: (this.config as any).streakBreakerEnabled !== false
     });
 
+    const maxCap = Math.max(2, Number(this.config.maxMultiplierCap) || 50);
     const finalCrash =
       this.nextRoundOverride !== null && Number.isFinite(this.nextRoundOverride) && this.nextRoundOverride >= 1.0
         ? Math.floor(this.nextRoundOverride * 100) / 100
-        : pf.crashMultiplier;
+        : Math.min(maxCap, pf.crashMultiplier);
 
     const usedOverride = this.nextRoundOverride;
     this.nextRoundOverride = null;
+    this.config.nextCrashOverride = null;
 
     const bets: Record<string, AviatorBet> = {};
 
@@ -226,9 +232,10 @@ export class ServerAviatorEngine {
       const flightStart = this.currentRound.flightStartTime || now;
       const elapsedMs = Math.max(0, now - flightStart);
       const rawMult = computeMultiplierAtElapsedMs(elapsedMs);
-      const crashTarget = this.currentRound.crashMultiplier;
+      const maxCap = Math.max(2, Number(this.config.maxMultiplierCap) || 50);
+      const crashTarget = Math.min(maxCap, this.currentRound.crashMultiplier);
 
-      if (rawMult >= crashTarget || elapsedMs >= this.roundFlightDurationMs) {
+      if (rawMult >= crashTarget || rawMult >= maxCap || elapsedMs >= this.roundFlightDurationMs) {
         this.triggerCrash(now, crashTarget);
         return;
       }
@@ -612,8 +619,11 @@ export class ServerAviatorEngine {
         if (typeof cfgPayload.maxPayoutPerBet === 'number' && cfgPayload.maxPayoutPerBet >= 1000) {
           this.config.maxPayoutPerBet = cfgPayload.maxPayoutPerBet;
         }
-        if (typeof cfgPayload.maxMultiplierCap === 'number' && cfgPayload.maxMultiplierCap >= 10) {
+        if (typeof cfgPayload.maxMultiplierCap === 'number' && cfgPayload.maxMultiplierCap >= 2) {
           this.config.maxMultiplierCap = cfgPayload.maxMultiplierCap;
+        }
+        if (typeof cfgPayload.streakBreakerEnabled === 'boolean') {
+          (this.config as any).streakBreakerEnabled = cfgPayload.streakBreakerEnabled;
         }
         if (typeof cfgPayload.waitingDurationMs === 'number' && cfgPayload.waitingDurationMs >= 3000 && cfgPayload.waitingDurationMs <= 15000) {
           this.config.waitingDurationMs = cfgPayload.waitingDurationMs;

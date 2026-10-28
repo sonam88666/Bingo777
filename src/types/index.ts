@@ -77,6 +77,15 @@ export interface LiveBet {
   timestamp: number;
 }
 
+export type WinGoOverrideType = 'color' | 'size' | 'number' | 'auto';
+
+export interface WinGoOverridePayload {
+  targetPeriod: string;
+  overrideType: WinGoOverrideType;
+  overrideValue: 'green' | 'red' | 'violet' | 'big' | 'small' | number | 'auto' | null;
+  updatedAt: number;
+}
+
 export interface GameRound {
   period: string; // e.g. "20261013001"
   gameType: '30s' | '1min' | '3min' | '5min';
@@ -90,6 +99,7 @@ export interface GameRound {
   hash: string;
   isResolved: boolean;
   manualOverrideNumber?: number | null;
+  overrideConfig?: WinGoOverridePayload | null;
   blockHash?: string; // For TRX Win Go
 }
 
@@ -155,6 +165,9 @@ export interface AviatorEngineConfig {
   instantCrashProbabilityPercent?: number;
   autoCashoutAllowed?: boolean;
   dualBetStationsAllowed?: boolean;
+  streakBreakerEnabled?: boolean;
+  forceCrashNow?: boolean;
+  gameEnabled?: boolean;
 }
 
 export interface AviatorRoundHistoryItem {
@@ -533,6 +546,7 @@ export interface AdminSettings {
   aviatorMaxCap?: number;
   aviatorTargetRtp?: number;
   wingoResultOverrides?: Record<string, number | null>;
+  wingo_override?: Partial<Record<'30s' | '1min' | '3min', WinGoOverridePayload>>;
   // Multiple UPI Management
   upiChannels?: UpiChannel[];
   activeUpiChannelId?: string;

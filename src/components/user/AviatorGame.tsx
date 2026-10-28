@@ -19,6 +19,7 @@ import { store } from '../../services/store';
 import { soundFx } from '../../services/soundFx';
 import { useToast } from '../common/Toast';
 import { Aviator3DScene, AviatorCameraMode } from './Aviator3DScene';
+import { rtdb, rtdbRef, rtdbOnValue, rtdbUpdate } from '../../firebase';
 
 interface AviatorGameProps {
   user: UserRecord | null;
@@ -43,6 +44,8 @@ export const AviatorGame: React.FC<AviatorGameProps> = ({
   const [showAdminAnalytics, setShowAdminAnalytics] = useState(false);
   const [cameraMode, setCameraMode] = useState<AviatorCameraMode>('side');
   const [selectedFairnessRound, setSelectedFairnessRound] = useState<AviatorRoundHistoryItem | null>(null);
+  const [aviatorGameEnabled, setAviatorGameEnabled] = useState<boolean>(true);
+  const maxCapRef = useRef<number>(50);
 
   // Station 1 State
   const [bet1Amount, setBet1Amount] = useState(50);
@@ -99,12 +102,41 @@ export const AviatorGame: React.FC<AviatorGameProps> = ({
     autoCashoutMult2Ref.current = autoCashoutMult2;
   }, [autoCashoutMult2]);
 
-  // Subscribe to store updates
+  // Subscribe to store updates + direct Firebase Realtime Database /admin_settings/aviator stream
   useEffect(() => {
-    const unsub = store.subscribe(() => {
+    const unsubStore = store.subscribe(() => {
       setStoreTick((t) => t + 1);
     });
-    return unsub;
+
+    let unsubRtdb: (() => void) | null = null;
+    try {
+      const avAdminRef = rtdbRef(rtdb, 'admin_settings/aviator');
+      unsubRtdb = rtdbOnValue(
+        avAdminRef,
+        (snap) => {
+          if (!snap.exists()) return;
+          const cfg = snap.val();
+          if (!cfg || typeof cfg !== 'object') return;
+
+          if (typeof cfg.gameEnabled === 'boolean') {
+            setAviatorGameEnabled(cfg.gameEnabled);
+          }
+          if (typeof cfg.maxMultiplierCap === 'number' && cfg.maxMultiplierCap >= 2) {
+            maxCapRef.current = cfg.maxMultiplierCap;
+          }
+          if (cfg.forceCrashNow === true) {
+            rtdbUpdate(avAdminRef, { forceCrashNow: false }).catch(() => {});
+            store.forceAviatorCrashNow('RTDB_Admin');
+          }
+        },
+        () => {}
+      );
+    } catch {}
+
+    return () => {
+      unsubStore();
+      if (unsubRtdb) unsubRtdb();
+    };
   }, []);
 
   // Master 60fps Synchronized Loop driven by Server-Authoritative Round State
@@ -159,8 +191,14 @@ export const AviatorGame: React.FC<AviatorGameProps> = ({
         setCountdown(remSecs);
         setCurrentMultiplier(1.00);
       } else if (round.status === 'flying') {
+        const cap = Math.max(2, maxCapRef.current || store.getAviatorEngineConfig().maxMultiplierCap || 50);
         const safeMult = Math.max(1.00, Math.floor(liveMult * 100) / 100);
-        setCurrentMultiplier(safeMult);
+        if (safeMult >= cap) {
+          store.forceAviatorCrashNow('MaxCap_Ceiling');
+          setCurrentMultiplier(cap);
+        } else {
+          setCurrentMultiplier(safeMult);
+        }
 
         if (now - lastClimbCueTimeRef.current >= 180) {
           lastClimbCueTimeRef.current = now;
@@ -513,6 +551,21 @@ export const AviatorGame: React.FC<AviatorGameProps> = ({
       <div className="space-y-4">
           {/* 3D Flight Arena Stage */}
           <div className="relative aspect-[16/9] w-full rounded-3xl bg-gradient-to-b from-[#050811] via-[#0b1224] to-[#060913] border border-slate-800 overflow-hidden shadow-2xl flex items-center justify-center">
+            {/* Admin Maintenance Overlay when /admin_settings/aviator/gameEnabled is false */}
+            {(!aviatorGameEnabled || !engineConfig.enabled) && (
+              <div className="absolute inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center space-y-3">
+                <div className="w-14 h-14 rounded-2xl bg-rose-500/20 border border-rose-500/40 text-rose-400 flex items-center justify-center shadow-lg">
+                  <Lock className="w-7 h-7" />
+                </div>
+                <h3 className="font-brand font-black text-lg sm:text-xl text-white">
+                  Aviator Crash Maintenance Active
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-300 max-w-md">
+                  Master Admin has temporarily paused new Aviator flights for scheduled engine maintenance. Flights will resume automatically as soon as enabled.
+                </p>
+              </div>
+            )}
+
             {/* 2D HUD Trajectory Curve Overlay */}
             <canvas
               ref={canvasRef}

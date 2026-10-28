@@ -32,8 +32,19 @@ import {
   AviatorEngineConfig,
   AviatorRoundHistoryItem,
   AviatorSimulationReport,
-  UpiChannel
+  UpiChannel,
+  WinGoOverridePayload,
+  WinGoOverrideType
 } from '../types';
+import {
+  rtdb,
+  rtdbRef,
+  rtdbSet,
+  rtdbUpdate,
+  rtdbRemove,
+  rtdbOnValue,
+  rtdbRunTransaction
+} from '../firebase';
 import { soundFx } from './soundFx';
 import {
   computeProvablyFairCrash,
@@ -802,6 +813,7 @@ class AuthoritativeStore {
   private deletedUsersBackup: Record<string, UserRecord> = {};
 
   // Multi-Game States
+  private wingoOverridesByMode: Partial<Record<'30s' | '1min' | '3min', WinGoOverridePayload>> = {};
   private trxCurrentRound: GameRound;
   private trxPastRounds: GameRound[];
 
@@ -820,14 +832,15 @@ class AuthoritativeStore {
   private aviatorEngineConfig: AviatorEngineConfig = {
     enabled: true,
     paused: false,
-    rtpPercent: 97,
-    houseEdgePercent: 3,
+    rtpPercent: 95,
+    houseEdgePercent: 5,
     minBet: 50,
     maxBet: 100000,
-    maxMultiplierCap: 1000,
+    maxMultiplierCap: 50,
+    streakBreakerEnabled: true,
     waitDurationSeconds: 5,
     crashDisplaySeconds: 3,
-    instantCrashProbabilityPercent: 3,
+    instantCrashProbabilityPercent: 4,
     autoCashoutAllowed: true,
     dualBetStationsAllowed: true,
     provablyFairClientSeed: 'bingo777-public-aviator-seed-v1',
@@ -1843,32 +1856,43 @@ class AuthoritativeStore {
   }
 
   private generateCrashMultiplier(_forceNoBetMode: boolean = false): number {
-    // Explicit Admin Manual Override (only when explicitly set by Admin in Admin Console)
+    // 1. Explicit Admin Manual Override (/admin_settings/aviator/nextCrashOverride)
     if (
       this.aviatorEngineConfig.nextCrashOverride !== null &&
       this.aviatorEngineConfig.nextCrashOverride !== undefined &&
-      Number.isFinite(this.aviatorEngineConfig.nextCrashOverride)
+      Number.isFinite(this.aviatorEngineConfig.nextCrashOverride) &&
+      this.aviatorEngineConfig.nextCrashOverride >= 1.0
     ) {
-      return Math.max(1.00, Math.floor(this.aviatorEngineConfig.nextCrashOverride * 100) / 100);
+      const overrideVal = Math.max(1.00, Math.floor(this.aviatorEngineConfig.nextCrashOverride * 100) / 100);
+      this.aviatorEngineConfig.nextCrashOverride = null;
+      rtdbUpdate(rtdbRef(rtdb, 'admin_settings/aviator'), { nextCrashOverride: null }).catch(() => {});
+      return overrideVal;
     }
     if (
       this.aviatorCurrentRound?.manualCrashOverride !== null &&
       this.aviatorCurrentRound?.manualCrashOverride !== undefined &&
-      Number.isFinite(this.aviatorCurrentRound.manualCrashOverride)
+      Number.isFinite(this.aviatorCurrentRound.manualCrashOverride) &&
+      this.aviatorCurrentRound.manualCrashOverride >= 1.0
     ) {
-      return Math.max(1.00, Math.floor(this.aviatorCurrentRound.manualCrashOverride * 100) / 100);
+      const manualVal = Math.max(1.00, Math.floor(this.aviatorCurrentRound.manualCrashOverride * 100) / 100);
+      this.aviatorCurrentRound.manualCrashOverride = null;
+      return manualVal;
     }
 
-    // Provably Fair HMAC-SHA256 generation — 100% independent of player bet size, balance, or identity
+    // 2. Provably Fair 5-Tier Realistic Distribution + Anti-Runaway Streak Breaker
     this.aviatorRoundNonce += 1;
+    const prevCrash = this.aviatorPastCrashes?.[0] ?? 1.50;
+    const maxCap = Math.max(2, Number(this.aviatorEngineConfig.maxMultiplierCap) || 50);
     const pf = computeProvablyFairCrash(
       this.aviatorServerSeed,
       this.aviatorClientSeed,
       this.aviatorRoundNonce,
-      this.aviatorEngineConfig.rtpPercent,
-      this.aviatorEngineConfig.maxMultiplierCap
+      this.aviatorEngineConfig.rtpPercent || 95,
+      maxCap,
+      prevCrash,
+      this.aviatorEngineConfig.streakBreakerEnabled !== false
     );
-    return pf.crashMultiplier;
+    return Math.min(maxCap, pf.crashMultiplier);
   }
 
   // --- BROADCAST & SYNC ---
@@ -2038,55 +2062,137 @@ class AuthoritativeStore {
     }
     return this.currentRound;
   }
-  public getPredictedOutcome(mode?: '30s' | '1min' | '3min'): { number: number; colors: string[]; size: string } {
-    const round = mode && this.activeRoundsByMode[mode] ? this.activeRoundsByMode[mode]! : this.currentRound;
-    let winningNum: number;
-    if (round.manualOverrideNumber !== null && round.manualOverrideNumber !== undefined) {
-      winningNum = round.manualOverrideNumber;
-    } else if (this.adminSettings.zeroPlatformLossMode) {
-      const activeBets = this.liveBets.filter(
-        (b) => b.roundPeriod === round.period && b.status === 'pending'
-      );
-      if (activeBets.length > 0) {
-        let lowestPayout = Infinity;
-        let bestCandidate = Math.floor(Math.random() * 10);
-        const candidates = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-        for (const cand of candidates) {
-          const colors: string[] = cand === 0 ? ['red', 'violet'] : cand === 5 ? ['green', 'violet'] : cand % 2 === 0 ? ['red'] : ['green'];
-          const size: string = cand >= 5 ? 'big' : 'small';
-          let candPayout = 0;
-          for (const b of activeBets) {
-            let won = false;
-            let rate = 0;
-            if (b.betType === 'number' && parseInt(b.betValue, 10) === cand) {
-              won = true;
-              rate = this.adminSettings.numberMultiplier;
-            } else if (b.betType === 'color' && colors.includes(b.betValue)) {
-              won = true;
-              rate = b.betValue === 'violet' ? this.adminSettings.colorVioletMultiplier : (colors.length > 1 ? 1.5 : this.adminSettings.colorGreenMultiplier);
-            } else if (b.betType === 'size' && b.betValue === size) {
-              won = true;
-              rate = this.adminSettings.sizeMultiplier;
-            }
-            if (won) candPayout += b.amount * rate;
-          }
-          if (candPayout < lowestPayout) {
-            lowestPayout = candPayout;
-            bestCandidate = cand;
-          }
-        }
-        winningNum = bestCandidate;
-      } else {
-        winningNum = this.getDeterministicOutcomeForPeriod(round.period, round.gameType);
+  public getWinGoOverride(mode: '30s' | '1min' | '3min' = '30s'): WinGoOverridePayload | null {
+    const round = this.getCurrentRound(mode);
+    const stored = this.wingoOverridesByMode[mode] || round.overrideConfig || null;
+    if (stored && stored.overrideType && stored.overrideType !== 'auto') {
+      if (!stored.targetPeriod || stored.targetPeriod === round.period) {
+        return stored;
       }
+    }
+    if (round.manualOverrideNumber !== null && round.manualOverrideNumber !== undefined) {
+      return {
+        targetPeriod: round.period,
+        overrideType: 'number',
+        overrideValue: round.manualOverrideNumber,
+        updatedAt: Date.now()
+      };
+    }
+    return null;
+  }
+
+  public getCandidateNumbersForOverride(
+    mode: '30s' | '1min' | '3min',
+    period: string,
+    manualNum?: number | null
+  ): number[] | null {
+    const ov = this.wingoOverridesByMode[mode] || this.activeRoundsByMode[mode]?.overrideConfig || null;
+    if (ov && ov.overrideType && ov.overrideType !== 'auto' && (!ov.targetPeriod || ov.targetPeriod === period)) {
+      if (ov.overrideType === 'number') {
+        const n = Number(ov.overrideValue);
+        if (Number.isInteger(n) && n >= 0 && n <= 9) return [n];
+      } else if (ov.overrideType === 'color') {
+        if (ov.overrideValue === 'green') return [1, 3, 7, 9];
+        if (ov.overrideValue === 'red') return [2, 4, 6, 8];
+        if (ov.overrideValue === 'violet') return [0, 5];
+      } else if (ov.overrideType === 'size') {
+        if (ov.overrideValue === 'big') return [5, 6, 7, 8, 9];
+        if (ov.overrideValue === 'small') return [0, 1, 2, 3, 4];
+      }
+    }
+    if (manualNum !== null && manualNum !== undefined && manualNum >= 0 && manualNum <= 9) {
+      return [manualNum];
+    }
+    return null;
+  }
+
+  private pickBestNumberFromCandidates(
+    candidates: number[],
+    period: string,
+    gameType: string
+  ): number {
+    if (candidates.length === 1) return candidates[0];
+    const activeBets = this.liveBets.filter(
+      (b) => b.roundPeriod === period && b.status === 'pending'
+    );
+    if (activeBets.length > 0) {
+      let lowestPayout = Infinity;
+      let bestCandidates: number[] = [];
+      for (const cand of candidates) {
+        const colors: BetColor[] =
+          cand === 0 ? ['red', 'violet'] : cand === 5 ? ['green', 'violet'] : cand % 2 === 0 ? ['red'] : ['green'];
+        const size: BetSize = cand >= 5 ? 'big' : 'small';
+        let candPayout = 0;
+        for (const b of activeBets) {
+          let won = false;
+          let rate = 0;
+          if (b.betType === 'number' && parseInt(b.betValue, 10) === cand) {
+            won = true;
+            rate = this.adminSettings.numberMultiplier;
+          } else if (b.betType === 'color' && colors.includes(b.betValue as BetColor)) {
+            won = true;
+            rate =
+              b.betValue === 'violet'
+                ? this.adminSettings.colorVioletMultiplier
+                : colors.length > 1
+                ? 1.5
+                : this.adminSettings.colorGreenMultiplier;
+          } else if (b.betType === 'size' && b.betValue === size) {
+            won = true;
+            rate = this.adminSettings.sizeMultiplier;
+          }
+          if (won) candPayout += b.amount * rate;
+        }
+        if (candPayout < lowestPayout) {
+          lowestPayout = candPayout;
+          bestCandidates = [cand];
+        } else if (candPayout === lowestPayout) {
+          bestCandidates.push(cand);
+        }
+      }
+      if (bestCandidates.length > 0) {
+        const detIdx = this.getDeterministicOutcomeForPeriod(period, gameType) % bestCandidates.length;
+        return bestCandidates[detIdx];
+      }
+    }
+    const det = this.getDeterministicOutcomeForPeriod(period, gameType);
+    if (candidates.includes(det)) return det;
+    return candidates[det % candidates.length];
+  }
+
+  public getPredictedOutcome(mode?: '30s' | '1min' | '3min'): {
+    number: number;
+    colors: string[];
+    size: string;
+    activeOverride?: WinGoOverridePayload | null;
+  } {
+    const resolvedMode = (mode || this.currentRound.gameType || '30s') as '30s' | '1min' | '3min';
+    const round = mode && this.activeRoundsByMode[mode] ? this.activeRoundsByMode[mode]! : this.currentRound;
+    const overrideCandidates = this.getCandidateNumbersForOverride(
+      resolvedMode,
+      round.period,
+      round.manualOverrideNumber
+    );
+
+    let winningNum: number;
+    if (overrideCandidates && overrideCandidates.length > 0) {
+      winningNum = this.pickBestNumberFromCandidates(overrideCandidates, round.period, round.gameType);
+    } else if (this.adminSettings.zeroPlatformLossMode) {
+      winningNum = this.pickBestNumberFromCandidates([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], round.period, round.gameType);
     } else {
       winningNum = this.getDeterministicOutcomeForPeriod(round.period, round.gameType);
     }
 
-    const colors: string[] = winningNum === 0 ? ['red', 'violet'] : winningNum === 5 ? ['green', 'violet'] : winningNum % 2 === 0 ? ['red'] : ['green'];
+    const colors: string[] =
+      winningNum === 0 ? ['red', 'violet'] : winningNum === 5 ? ['green', 'violet'] : winningNum % 2 === 0 ? ['red'] : ['green'];
     const size: string = winningNum >= 5 ? 'Big' : 'Small';
 
-    return { number: winningNum, colors, size };
+    return {
+      number: winningNum,
+      colors,
+      size,
+      activeOverride: this.getWinGoOverride(resolvedMode)
+    };
   }
   public getPastRounds(gameType?: '30s' | '1min' | '3min' | '5min'): GameRound[] {
     if (gameType) {
@@ -2978,56 +3084,30 @@ class AuthoritativeStore {
       return;
     }
 
+    const overrideCandidates = this.getCandidateNumbersForOverride(
+      resolvingGameType,
+      resolvingPeriod,
+      roundToResolve.manualOverrideNumber
+    );
+
     let winningNum: number;
     if (overrideNumber !== undefined && overrideNumber >= 0 && overrideNumber <= 9) {
       winningNum = overrideNumber;
-    } else if (roundToResolve.manualOverrideNumber !== null && roundToResolve.manualOverrideNumber !== undefined) {
-      winningNum = roundToResolve.manualOverrideNumber;
+    } else if (overrideCandidates && overrideCandidates.length > 0) {
+      winningNum = this.pickBestNumberFromCandidates(overrideCandidates, resolvingPeriod, resolvingGameType);
     } else if (this.adminSettings.zeroPlatformLossMode) {
-      const activeBets = this.liveBets.filter(
-        (b) => b.roundPeriod === resolvingPeriod && b.status === 'pending'
-      );
-      if (activeBets.length > 0) {
-        let lowestPayout = Infinity;
-        let bestCandidate = Math.floor(Math.random() * 10);
-        const candidates = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-
-        for (const cand of candidates) {
-          const colors: BetColor[] = cand === 0 ? ['red', 'violet'] : cand === 5 ? ['green', 'violet'] : cand % 2 === 0 ? ['red'] : ['green'];
-          const size: BetSize = cand >= 5 ? 'big' : 'small';
-          let candPayout = 0;
-
-          for (const b of activeBets) {
-            let won = false;
-            let rate = 0;
-            if (b.betType === 'number' && parseInt(b.betValue, 10) === cand) {
-              won = true;
-              rate = this.adminSettings.numberMultiplier;
-            } else if (b.betType === 'color' && colors.includes(b.betValue as BetColor)) {
-              won = true;
-              rate = b.betValue === 'violet' ? this.adminSettings.colorVioletMultiplier : (colors.length > 1 ? 1.5 : this.adminSettings.colorGreenMultiplier);
-            } else if (b.betType === 'size' && b.betValue === size) {
-              won = true;
-              rate = this.adminSettings.sizeMultiplier;
-            }
-
-            if (won) {
-              candPayout += b.amount * rate;
-            }
-          }
-
-          if (candPayout < lowestPayout) {
-            lowestPayout = candPayout;
-            bestCandidate = cand;
-          }
-        }
-        winningNum = bestCandidate;
-      } else {
-        winningNum = this.getDeterministicOutcomeForPeriod(resolvingPeriod, resolvingGameType);
-      }
+      winningNum = this.pickBestNumberFromCandidates([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], resolvingPeriod, resolvingGameType);
     } else {
       winningNum = this.getDeterministicOutcomeForPeriod(resolvingPeriod, resolvingGameType);
     }
+
+    // Automatically clear /admin_settings/wingo_override/{gameType} once the round settles
+    if (this.wingoOverridesByMode[resolvingGameType]) {
+      delete this.wingoOverridesByMode[resolvingGameType];
+    }
+    try {
+      rtdbRemove(rtdbRef(rtdb, `admin_settings/wingo_override/${resolvingGameType}`)).catch(() => {});
+    } catch {}
 
     const winningColors: BetColor[] = winningNum === 0 ? ['red', 'violet'] : winningNum === 5 ? ['green', 'violet'] : winningNum % 2 === 0 ? ['red'] : ['green'];
     const winningSize: BetSize = winningNum >= 5 ? 'big' : 'small';
@@ -3066,6 +3146,14 @@ class AuthoritativeStore {
             referenceId: b.betId,
             description: `Win Go Payout [Period ${resolvingPeriod}] Won on ${b.betType}: ${b.betValue}`
           });
+        } else {
+          // Ensure cloud user balance is updated atomically via runTransaction even if local user object is absent
+          try {
+            rtdbRunTransaction(rtdbRef(rtdb, `users/${b.uid}/balance`), (cur) => {
+              const base = Number(cur) || 0;
+              return Math.round((base + actualPayout) * 100) / 100;
+            }).catch(() => {});
+          } catch {}
         }
       } else {
         const user = this.users[b.uid];
@@ -3091,7 +3179,8 @@ class AuthoritativeStore {
       winningColor: winningColors,
       winningSize,
       totalPayout: totalRoundPayout,
-      isResolved: true
+      isResolved: true,
+      overrideConfig: null
     };
 
     const nextRound = this.generateNewRound(resolvingGameType, roundToResolve.endTime);
@@ -3457,22 +3546,134 @@ class AuthoritativeStore {
     }
   }
 
-  public setManualOverride(number: number | null, adminId: string = 'MasterAdmin', mode?: '30s' | '1min' | '3min') {
-    const targetRound = mode && this.activeRoundsByMode[mode] ? this.activeRoundsByMode[mode]! : this.currentRound;
-    targetRound.manualOverrideNumber = number;
-    if (this.currentRound.gameType === targetRound.gameType) {
-      this.currentRound.manualOverrideNumber = number;
+  public setWinGoOverride(
+    mode: '30s' | '1min' | '3min',
+    overrideType: WinGoOverrideType,
+    overrideValue: 'green' | 'red' | 'violet' | 'big' | 'small' | number | 'auto' | null,
+    adminId: string = 'MasterAdmin'
+  ): WinGoOverridePayload {
+    const targetRound = this.activeRoundsByMode[mode] || this.currentRound;
+    const isClear = overrideType === 'auto' || overrideValue === null || overrideValue === 'auto';
+    const payload: WinGoOverridePayload = {
+      targetPeriod: targetRound.period,
+      overrideType: isClear ? 'auto' : overrideType,
+      overrideValue: isClear ? 'auto' : overrideValue!,
+      updatedAt: Date.now()
+    };
+
+    if (isClear) {
+      delete this.wingoOverridesByMode[mode];
+      targetRound.manualOverrideNumber = null;
+      targetRound.overrideConfig = null;
+      if (this.currentRound.gameType === targetRound.gameType) {
+        this.currentRound.manualOverrideNumber = null;
+        this.currentRound.overrideConfig = null;
+      }
+      try {
+        rtdbRemove(rtdbRef(rtdb, `admin_settings/wingo_override/${mode}`)).catch(() => {});
+      } catch {}
+    } else {
+      this.wingoOverridesByMode[mode] = payload;
+      targetRound.overrideConfig = payload;
+      if (overrideType === 'number' && typeof overrideValue === 'number' && overrideValue >= 0 && overrideValue <= 9) {
+        targetRound.manualOverrideNumber = overrideValue;
+      } else {
+        // Resolve the current optimal candidate for immediate preview
+        const cands = this.getCandidateNumbersForOverride(mode, targetRound.period, null);
+        targetRound.manualOverrideNumber =
+          cands && cands.length > 0 ? this.pickBestNumberFromCandidates(cands, targetRound.period, mode) : null;
+      }
+      if (this.currentRound.gameType === targetRound.gameType) {
+        this.currentRound.manualOverrideNumber = targetRound.manualOverrideNumber;
+        this.currentRound.overrideConfig = payload;
+      }
+      try {
+        rtdbSet(rtdbRef(rtdb, `admin_settings/wingo_override/${mode}`), payload).catch(() => {});
+      } catch {}
     }
+
     this.logAudit({
       actor: adminId,
       category: 'GAME_CONTROL',
       action: 'SET_ROUND_OUTCOME_OVERRIDE',
-      details: number !== null ? `Set outcome override for period ${targetRound.period} (${targetRound.gameType}) to number ${number}` : 'Cleared manual override to Auto RNG'
+      details: isClear
+        ? `Cleared Win Go (${mode}) outcome override to Auto RNG for period ${targetRound.period}`
+        : `Set Win Go (${mode}) outcome override for period ${targetRound.period}: [${overrideType.toUpperCase()} = ${String(overrideValue).toUpperCase()}]`
     });
+
     if (this.onRoundSynced) {
-      try { this.onRoundSynced(targetRound); } catch (e) { console.warn('onRoundSynced error:', e); }
+      try {
+        this.onRoundSynced(targetRound);
+      } catch (e) {
+        console.warn('onRoundSynced error:', e);
+      }
     }
     this.notify();
+    return payload;
+  }
+
+  public ingestCloudWinGoOverrides(rawMap: Record<string, any> | null | undefined) {
+    const modes: Array<'30s' | '1min' | '3min'> = ['30s', '1min', '3min'];
+    let changed = false;
+
+    for (const m of modes) {
+      const entry = rawMap && typeof rawMap === 'object' ? rawMap[m] : null;
+      const targetRound = this.activeRoundsByMode[m];
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        entry.overrideType &&
+        entry.overrideType !== 'auto' &&
+        (!entry.targetPeriod || !targetRound || entry.targetPeriod === targetRound.period)
+      ) {
+        const payload: WinGoOverridePayload = {
+          targetPeriod: String(entry.targetPeriod || targetRound?.period || ''),
+          overrideType: entry.overrideType as WinGoOverrideType,
+          overrideValue: entry.overrideValue,
+          updatedAt: Number(entry.updatedAt) || Date.now()
+        };
+        this.wingoOverridesByMode[m] = payload;
+        if (targetRound) {
+          targetRound.overrideConfig = payload;
+          if (payload.overrideType === 'number' && typeof payload.overrideValue === 'number') {
+            targetRound.manualOverrideNumber = payload.overrideValue;
+          } else {
+            const cands = this.getCandidateNumbersForOverride(m, targetRound.period, null);
+            targetRound.manualOverrideNumber =
+              cands && cands.length > 0 ? this.pickBestNumberFromCandidates(cands, targetRound.period, m) : null;
+          }
+          if (this.currentRound.gameType === m) {
+            this.currentRound.overrideConfig = targetRound.overrideConfig;
+            this.currentRound.manualOverrideNumber = targetRound.manualOverrideNumber;
+          }
+        }
+        changed = true;
+      } else if (this.wingoOverridesByMode[m]) {
+        delete this.wingoOverridesByMode[m];
+        if (targetRound) {
+          targetRound.overrideConfig = null;
+          targetRound.manualOverrideNumber = null;
+          if (this.currentRound.gameType === m) {
+            this.currentRound.overrideConfig = null;
+            this.currentRound.manualOverrideNumber = null;
+          }
+        }
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.safeNotifyListeners();
+    }
+  }
+
+  public setManualOverride(number: number | null, adminId: string = 'MasterAdmin', mode?: '30s' | '1min' | '3min') {
+    const resolvedMode = (mode || this.currentRound.gameType || '30s') as '30s' | '1min' | '3min';
+    if (number === null || number === undefined) {
+      this.setWinGoOverride(resolvedMode, 'auto', 'auto', adminId);
+    } else {
+      this.setWinGoOverride(resolvedMode, 'number', number, adminId);
+    }
   }
 
   public setOutcomeOverride(number: number | null, mode?: '30s' | '1min' | '3min') {
@@ -3485,8 +3686,96 @@ class AuthoritativeStore {
   private isSyncingAviator = false;
   private lastAviatorServerSyncAt: number = 0;
 
+  private lastAviatorRtdbMirrorAt: number = 0;
+
+  private mirrorAviatorRoundToRtdb(force: boolean = false) {
+    const now = Date.now();
+    if (!force && now - this.lastAviatorRtdbMirrorAt < 350) return;
+    this.lastAviatorRtdbMirrorAt = now;
+    const round = this.aviatorCurrentRound;
+    if (!round) return;
+    rtdbSet(rtdbRef(rtdb, 'aviator_rounds/current'), {
+      roundId: round.roundId,
+      roundNumber: round.roundNumber || this.aviatorRoundNonce,
+      status: round.status,
+      currentMultiplier:
+        round.status === 'waiting'
+          ? 1.00
+          : round.status === 'flying'
+          ? Math.max(1.00, Math.floor(this.getAviatorLiveMultiplier() * 100) / 100)
+          : round.crashMultiplier || 1.00,
+      crashMultiplier: round.crashMultiplier || 1.00,
+      lastCrashMultiplier: this.aviatorPastCrashes?.[0] || 1.50,
+      updatedAt: now
+    }).catch(() => {});
+  }
+
   private startAviatorRealtimeSync() {
     if (this.aviatorSyncTimer) return;
+
+    // Subscribe to Firebase Realtime Database /admin_settings/aviator for live <200ms Admin Control
+    try {
+      rtdbOnValue(
+        rtdbRef(rtdb, 'admin_settings/aviator'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+
+          if (typeof val.targetRtp === 'number' && val.targetRtp >= 85 && val.targetRtp <= 99) {
+            this.aviatorEngineConfig.rtpPercent = val.targetRtp;
+            this.aviatorEngineConfig.houseEdgePercent = Math.round((100 - val.targetRtp) * 100) / 100;
+          }
+          if (typeof val.maxMultiplierCap === 'number' && val.maxMultiplierCap >= 2) {
+            this.aviatorEngineConfig.maxMultiplierCap = val.maxMultiplierCap;
+          }
+          if (typeof val.streakBreakerEnabled === 'boolean') {
+            this.aviatorEngineConfig.streakBreakerEnabled = val.streakBreakerEnabled;
+          }
+          if (typeof val.gameEnabled === 'boolean') {
+            this.aviatorEngineConfig.enabled = val.gameEnabled;
+            this.aviatorEngineConfig.gameEnabled = val.gameEnabled;
+            this.aviatorEngineConfig.paused = !val.gameEnabled;
+          }
+
+          // Handle Next Crash Override from /admin_settings/aviator/nextCrashOverride
+          if (
+            val.nextCrashOverride !== null &&
+            val.nextCrashOverride !== undefined &&
+            Number.isFinite(Number(val.nextCrashOverride)) &&
+            Number(val.nextCrashOverride) >= 1.0
+          ) {
+            const cleanOverride = Math.floor(Number(val.nextCrashOverride) * 100) / 100;
+            this.aviatorEngineConfig.nextCrashOverride = cleanOverride;
+            if (this.aviatorCurrentRound && this.aviatorCurrentRound.status === 'waiting') {
+              this.aviatorCurrentRound.crashMultiplier = cleanOverride;
+              this.aviatorCurrentRound.manualCrashOverride = cleanOverride;
+            }
+          } else if (val.nextCrashOverride === null) {
+            this.aviatorEngineConfig.nextCrashOverride = null;
+          }
+
+          // Handle Emergency Force Crash Now (/admin_settings/aviator/forceCrashNow)
+          if (val.forceCrashNow === true) {
+            rtdbUpdate(rtdbRef(rtdb, 'admin_settings/aviator'), { forceCrashNow: false }).catch(() => {});
+            if (this.aviatorCurrentRound && this.aviatorCurrentRound.status === 'flying') {
+              const crashMult = Math.max(1.00, Math.floor(this.getAviatorLiveMultiplier() * 100) / 100);
+              this.aviatorCurrentRound.status = 'crashed';
+              this.aviatorCurrentRound.crashMultiplier = crashMult;
+              this.aviatorCurrentRound.currentMultiplier = crashMult;
+              this.aviatorCurrentRound.crashTime = Date.now();
+              this.aviatorLiveMultiplier = crashMult;
+              this.finishAviatorFlight(crashMult);
+              this.mirrorAviatorRoundToRtdb(true);
+            }
+          }
+
+          this.safeNotifyListeners();
+        },
+        () => {}
+      );
+    } catch {}
+
     const pollServerState = async () => {
       if (this.isSyncingAviator) return;
       this.isSyncingAviator = true;
@@ -3517,7 +3806,6 @@ class AuthoritativeStore {
 
   private tickLocalAviatorFallback() {
     const now = Date.now();
-    // If server synced recently (< 550ms ago) and waiting countdown hasn't stalled, let server drive
     const serverFresh = now - this.lastAviatorServerSyncAt < 550;
     const round = this.aviatorCurrentRound;
     if (!round) return;
@@ -3529,10 +3817,35 @@ class AuthoritativeStore {
       return;
     }
 
+    const maxCap = Math.max(2, Number(this.aviatorEngineConfig.maxMultiplierCap) || 50);
+
     if (round.status === 'waiting') {
-      // Transition to flying if local mode OR if waiting timer expired by >350ms
+      // Ensure any pending nextCrashOverride is locked into the waiting round before takeoff
+      if (
+        this.aviatorEngineConfig.nextCrashOverride !== null &&
+        this.aviatorEngineConfig.nextCrashOverride !== undefined &&
+        Number.isFinite(this.aviatorEngineConfig.nextCrashOverride) &&
+        this.aviatorEngineConfig.nextCrashOverride >= 1.0
+      ) {
+        round.crashMultiplier = Math.floor(this.aviatorEngineConfig.nextCrashOverride * 100) / 100;
+      }
+
       const waitExpired = now >= round.startTime + (serverFresh ? 350 : 0);
       if (waitExpired) {
+        // Consume nextCrashOverride on takeoff and reset to null in RTDB
+        if (this.aviatorEngineConfig.nextCrashOverride !== null && this.aviatorEngineConfig.nextCrashOverride !== undefined) {
+          round.crashMultiplier = Math.floor(this.aviatorEngineConfig.nextCrashOverride * 100) / 100;
+          this.aviatorEngineConfig.nextCrashOverride = null;
+          rtdbUpdate(rtdbRef(rtdb, 'admin_settings/aviator'), { nextCrashOverride: null }).catch(() => {});
+        } else if (
+          this.aviatorEngineConfig.streakBreakerEnabled !== false &&
+          (this.aviatorPastCrashes?.[0] || 0) > 10.0 &&
+          round.crashMultiplier >= 2.50
+        ) {
+          round.crashMultiplier = Math.floor((1.15 + Math.random() * 1.25) * 100) / 100;
+        }
+        round.crashMultiplier = Math.min(maxCap, Math.max(1.00, round.crashMultiplier));
+
         round.status = 'flying';
         round.flightStartTime = now;
         round.currentMultiplier = 1.00;
@@ -3542,6 +3855,7 @@ class AuthoritativeStore {
           round.status = 'crashed';
           round.crashTime = now;
         }
+        this.mirrorAviatorRoundToRtdb(true);
         this.safeNotifyListeners();
       }
       return;
@@ -3551,19 +3865,21 @@ class AuthoritativeStore {
       const flightStart = round.flightStartTime || now;
       const elapsedMs = Math.max(0, now - flightStart);
       const computedMult = computeMultiplierAtElapsedMs(elapsedMs);
-      const crashTarget = Math.max(1.00, round.crashMultiplier || 1.85);
+      const crashTarget = Math.min(maxCap, Math.max(1.00, round.crashMultiplier || 1.85));
 
-      if (computedMult >= crashTarget) {
-        if (!serverFresh || elapsedMs > computeFlightDurationMsForMultiplier(crashTarget) + 300) {
-          round.status = 'crashed';
-          round.currentMultiplier = crashTarget;
-          round.crashTime = now;
-          this.aviatorLiveMultiplier = crashTarget;
-          this.finishAviatorFlight(crashTarget);
-        }
+      if (computedMult >= crashTarget || computedMult >= maxCap) {
+        const finalCrashVal = Math.min(maxCap, crashTarget);
+        round.status = 'crashed';
+        round.crashMultiplier = finalCrashVal;
+        round.currentMultiplier = finalCrashVal;
+        round.crashTime = now;
+        this.aviatorLiveMultiplier = finalCrashVal;
+        this.finishAviatorFlight(finalCrashVal);
+        this.mirrorAviatorRoundToRtdb(true);
       } else {
         this.aviatorLiveMultiplier = computedMult;
         round.currentMultiplier = computedMult;
+        this.mirrorAviatorRoundToRtdb(false);
       }
       return;
     }
@@ -3573,13 +3889,14 @@ class AuthoritativeStore {
       const displayMs = (this.aviatorEngineConfig.crashDisplaySeconds || 3.5) * 1000;
       if (now - crashedAt >= displayMs) {
         const nextCrash = this.generateCrashMultiplier();
-        this.aviatorEngineConfig.nextCrashOverride = null;
         const pf = computeProvablyFairCrash(
           this.aviatorServerSeed,
           this.aviatorClientSeed,
           this.aviatorRoundNonce,
-          this.aviatorEngineConfig.rtpPercent,
-          this.aviatorEngineConfig.maxMultiplierCap
+          this.aviatorEngineConfig.rtpPercent || 95,
+          maxCap,
+          this.aviatorPastCrashes?.[0] || 1.50,
+          this.aviatorEngineConfig.streakBreakerEnabled !== false
         );
         const waitMs = (this.aviatorEngineConfig.waitDurationSeconds || 5) * 1000;
         this.aviatorCurrentRound = {
@@ -3596,6 +3913,7 @@ class AuthoritativeStore {
           bets: {}
         };
         this.aviatorLiveMultiplier = 1.00;
+        this.mirrorAviatorRoundToRtdb(true);
         this.safeNotifyListeners();
       }
     }
@@ -3641,8 +3959,32 @@ class AuthoritativeStore {
         ? now - Math.max(0, data.elapsedFlightMs)
         : incomingRound.flightStartTime || (incomingRound.status === 'flying' ? now : undefined);
 
+    const maxCap = Math.max(2, Number(this.aviatorEngineConfig.maxMultiplierCap) || 50);
+    let effectiveCrashMult = Math.min(maxCap, Math.max(1.00, incomingRound.crashMultiplier || 1.85));
+
+    // Enforce RTDB nextCrashOverride and Streak Breaker across server-synced rounds as well
+    if (
+      this.aviatorEngineConfig.nextCrashOverride !== null &&
+      this.aviatorEngineConfig.nextCrashOverride !== undefined &&
+      Number.isFinite(this.aviatorEngineConfig.nextCrashOverride) &&
+      this.aviatorEngineConfig.nextCrashOverride >= 1.0
+    ) {
+      effectiveCrashMult = Math.floor(this.aviatorEngineConfig.nextCrashOverride * 100) / 100;
+      if (incomingRound.status === 'flying' && prevStatus === 'waiting') {
+        this.aviatorEngineConfig.nextCrashOverride = null;
+        rtdbUpdate(rtdbRef(rtdb, 'admin_settings/aviator'), { nextCrashOverride: null }).catch(() => {});
+      }
+    } else if (
+      this.aviatorEngineConfig.streakBreakerEnabled !== false &&
+      (this.aviatorPastCrashes?.[0] || 0) > 10.0 &&
+      effectiveCrashMult >= 2.50
+    ) {
+      effectiveCrashMult = 2.15;
+    }
+
     this.aviatorCurrentRound = {
       ...incomingRound,
+      crashMultiplier: effectiveCrashMult,
       startTime: normalizedStartTime,
       flightStartTime: normalizedFlightStartTime,
       bets: mergedBets
@@ -3651,8 +3993,9 @@ class AuthoritativeStore {
     const rawLiveMult = data.liveMultiplier ?? incomingRound.currentMultiplier ?? 1.00;
     this.aviatorLiveMultiplier =
       typeof rawLiveMult === 'number' && Number.isFinite(rawLiveMult)
-        ? Math.max(1.00, rawLiveMult)
+        ? Math.min(effectiveCrashMult, Math.max(1.00, rawLiveMult))
         : 1.00;
+    this.mirrorAviatorRoundToRtdb(prevRoundId !== incomingRound.roundId || prevStatus !== incomingRound.status);
 
     if (Array.isArray(data.pastCrashes) && data.pastCrashes.length > 0) {
       this.aviatorPastCrashes = data.pastCrashes.filter(
@@ -5547,6 +5890,9 @@ class AuthoritativeStore {
     }
     if (s.aviatorNextCrash !== undefined) {
       this.aviatorEngineConfig.nextCrashOverride = s.aviatorNextCrash;
+    }
+    if (s.wingo_override && typeof s.wingo_override === 'object') {
+      this.ingestCloudWinGoOverrides(s.wingo_override);
     }
     if (s.wingoResultOverrides && typeof s.wingoResultOverrides === 'object') {
       (['30s', '1min', '3min'] as const).forEach((m) => {

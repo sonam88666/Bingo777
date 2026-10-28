@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { AdminGameSwitchboard } from './AdminGameSwitchboard';
 import { AdminLiveBets } from './AdminLiveBets';
+import { AdminAviatorControl } from './AdminAviatorControl';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
 import { AviatorSimulationReport } from '../../types';
@@ -168,6 +169,9 @@ export const AdminGameManagement: React.FC<AdminGameManagementProps> = ({
 
       {subTab === 'aviator_analytics' && (
         <div className="space-y-4">
+          {/* 0. Firebase Real-Time Aviator Crash Engine Control (/admin_settings/aviator) */}
+          <AdminAviatorControl adminId={adminId} />
+
           {/* 1. Real-Time Server-Authoritative Live Round Mirror & Instant Flight Controls */}
           <div className="p-4 sm:p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-2xl space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">

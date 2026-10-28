@@ -199,7 +199,20 @@ class FirebaseSyncService {
       } catch {}
     });
 
-    // Listen to /past_rounds in RTDB for instant completed round history updates
+    // Listen to /admin_settings/wingo_override in RTDB for instant (<200ms) Color, Size, and Number outcome locks
+    try {
+      const wingoOverrideUnsub = rtdbOnValue(
+        rtdbRef(rtdb, 'admin_settings/wingo_override'),
+        (snap) => {
+          const val = snap.exists() ? snap.val() : {};
+          store.ingestCloudWinGoOverrides(val || {});
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(wingoOverrideUnsub);
+    } catch {}
+
+    // Listen to /past_rounds in RTDB for instant completed round history updates (supports both /past_rounds/{period} and /past_rounds/{gameType}/{period})
     try {
       const pastRoundsUnsub = rtdbOnValue(
         rtdbRef(rtdb, 'past_rounds'),
@@ -208,8 +221,17 @@ class FirebaseSyncService {
           const val = snap.val();
           if (!val || typeof val !== 'object') return;
           Object.values(val).forEach((item: any) => {
-            if (item && typeof item === 'object' && item.period && item.isResolved) {
-              store.ingestCloudRound(item as Partial<GameRound>);
+            if (item && typeof item === 'object') {
+              if (item.period && item.isResolved) {
+                store.ingestCloudRound(item as Partial<GameRound>);
+              } else {
+                // Nested /past_rounds/{gameType}/{period}
+                Object.values(item).forEach((subItem: any) => {
+                  if (subItem && typeof subItem === 'object' && subItem.period && subItem.isResolved) {
+                    store.ingestCloudRound(subItem as Partial<GameRound>);
+                  }
+                });
+              }
             }
           });
         },
@@ -508,7 +530,7 @@ class FirebaseSyncService {
       updatedAt: Date.now()
     };
 
-    // 1. Primary RTDB real-time round sync (/wingo_rounds & /current_round & /past_rounds)
+    // 1. Primary RTDB real-time round sync (/wingo_rounds & /current_round & /past_rounds/{gameType})
     try {
       const nodeKey = round.isResolved ? `wingo_rounds/resolved_${round.gameType}` : `wingo_rounds/${round.gameType}`;
       await rtdbSet(rtdbRef(rtdb, nodeKey), payload);
@@ -516,6 +538,7 @@ class FirebaseSyncService {
         await rtdbSet(rtdbRef(rtdb, `current_round/${round.gameType}`), payload);
       } else {
         await rtdbSet(rtdbRef(rtdb, `past_rounds/${round.period}`), payload);
+        await rtdbSet(rtdbRef(rtdb, `past_rounds/${round.gameType}/${round.period}`), payload);
       }
     } catch {}
 
@@ -907,20 +930,38 @@ class FirebaseSyncService {
         if (pastSnap.exists()) {
           const val = pastSnap.val();
           if (val && typeof val === 'object') {
-            const entries = Object.entries(val) as [string, any][];
-            // Sort by endTime / period descending so the newest 30 completed periods are retained
-            entries.sort((a, b) => {
+            const modeKeys = new Set(['30s', '1min', '3min', '5min']);
+            const flatEntries = Object.entries(val).filter(([k]) => !modeKeys.has(k)) as [string, any][];
+            flatEntries.sort((a, b) => {
               const timeB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
               const timeA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
               if (timeB !== timeA) return timeB - timeA;
               return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
             });
 
-            if (entries.length > 30) {
-              const toDelete = entries.slice(30);
+            if (flatEntries.length > 30) {
+              const toDelete = flatEntries.slice(30);
               for (const [roundKey] of toDelete) {
                 await rtdbRemove(rtdbRef(rtdb, `past_rounds/${roundKey}`)).catch(() => {});
                 purgedRounds++;
+              }
+            }
+
+            for (const mk of modeKeys) {
+              if (val[mk] && typeof val[mk] === 'object') {
+                const subEntries = Object.entries(val[mk]) as [string, any][];
+                subEntries.sort((a, b) => {
+                  const timeB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
+                  const timeA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
+                  if (timeB !== timeA) return timeB - timeA;
+                  return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
+                });
+                if (subEntries.length > 30) {
+                  for (const [subKey] of subEntries.slice(30)) {
+                    await rtdbRemove(rtdbRef(rtdb, `past_rounds/${mk}/${subKey}`)).catch(() => {});
+                    purgedRounds++;
+                  }
+                }
               }
             }
           }
