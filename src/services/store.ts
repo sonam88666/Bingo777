@@ -2271,9 +2271,12 @@ class AuthoritativeStore {
     metadata?: Record<string, unknown>;
     transactionId?: string;
   }): { success: boolean; error?: string; transaction?: WalletTransaction } {
-    const user = this.users[params.uid];
+    let user = this.users[params.uid] || this.getUser(params.uid);
     if (!user) {
       return { success: false, error: 'User does not exist or has been deactivated' };
+    }
+    if (!this.users[params.uid]) {
+      this.users[params.uid] = user;
     }
     if (this.deletedUserUids.has(params.uid)) {
       return { success: false, error: 'Cannot process transaction for a deleted account' };
@@ -2307,7 +2310,7 @@ class AuthoritativeStore {
     const nowTs = Date.now();
     if (params.type !== 'admin_adjustment') {
       const recentList = (this.recentTxTimestampsByUid[params.uid] || []).filter((ts) => nowTs - ts < 2000);
-      if (recentList.length >= 8) {
+      if (recentList.length >= 25) {
         this.logAudit({
           actor: params.uid,
           category: 'BALANCE',
@@ -2325,7 +2328,7 @@ class AuthoritativeStore {
     // Anti-Bot Rate Limiting on rapid automated bet placement bursts
     if (params.type === 'bet_placement' && params.category === 'debit') {
       const prevBetTs = this.lastBetActionAtByUid[params.uid] || 0;
-      if (nowTs - prevBetTs < 250) {
+      if (nowTs - prevBetTs < 50) {
         return { success: false, error: 'Anti-bot protection: Please wait a moment between bets.' };
       }
       this.lastBetActionAtByUid[params.uid] = nowTs;
@@ -2387,12 +2390,20 @@ class AuthoritativeStore {
         )
       : undefined;
 
-    let resolvedLiveBalance =
-      typeof user.balance === 'number' && Number.isFinite(user.balance) && user.balance > 0
-        ? user.balance
-        : siblingUser && typeof siblingUser.balance === 'number' && Number.isFinite(siblingUser.balance) && siblingUser.balance > 0
-        ? siblingUser.balance
+    const knownLiveBal =
+      typeof params.metadata?.knownLiveBalance === 'number' &&
+      Number.isFinite(params.metadata.knownLiveBalance) &&
+      params.metadata.knownLiveBalance > 0
+        ? params.metadata.knownLiveBalance
         : 0;
+
+    let resolvedLiveBalance = Math.max(
+      typeof user.balance === 'number' && Number.isFinite(user.balance) && user.balance > 0 ? user.balance : 0,
+      siblingUser && typeof siblingUser.balance === 'number' && Number.isFinite(siblingUser.balance) && siblingUser.balance > 0
+        ? siblingUser.balance
+        : 0,
+      knownLiveBal
+    );
 
     if (resolvedLiveBalance < cleanAmount && params.category === 'debit') {
       const ledgerBal = this.computeVerifiedLedgerBalance(params.uid);
@@ -2668,24 +2679,159 @@ class AuthoritativeStore {
   }
 
   // --- MULTI-GAME SECURE BET & PAYOUT HELPERS ---
-  public recordGameBet(uid: string, amount: number, gameTitle: string, roundId?: string): { success: boolean; error?: string; transaction?: WalletTransaction } {
+  public recordGameBet(
+    uid: string,
+    amount: number,
+    gameTitle: string,
+    roundId?: string,
+    knownLiveBalance?: number
+  ): { success: boolean; error?: string; transaction?: WalletTransaction } {
     const res = this.executeWalletTransaction({
       uid,
       type: 'bet_placement',
       category: 'debit',
       amount,
       referenceId: roundId,
-      description: `Stake on ${gameTitle}${roundId ? ' (' + roundId + ')' : ''}`
+      description: `Stake on ${gameTitle}${roundId ? ' (' + roundId + ')' : ''}`,
+      metadata: knownLiveBalance !== undefined ? { knownLiveBalance } : undefined
     });
     if (res.success) {
+      const u = this.users[uid];
+      if (u) u.totalBetsCount = (u.totalBetsCount || 0) + 1;
       this.recordBettingTurnover(uid, amount);
     }
     return res;
   }
 
+  public placeDragonTigerBet(params: {
+    uid: string;
+    username?: string;
+    roundPeriod: string;
+    side: 'dragon' | 'tie' | 'tiger';
+    amount: number;
+    knownLiveBalance?: number;
+  }): { success: boolean; error?: string; bet?: LiveBet; transaction?: WalletTransaction } {
+    if (this.isMaintenanceActiveForUser(params.uid)) {
+      return {
+        success: false,
+        error: this.adminSettings.maintenanceMessage || 'Platform is in Maintenance Mode. Betting is temporarily paused by Master Admin.'
+      };
+    }
+    if (!this.isFeatureEnabled('dragon_tiger')) {
+      return {
+        success: false,
+        error: 'Dragon vs Tiger 3D is currently disabled by Master Admin.'
+      };
+    }
+    const user = this.users[params.uid] || this.getUser(params.uid);
+    if (!user) {
+      return { success: false, error: 'User account not found' };
+    }
+    if (!this.users[params.uid]) {
+      this.users[params.uid] = user;
+    }
+
+    const cleanAmount = Math.round(Number(params.amount) * 100) / 100;
+    if (!Number.isFinite(cleanAmount) || cleanAmount < 10) {
+      return { success: false, error: 'Minimum bet amount in Dragon Tiger is ₹10' };
+    }
+
+    const betId = `dt_bet_${params.roundPeriod}_${params.side}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const tx = this.executeWalletTransaction({
+      uid: params.uid,
+      type: 'bet_placement',
+      category: 'debit',
+      amount: cleanAmount,
+      referenceId: betId,
+      description: `Dragon Tiger 3D [${params.side.toUpperCase()}] (Period ${params.roundPeriod})`,
+      metadata: {
+        gameId: 'dragon_tiger',
+        gameType: 'dragon_tiger',
+        side: params.side,
+        roundPeriod: params.roundPeriod,
+        knownLiveBalance: params.knownLiveBalance
+      }
+    });
+
+    if (!tx.success) {
+      return { success: false, error: tx.error || 'Failed to place Dragon Tiger bet' };
+    }
+
+    user.totalBetsCount = (user.totalBetsCount || 0) + 1;
+    this.recordBettingTurnover(params.uid, cleanAmount);
+
+    const multiplier = params.side === 'tie' ? 9.0 : 1.98;
+    const newBet: LiveBet = {
+      betId,
+      uid: params.uid,
+      username: params.username || user.username || `Player_${params.uid.slice(-4)}`,
+      gameId: 'dragon_tiger',
+      roundPeriod: params.roundPeriod,
+      gameType: 'dragon_tiger',
+      betType: 'dragon_tiger',
+      betValue: params.side,
+      amount: cleanAmount,
+      multiplier,
+      potentialPayout: Math.round(cleanAmount * multiplier * 100) / 100,
+      status: 'pending',
+      actualPayout: 0,
+      timestamp: Date.now()
+    };
+
+    this.liveBets.unshift(newBet);
+    if (this.onLiveBetSaved) {
+      try {
+        this.onLiveBetSaved(newBet);
+      } catch (e) {
+        console.warn('onLiveBetSaved error:', e);
+      }
+    }
+    this.notify();
+    return { success: true, bet: newBet, transaction: tx.transaction };
+  }
+
+  public settleDragonTigerRound(roundPeriod: string, winner: 'dragon' | 'tie' | 'tiger'): void {
+    let changed = false;
+    this.liveBets = this.liveBets.map((b) => {
+      if (
+        (b.gameType === 'dragon_tiger' || b.gameId === 'dragon_tiger') &&
+        b.roundPeriod === roundPeriod &&
+        b.status === 'pending'
+      ) {
+        const isWin = b.betValue === winner;
+        const isTiePush = winner === 'tie' && (b.betValue === 'dragon' || b.betValue === 'tiger');
+        const mult = b.betValue === 'tie' ? 9.0 : 1.98;
+        const actualPayout = isWin
+          ? Math.round(b.amount * mult * 100) / 100
+          : isTiePush
+          ? Math.round(b.amount * 0.5 * 100) / 100
+          : 0;
+        const updated: LiveBet = {
+          ...b,
+          status: isWin ? 'won' : 'lost',
+          actualPayout
+        };
+        if (this.onLiveBetSaved) {
+          try {
+            this.onLiveBetSaved(updated);
+          } catch {}
+        }
+        changed = true;
+        return updated;
+      }
+      return b;
+    });
+    if (changed) {
+      this.notify();
+    }
+  }
+
   public recordGamePayout(uid: string, amount: number, gameTitle: string, roundId?: string): { success: boolean; error?: string; transaction?: WalletTransaction } {
-    const user = this.users[uid];
+    const user = this.users[uid] || this.getUser(uid);
     if (!user) return { success: false, error: 'User not found' };
+    if (!this.users[uid]) {
+      this.users[uid] = user;
+    }
 
     const res = this.executeWalletTransaction({
       uid,

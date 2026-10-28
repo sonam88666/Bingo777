@@ -66,9 +66,9 @@ export interface LiveBet {
   username: string;
   gameId?: GameId;
   roundPeriod: string;
-  gameType: '30s' | '1min' | '3min' | '5min';
-  betType: 'color' | 'number' | 'size' | 'k3_sum' | 'k3_dice' | '5d_digit' | 'crash_multiplier';
-  betValue: string; // 'green', 'violet', 'red', '0'...'9', 'big', 'small'
+  gameType: '30s' | '1min' | '3min' | '5min' | 'dragon_tiger';
+  betType: 'color' | 'number' | 'size' | 'k3_sum' | 'k3_dice' | '5d_digit' | 'crash_multiplier' | 'dragon_tiger';
+  betValue: string; // 'green', 'violet', 'red', '0'...'9', 'big', 'small', 'dragon', 'tie', 'tiger'
   amount: number;
   multiplier: number;
   potentialPayout: number;

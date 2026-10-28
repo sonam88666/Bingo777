@@ -361,9 +361,10 @@ class FirebaseSyncService {
                 betId: raw.betId || key,
                 uid: raw.uid,
                 username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
+                gameId: raw.gameId || (raw.gameType === 'dragon_tiger' ? 'dragon_tiger' : undefined),
                 roundPeriod: raw.roundPeriod,
                 gameType: raw.gameType || '30s',
-                betType: raw.betType,
+                betType: raw.betType || (raw.gameType === 'dragon_tiger' ? 'dragon_tiger' : 'color'),
                 betValue: String(raw.betValue),
                 amount: Number(raw.amount) || 0,
                 multiplier: Number(raw.multiplier) || 2,
@@ -376,7 +377,10 @@ class FirebaseSyncService {
               if (existingIdx === -1) {
                 store.liveBets.unshift(bet);
                 changed = true;
-              } else if (store.liveBets[existingIdx].status !== bet.status) {
+              } else if (
+                store.liveBets[existingIdx].status !== bet.status ||
+                store.liveBets[existingIdx].actualPayout !== bet.actualPayout
+              ) {
                 store.liveBets[existingIdx] = { ...store.liveBets[existingIdx], ...bet };
                 changed = true;
               }
@@ -698,9 +702,10 @@ class FirebaseSyncService {
                   betId: raw.betId || change.doc.id,
                   uid: raw.uid,
                   username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
+                  gameId: raw.gameId || (raw.gameType === 'dragon_tiger' ? 'dragon_tiger' : undefined),
                   roundPeriod: raw.roundPeriod,
                   gameType: raw.gameType || '30s',
-                  betType: raw.betType,
+                  betType: raw.betType || (raw.gameType === 'dragon_tiger' ? 'dragon_tiger' : 'color'),
                   betValue: String(raw.betValue),
                   amount: Number(raw.amount) || 0,
                   multiplier: Number(raw.multiplier) || 2,
@@ -713,7 +718,10 @@ class FirebaseSyncService {
                 if (existingIdx === -1) {
                   store.liveBets.unshift(bet);
                   changed = true;
-                } else if (store.liveBets[existingIdx].status !== bet.status) {
+                } else if (
+                  store.liveBets[existingIdx].status !== bet.status ||
+                  store.liveBets[existingIdx].actualPayout !== bet.actualPayout
+                ) {
                   store.liveBets[existingIdx] = { ...store.liveBets[existingIdx], ...bet };
                   changed = true;
                 }
@@ -1467,6 +1475,7 @@ class FirebaseSyncService {
       betId: bet.betId,
       uid: bet.uid,
       username: bet.username,
+      gameId: bet.gameId || (bet.gameType === 'dragon_tiger' ? 'dragon_tiger' : 'wingo'),
       roundPeriod: bet.roundPeriod,
       gameType: bet.gameType,
       betType: bet.betType,

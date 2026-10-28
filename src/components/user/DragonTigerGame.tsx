@@ -15,8 +15,17 @@ import {
   X
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { UserRecord } from '../../types';
+import { UserRecord, LiveBet } from '../../types';
 import { store } from '../../services/store';
+import { firebaseSync } from '../../services/firebaseSync';
+import {
+  rtdb,
+  rtdbRef,
+  rtdbSet,
+  rtdbGet,
+  rtdbOnValue,
+  rtdbRunTransaction
+} from '../../firebase';
 import { soundFx } from '../../services/soundFx';
 import { useToast } from '../common/Toast';
 
@@ -553,15 +562,99 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
   onOpenAuth
 }) => {
   const { showToast } = useToast();
+  const [, setStoreTick] = useState<number>(0);
+
+  // Resolve active user & live wallet balance from store + RTDB users/{uid}/balance
+  const activeSessionUid = user?.uid || store.getActiveSessionUid() || '';
+  const storeUser =
+    (activeSessionUid ? store.getUser(activeSessionUid) : undefined) ||
+    (user?.phone ? store.findUserByPhone(user.phone) : undefined) ||
+    user;
+  const resolvedUid = storeUser?.uid || user?.uid || '';
+
+  const [rtdbLiveBalance, setRtdbLiveBalance] = useState<number | null>(null);
+
+  useEffect(() => {
+    const unsubStore = store.subscribe(() => {
+      setStoreTick((t) => t + 1);
+    });
+    return unsubStore;
+  }, []);
+
+  useEffect(() => {
+    if (!resolvedUid) {
+      setRtdbLiveBalance(null);
+      return;
+    }
+    const balRef = rtdbRef(rtdb, `users/${resolvedUid}/balance`);
+    const unsubBal = rtdbOnValue(
+      balRef,
+      (snap) => {
+        if (snap.exists()) {
+          const val = Number(snap.val());
+          if (Number.isFinite(val) && val >= 0) {
+            setRtdbLiveBalance(Math.round(val * 100) / 100);
+            const localRec = store.getUser(resolvedUid);
+            if (localRec && val > 0 && localRec.balance === 0) {
+              store.updateUserFromFirestore({ uid: resolvedUid, balance: val });
+            }
+          }
+        }
+      },
+      () => {}
+    );
+    return () => unsubBal();
+  }, [resolvedUid]);
+
+  const liveWalletBalance = Math.max(
+    0,
+    Math.round(
+      Math.max(
+        typeof rtdbLiveBalance === 'number' && Number.isFinite(rtdbLiveBalance) && rtdbLiveBalance > 0
+          ? rtdbLiveBalance
+          : 0,
+        typeof storeUser?.balance === 'number' && Number.isFinite(storeUser.balance) && storeUser.balance > 0
+          ? storeUser.balance
+          : 0,
+        typeof user?.balance === 'number' && Number.isFinite(user.balance) && user.balance > 0
+          ? user.balance
+          : 0,
+        typeof rtdbLiveBalance === 'number' && Number.isFinite(rtdbLiveBalance)
+          ? rtdbLiveBalance
+          : typeof storeUser?.balance === 'number' && Number.isFinite(storeUser.balance)
+          ? storeUser.balance
+          : typeof user?.balance === 'number' && Number.isFinite(user.balance)
+          ? user.balance
+          : resolvedUid
+          ? store.computeVerifiedLedgerBalance(resolvedUid)
+          : 0
+      ) * 100
+    ) / 100
+  );
 
   // Round & 3D Table State
   const [roundPeriod, setRoundPeriod] = useState<string>(() => `DT${Date.now().toString().slice(-6)}`);
   const [countdown, setCountdown] = useState<number>(15);
   const [isDealing, setIsDealing] = useState<boolean>(false);
   const [revealStage, setRevealStage] = useState<'betting' | 'dragon_revealed' | 'tiger_revealed' | 'result'>('betting');
+  const roundStatus: 'betting_open' | 'locked' | 'dealing' = isDealing
+    ? 'dealing'
+    : countdown <= 2
+    ? 'locked'
+    : 'betting_open';
+
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => soundFx.isSfxActive());
   const [showRulesModal, setShowRulesModal] = useState<boolean>(false);
   const [showVictoryPopup, setShowVictoryPopup] = useState<boolean>(false);
+
+  // Dragon Tiger Betting Modal State
+  const [betModalSide, setBetModalSide] = useState<BetSide | null>(null);
+  const [betModalBaseAmount, setBetModalBaseAmount] = useState<number>(100);
+  const [betModalMultiplier, setBetModalMultiplier] = useState<number>(1);
+  const [betModalCustomInput, setBetModalCustomInput] = useState<string>('');
+  const [quickOneTapMode, setQuickOneTapMode] = useState<boolean>(false);
+  const [isSubmittingBet, setIsSubmittingBet] = useState<boolean>(false);
+
   const [lastRoundResult, setLastRoundResult] = useState<{
     period: string;
     status: 'win' | 'loss';
@@ -624,8 +717,10 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
   tableTotalsRef.current = tableTotals;
   const roundPeriodRef = useRef(roundPeriod);
   roundPeriodRef.current = roundPeriod;
-  const userRef = useRef(user);
-  userRef.current = user;
+  const userRef = useRef(storeUser || user);
+  userRef.current = storeUser || user;
+  const liveBalanceRef = useRef(liveWalletBalance);
+  liveBalanceRef.current = liveWalletBalance;
   const isDealingRef = useRef<boolean>(false);
   const dealTimersRef = useRef<number[]>([]);
 
@@ -801,26 +896,50 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
         ...prev.slice(0, 23)
       ]);
 
+      // Settle pending Dragon Tiger bets in /live_bets and store
+      store.settleDragonTigerRound(currentPeriod, winner);
+
       // Calculate verified payout
       let totalWon = 0;
-      const tieRefund = 0;
+      let tieRefund = 0;
 
       if (winner === 'dragon' && activeBets.dragon > 0) {
         totalWon += Math.round(activeBets.dragon * 1.98 * 100) / 100;
       } else if (winner === 'tiger' && activeBets.tiger > 0) {
         totalWon += Math.round(activeBets.tiger * 1.98 * 100) / 100;
-      } else if (winner === 'tie' && activeBets.tie > 0) {
-        totalWon += Math.round(activeBets.tie * 9.0 * 100) / 100;
+      } else if (winner === 'tie') {
+        if (activeBets.tie > 0) {
+          totalWon += Math.round(activeBets.tie * 9.0 * 100) / 100;
+        }
+        if (activeBets.dragon > 0 || activeBets.tiger > 0) {
+          tieRefund = Math.round((activeBets.dragon + activeBets.tiger) * 0.5 * 100) / 100;
+          totalWon += tieRefund;
+        }
       }
 
       if (totalStakedThisRound > 0 && currentUser) {
         if (totalWon > 0) {
-          store.recordGamePayout(
+          const payoutRes = store.recordGamePayout(
             currentUser.uid,
             totalWon,
             'Dragon Tiger 3D',
             `dt_win_${currentPeriod}`
           );
+          // Atomically sync credit to users/{uid}/balance in RTDB via runTransaction
+          rtdbRunTransaction(rtdbRef(rtdb, `users/${currentUser.uid}/balance`), (curr) => {
+            const base =
+              typeof curr === 'number' && Number.isFinite(curr)
+                ? curr
+                : payoutRes.transaction?.balanceBefore ?? liveBalanceRef.current;
+            return Math.max(0, Math.round((base + totalWon) * 100) / 100);
+          })
+            .then((txRes) => {
+              const newVal = Number(txRes.snapshot.val());
+              if (Number.isFinite(newVal) && newVal >= 0) {
+                setRtdbLiveBalance(Math.round(newVal * 100) / 100);
+              }
+            })
+            .catch(() => {});
         }
 
         const netProfit = Math.round((totalWon - totalStakedThisRound) * 100) / 100;
@@ -832,6 +951,12 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
           showToast(
             `👑 YOU WON ₹${totalWon.toLocaleString('en-IN')} on ${winner.toUpperCase()}!`,
             'success'
+          );
+        } else if (tieRefund > 0) {
+          soundFx.playWinFanfare();
+          showToast(
+            `⚖️ TIE DEAL · 50% Refunded (+₹${tieRefund.toLocaleString('en-IN')})`,
+            'info'
           );
         } else {
           soundFx.play3dDefeatTrombone();
@@ -888,53 +1013,182 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
       soundFx.playCountdownTick();
     }
     if (countdown === 0) {
+      setBetModalSide(null);
       handleDealCards();
     }
   }, [countdown, isDealing, handleDealCards]);
 
-  // Place a 3D Chip Bet on Dragon, Tie, or Tiger
-  const handlePlaceBet = (side: BetSide, customAmount?: number) => {
-    if (!user) {
+  // Core Atomic Bet Execution Engine for Dragon Tiger
+  const executeDragonTigerBet = async (side: BetSide, rawWager: number, closeModalOnSuccess = false): Promise<boolean> => {
+    const activeUser = storeUser || user;
+    if (!activeUser || !resolvedUid) {
+      onOpenAuth();
+      return false;
+    }
+
+    // 3. Betting Timer Lock check against roundStatus ('betting_open')
+    if (isDealing || roundStatus === 'dealing') {
+      showToast('Cards are currently being dealt! Please wait for the next round to place your bet.', 'error');
+      return false;
+    }
+    if (roundStatus !== 'betting_open' || countdown <= 2) {
+      showToast(`Round #${roundPeriod} is locked for final countdown (${countdown}s)! Please wait for the next deal.`, 'error');
+      return false;
+    }
+
+    const wager = Math.round(Number(rawWager) * 100) / 100;
+    if (!Number.isFinite(wager) || wager < 10) {
+      showToast('Minimum bet amount in Dragon Tiger is ₹10.', 'error');
+      return false;
+    }
+
+    // 1. Live Balance Validation directly against active user state AND Realtime Database users/{uid}/balance
+    let verifiedBalance = liveWalletBalance;
+    if (verifiedBalance < wager) {
+      try {
+        const snap = await rtdbGet(rtdbRef(rtdb, `users/${resolvedUid}/balance`));
+        if (snap.exists()) {
+          const cloudBal = Number(snap.val());
+          if (Number.isFinite(cloudBal) && cloudBal > verifiedBalance) {
+            verifiedBalance = Math.round(cloudBal * 100) / 100;
+            setRtdbLiveBalance(verifiedBalance);
+            store.updateUserFromFirestore({ uid: resolvedUid, balance: verifiedBalance });
+          }
+        }
+      } catch {}
+    }
+
+    if (verifiedBalance < wager) {
+      showToast(
+        `Insufficient wallet balance! Available: ₹${verifiedBalance.toFixed(2)}, Required: ₹${wager.toFixed(2)}`,
+        'error'
+      );
+      onOpenDeposit();
+      return false;
+    }
+
+    // Sync store user balance before atomic deduction so local store never sees stale 0
+    const existingStoreUser = store.getUser(resolvedUid);
+    if (existingStoreUser && existingStoreUser.balance < verifiedBalance) {
+      store.updateUserFromFirestore({ uid: resolvedUid, balance: verifiedBalance });
+    }
+
+    setIsSubmittingBet(true);
+    try {
+      // 2. Atomic Deduction on users/{uid}/balance using runTransaction & /live_bets logging with gameType: 'dragon_tiger'
+      const atomicRes = await firebaseSync.verifyAndSyncBetDeductionAtomically(
+        resolvedUid,
+        wager,
+        verifiedBalance
+      );
+
+      if (!atomicRes.committed) {
+        showToast(
+          `Insufficient wallet balance! Available: ₹${verifiedBalance.toFixed(2)}, Required: ₹${wager.toFixed(2)}`,
+          'error'
+        );
+        return false;
+      }
+
+      const betRes = store.placeDragonTigerBet({
+        uid: resolvedUid,
+        username: activeUser.username,
+        roundPeriod,
+        side,
+        amount: wager,
+        knownLiveBalance: verifiedBalance
+      });
+
+      if (!betRes.success) {
+        showToast(betRes.error || 'Could not place Dragon Tiger bet', 'error');
+        return false;
+      }
+
+      // Ensure live RTDB balance state and /live_bets record are immediately updated
+      setRtdbLiveBalance(atomicRes.balanceAfter);
+
+      if (betRes.bet) {
+        const liveBetPayload: LiveBet = {
+          ...betRes.bet,
+          gameId: 'dragon_tiger',
+          gameType: 'dragon_tiger',
+          betType: 'dragon_tiger',
+          betValue: side
+        };
+        await rtdbSet(rtdbRef(rtdb, `live_bets/${liveBetPayload.betId}`), {
+          ...liveBetPayload,
+          updatedAt: Date.now()
+        }).catch(() => {});
+      }
+
+      soundFx.playChipSound();
+      setUserBets((prev) => ({
+        ...prev,
+        [side]: prev[side] + wager
+      }));
+      setTableTotals((prev) => ({
+        ...prev,
+        [side]: prev[side] + wager
+      }));
+
+      showToast(
+        `Bet placed: ₹${wager.toLocaleString('en-IN')} on ${side.toUpperCase()} (#${roundPeriod})`,
+        'success'
+      );
+
+      if (closeModalOnSuccess) {
+        setBetModalSide(null);
+      }
+      return true;
+    } finally {
+      setIsSubmittingBet(false);
+    }
+  };
+
+  // Handle clicking Dragon, Tie, or Tiger Zone
+  const handleSelectZone = (side: BetSide) => {
+    if (!storeUser && !user) {
       onOpenAuth();
       return;
     }
-    if (isDealing || countdown <= 3) {
-      showToast('Betting is locked for this deal! Wait for next round.', 'info');
+    if (isDealing || roundStatus === 'dealing') {
+      showToast('Cards are currently being dealt! Please wait for the next round to place your bet.', 'error');
       return;
     }
-    const wager = customAmount ?? selectedChip;
-    if (user.balance < wager) {
-      showToast(`Insufficient wallet balance! Required: ₹${wager}`, 'error');
-      onOpenDeposit();
-      return;
-    }
-
-    const betRefId = `dt_bet_${roundPeriod}_${side}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const betRes = store.recordGameBet(user.uid, wager, `Dragon Tiger 3D [${side.toUpperCase()}]`, betRefId);
-    if (!betRes.success) {
-      showToast(betRes.error || 'Please wait a moment between bets', 'error');
+    if (roundStatus !== 'betting_open' || countdown <= 2) {
+      showToast(`Round #${roundPeriod} is locked for final countdown (${countdown}s)! Wait for next deal.`, 'error');
       return;
     }
 
+    if (quickOneTapMode) {
+      void executeDragonTigerBet(side, selectedChip, false);
+      return;
+    }
+
+    setBetModalSide(side);
+    setBetModalBaseAmount(selectedChip);
+    setBetModalMultiplier(1);
+    setBetModalCustomInput('');
     soundFx.playChipSound();
-    setUserBets((prev) => ({
-      ...prev,
-      [side]: prev[side] + wager
-    }));
-    setTableTotals((prev) => ({
-      ...prev,
-      [side]: prev[side] + wager
-    }));
+  };
+
+  // Place a 3D Chip Bet directly on Dragon, Tie, or Tiger
+  const handlePlaceBet = (side: BetSide, customAmount?: number) => {
+    void executeDragonTigerBet(side, customAmount ?? selectedChip, false);
   };
 
   // Repeat Previous Round Bets
-  const handleRepeatLastBet = () => {
-    if (!user) {
+  const handleRepeatLastBet = async () => {
+    if (!storeUser && !user) {
       onOpenAuth();
       return;
     }
-    if (isDealing || countdown <= 3) {
-      showToast('Betting is locked for this deal!', 'info');
+    if (isDealing || roundStatus === 'dealing') {
+      showToast('Cards are currently being dealt! Wait for next round to repeat bet.', 'error');
+      return;
+    }
+    if (roundStatus !== 'betting_open' || countdown <= 2) {
+      showToast(`Round #${roundPeriod} is locked (${countdown}s)! Wait for next deal.`, 'error');
       return;
     }
     const totalPrev = lastPlacedBets.dragon + lastPlacedBets.tie + lastPlacedBets.tiger;
@@ -942,73 +1196,58 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
       showToast('No previous round bet to repeat.', 'info');
       return;
     }
-    if (user.balance < totalPrev) {
-      showToast(`Insufficient balance to repeat ₹${totalPrev} bet!`, 'error');
+    if (liveWalletBalance < totalPrev) {
+      showToast(
+        `Insufficient wallet balance to repeat ₹${totalPrev}! Available: ₹${liveWalletBalance.toFixed(2)}`,
+        'error'
+      );
       onOpenDeposit();
       return;
     }
 
-    const betRefId = `dt_rep_${roundPeriod}_${Date.now()}`;
-    const res = store.recordGameBet(user.uid, totalPrev, 'Dragon Tiger 3D [REPEAT BET]', betRefId);
-    if (!res.success) {
-      showToast(res.error || 'Could not repeat bet', 'error');
-      return;
+    const sides: BetSide[] = ['dragon', 'tie', 'tiger'];
+    for (const s of sides) {
+      if (lastPlacedBets[s] > 0) {
+        await executeDragonTigerBet(s, lastPlacedBets[s], false);
+      }
     }
-
-    soundFx.playChipSound();
-    setUserBets((prev) => ({
-      dragon: prev.dragon + lastPlacedBets.dragon,
-      tie: prev.tie + lastPlacedBets.tie,
-      tiger: prev.tiger + lastPlacedBets.tiger
-    }));
-    setTableTotals((prev) => ({
-      dragon: prev.dragon + lastPlacedBets.dragon,
-      tie: prev.tie + lastPlacedBets.tie,
-      tiger: prev.tiger + lastPlacedBets.tiger
-    }));
-    showToast(`Repeated ₹${totalPrev} bet across table!`, 'success');
   };
 
   // 2X Double Current Bets on Table
-  const handleDoubleCurrentBet = () => {
-    if (!user) {
+  const handleDoubleCurrentBet = async () => {
+    if (!storeUser && !user) {
       onOpenAuth();
       return;
     }
-    if (isDealing || countdown <= 3) {
-      showToast('Betting is locked for this deal!', 'info');
+    if (isDealing || roundStatus === 'dealing') {
+      showToast('Cards are currently being dealt! Cannot double bet during card deal.', 'error');
+      return;
+    }
+    if (roundStatus !== 'betting_open' || countdown <= 2) {
+      showToast(`Round #${roundPeriod} is locked (${countdown}s)! Cannot double bet now.`, 'error');
       return;
     }
     const currentTotal = userBets.dragon + userBets.tie + userBets.tiger;
     if (currentTotal <= 0) {
-      showToast('Place a chip on the table first to double (2X)!', 'info');
+      showToast('Place a bet on Dragon, Tie, or Tiger first to double (2X)!', 'info');
       return;
     }
-    if (user.balance < currentTotal) {
-      showToast(`Insufficient balance to double ₹${currentTotal}!`, 'error');
+    if (liveWalletBalance < currentTotal) {
+      showToast(
+        `Insufficient wallet balance to double ₹${currentTotal}! Available: ₹${liveWalletBalance.toFixed(2)}`,
+        'error'
+      );
       onOpenDeposit();
       return;
     }
 
-    const betRefId = `dt_2x_${roundPeriod}_${Date.now()}`;
-    const res = store.recordGameBet(user.uid, currentTotal, 'Dragon Tiger 3D [2X DOUBLE]', betRefId);
-    if (!res.success) {
-      showToast(res.error || 'Could not double bet', 'error');
-      return;
+    const snapshotBets = { ...userBets };
+    const sides: BetSide[] = ['dragon', 'tie', 'tiger'];
+    for (const s of sides) {
+      if (snapshotBets[s] > 0) {
+        await executeDragonTigerBet(s, snapshotBets[s], false);
+      }
     }
-
-    soundFx.playChipSound();
-    setUserBets((prev) => ({
-      dragon: prev.dragon * 2,
-      tie: prev.tie * 2,
-      tiger: prev.tiger * 2
-    }));
-    setTableTotals((prev) => ({
-      dragon: prev.dragon + userBets.dragon,
-      tie: prev.tie + userBets.tie,
-      tiger: prev.tiger + userBets.tiger
-    }));
-    showToast(`Doubled your table bet to ₹${currentTotal * 2}!`, 'success');
   };
 
   const totalUserBet = userBets.dragon + userBets.tie + userBets.tiger;
@@ -1056,7 +1295,7 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
           >
             <Coins className="w-3.5 h-3.5 text-amber-400" />
             <span className="text-xs font-mono font-black text-amber-300 tabular-nums">
-              ₹{user ? user.balance.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '0'}
+              ₹{liveWalletBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </button>
 
@@ -1252,15 +1491,14 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
         {/* 1. DRAGON 3D BET ZONE */}
         <button
           type="button"
-          onClick={() => handlePlaceBet('dragon')}
-          disabled={isDealing || countdown <= 3}
+          onClick={() => handleSelectZone('dragon')}
           className={`relative rounded-2xl p-2.5 sm:p-3 border-2 transition-all active:translate-y-0.5 flex flex-col items-center justify-between min-h-[124px] overflow-hidden ${
             roundWinner === 'dragon'
               ? 'bg-gradient-to-b from-red-600 via-red-800 to-red-950 border-yellow-300 ring-2 ring-red-400 shadow-[0_6px_0_#450A0A,0_0_25px_rgba(239,68,68,0.6)]'
               : userBets.dragon > 0
               ? 'bg-gradient-to-b from-red-800/90 via-red-950 to-slate-950 border-red-400 shadow-[0_5px_0_#450A0A]'
               : 'bg-gradient-to-b from-red-950/85 via-slate-900 to-slate-950 border-red-500/50 hover:border-red-400 shadow-[0_5px_0_#450A0A]'
-          } ${isDealing || countdown <= 3 ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}`}
+          } ${roundStatus !== 'betting_open' ? 'opacity-75' : 'cursor-pointer'}`}
         >
           {/* Top Row: Compact 3D Dragon Icon + Label & Odds */}
           <div className="w-full flex items-center justify-between gap-1">
@@ -1290,7 +1528,7 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
             </div>
           ) : (
             <div className="my-1.5 text-xs font-black text-white/90 tracking-wide">
-              TAP TO BET
+              {roundStatus === 'betting_open' ? 'TAP TO BET' : roundStatus === 'dealing' ? 'DEALING...' : 'LOCKED'}
             </div>
           )}
 
@@ -1304,15 +1542,14 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
         {/* 2. TIE 3D BET ZONE (CENTER IN SAME LINE) */}
         <button
           type="button"
-          onClick={() => handlePlaceBet('tie')}
-          disabled={isDealing || countdown <= 3}
+          onClick={() => handleSelectZone('tie')}
           className={`relative rounded-2xl p-2.5 sm:p-3 border-2 transition-all active:translate-y-0.5 flex flex-col items-center justify-between min-h-[124px] overflow-hidden ${
             roundWinner === 'tie'
               ? 'bg-gradient-to-b from-emerald-500 via-teal-700 to-emerald-950 border-yellow-300 ring-2 ring-emerald-300 shadow-[0_6px_0_#064E3B,0_0_25px_rgba(16,185,129,0.6)]'
               : userBets.tie > 0
               ? 'bg-gradient-to-b from-emerald-800/90 via-emerald-950 to-slate-950 border-emerald-400 shadow-[0_5px_0_#064E3B]'
               : 'bg-gradient-to-b from-emerald-950/85 via-slate-900 to-slate-950 border-emerald-500/50 hover:border-emerald-400 shadow-[0_5px_0_#022C22]'
-          } ${isDealing || countdown <= 3 ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}`}
+          } ${roundStatus !== 'betting_open' ? 'opacity-75' : 'cursor-pointer'}`}
         >
           {/* Top Row: Compact 3D Tie Icon + Label & Odds */}
           <div className="w-full flex items-center justify-between gap-1">
@@ -1342,7 +1579,7 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
             </div>
           ) : (
             <div className="my-1.5 text-xs font-black text-white/90 tracking-wide">
-              TAP TO BET
+              {roundStatus === 'betting_open' ? 'TAP TO BET' : roundStatus === 'dealing' ? 'DEALING...' : 'LOCKED'}
             </div>
           )}
 
@@ -1356,15 +1593,14 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
         {/* 3. TIGER 3D BET ZONE */}
         <button
           type="button"
-          onClick={() => handlePlaceBet('tiger')}
-          disabled={isDealing || countdown <= 3}
+          onClick={() => handleSelectZone('tiger')}
           className={`relative rounded-2xl p-2.5 sm:p-3 border-2 transition-all active:translate-y-0.5 flex flex-col items-center justify-between min-h-[124px] overflow-hidden ${
             roundWinner === 'tiger'
               ? 'bg-gradient-to-b from-amber-500 via-amber-700 to-amber-950 border-white ring-2 ring-amber-300 shadow-[0_6px_0_#451A03,0_0_25px_rgba(245,158,11,0.6)]'
               : userBets.tiger > 0
               ? 'bg-gradient-to-b from-amber-700/90 via-amber-950 to-slate-950 border-amber-300 shadow-[0_5px_0_#451A03]'
               : 'bg-gradient-to-b from-amber-950/85 via-slate-900 to-slate-950 border-amber-500/50 hover:border-amber-400 shadow-[0_5px_0_#451A03]'
-          } ${isDealing || countdown <= 3 ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}`}
+          } ${roundStatus !== 'betting_open' ? 'opacity-75' : 'cursor-pointer'}`}
         >
           {/* Top Row: Compact 3D Tiger Icon + Label & Odds */}
           <div className="w-full flex items-center justify-between gap-1">
@@ -1394,7 +1630,7 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
             </div>
           ) : (
             <div className="my-1.5 text-xs font-black text-white/90 tracking-wide">
-              TAP TO BET
+              {roundStatus === 'betting_open' ? 'TAP TO BET' : roundStatus === 'dealing' ? 'DEALING...' : 'LOCKED'}
             </div>
           )}
 
@@ -1408,16 +1644,28 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
 
       {/* ==================== 4. 3D SCULPTED CASINO CHIP RACK & REPEAT / 2X BAR ==================== */}
       <div className="p-3.5 rounded-3xl bg-slate-900/95 border border-slate-800 shadow-xl space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-slate-300">
-            Select 3D Casino Chip:
-          </span>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-300">
+              3D Casino Chip:
+            </span>
+            <button
+              type="button"
+              onClick={() => setQuickOneTapMode((prev) => !prev)}
+              className={`px-2 py-0.5 rounded-lg text-[10px] font-black border transition ${
+                quickOneTapMode
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}
+            >
+              {quickOneTapMode ? '⚡ 1-Tap Chip ON' : 'Bet Slip Modal'}
+            </button>
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={handleRepeatLastBet}
-              disabled={isDealing || countdown <= 3}
-              className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-bold text-slate-200 flex items-center gap-1 transition active:scale-95 disabled:opacity-50"
+              className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-bold text-slate-200 flex items-center gap-1 transition active:scale-95"
             >
               <RotateCcw className="w-3 h-3 text-amber-400" />
               <span>Repeat</span>
@@ -1425,8 +1673,7 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
             <button
               type="button"
               onClick={handleDoubleCurrentBet}
-              disabled={isDealing || countdown <= 3 || totalUserBet === 0}
-              className="px-2.5 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-[11px] font-black text-amber-300 flex items-center gap-1 transition active:scale-95 disabled:opacity-50"
+              className="px-2.5 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-[11px] font-black text-amber-300 flex items-center gap-1 transition active:scale-95"
             >
               <Zap className="w-3 h-3" />
               <span>2X Double</span>
@@ -1858,6 +2105,202 @@ export const DragonTigerGame: React.FC<DragonTigerGameProps> = ({
             >
               Got It, Back to 3D Table
             </button>
+          </div>
+        </div>
+      )}
+      {/* ==================== 8. DRAGON TIGER LIVE BETTING MODAL ==================== */}
+      {betModalSide && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => !isSubmittingBet && setBetModalSide(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl bg-slate-900 border-t-2 sm:border-2 p-4 sm:p-5 space-y-4 shadow-2xl ${
+              betModalSide === 'dragon'
+                ? 'border-red-500/80'
+                : betModalSide === 'tiger'
+                ? 'border-amber-400/80'
+                : 'border-emerald-400/80'
+            }`}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                {betModalSide === 'dragon' ? (
+                  <Dragon3DIcon size="sm" active />
+                ) : betModalSide === 'tiger' ? (
+                  <Tiger3DIcon size="sm" active />
+                ) : (
+                  <Tie3DIcon size="sm" active />
+                )}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-black uppercase tracking-wider text-white">
+                      BET ON {betModalSide.toUpperCase()}
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-black bg-amber-500/20 text-amber-300 border border-amber-400/40">
+                      {betModalSide === 'tie' ? '9.00X' : '1.98X'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-400">
+                    Deal #{roundPeriod} · Status:{' '}
+                    <span
+                      className={
+                        roundStatus === 'betting_open'
+                          ? 'text-emerald-400 font-bold'
+                          : 'text-rose-400 font-bold'
+                      }
+                    >
+                      {roundStatus === 'betting_open'
+                        ? `BETTING OPEN (${countdown}s)`
+                        : roundStatus === 'dealing'
+                        ? 'DEALING CARDS'
+                        : 'ROUND LOCKED'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBetModalSide(null)}
+                className="p-1.5 rounded-full bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Live Synchronized Wallet Balance Readout */}
+            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-2xl bg-slate-950 border border-amber-500/30">
+              <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <Coins className="w-4 h-4 text-amber-400" />
+                <span>Available Wallet Balance:</span>
+              </span>
+              <span className="font-mono font-black text-sm text-amber-300">
+                ₹{liveWalletBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
+
+            {/* Chip Base Selection */}
+            <div className="space-y-1.5">
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                Select Chip Base Amount
+              </span>
+              <div className="grid grid-cols-6 gap-1.5">
+                {[10, 50, 100, 500, 1000, 5000].map((amt) => {
+                  const active = betModalCustomInput === '' && betModalBaseAmount === amt;
+                  return (
+                    <button
+                      key={amt}
+                      type="button"
+                      onClick={() => {
+                        setBetModalBaseAmount(amt);
+                        setSelectedChip(amt);
+                        setBetModalCustomInput('');
+                      }}
+                      className={`py-2 rounded-xl font-mono font-black text-xs border transition ${
+                        active
+                          ? 'bg-amber-500 text-slate-950 border-amber-300 shadow-md scale-105'
+                          : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      ₹{amt >= 1000 ? `${amt / 1000}K` : amt}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Multiplier & Custom Amount */}
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">
+                  Quantity Multiplier
+                </span>
+                <div className="grid grid-cols-4 gap-1">
+                  {[1, 2, 5, 10].map((mult) => (
+                    <button
+                      key={mult}
+                      type="button"
+                      onClick={() => {
+                        setBetModalMultiplier(mult);
+                        setBetModalCustomInput('');
+                      }}
+                      className={`py-2 rounded-xl font-mono font-black text-xs border transition ${
+                        betModalCustomInput === '' && betModalMultiplier === mult
+                          ? 'bg-indigo-600 text-white border-indigo-400'
+                          : 'bg-slate-950 text-slate-400 border-slate-800'
+                      }`}
+                    >
+                      x{mult}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">
+                  Or Custom Stake (₹)
+                </span>
+                <input
+                  type="number"
+                  min={10}
+                  placeholder="Enter ₹ amount"
+                  value={betModalCustomInput}
+                  onChange={(e) => setBetModalCustomInput(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 font-mono font-bold text-xs text-amber-300 focus:outline-none focus:border-amber-400"
+                />
+              </div>
+            </div>
+
+            {/* Total Wager & Potential Payout Summary */}
+            {(() => {
+              const finalWager =
+                betModalCustomInput.trim() !== ''
+                  ? Math.max(0, Number(betModalCustomInput) || 0)
+                  : betModalBaseAmount * betModalMultiplier;
+              const odds = betModalSide === 'tie' ? 9.0 : 1.98;
+              const estReturn = Math.round(finalWager * odds * 100) / 100;
+
+              return (
+                <div className="space-y-3 pt-1">
+                  <div className="flex items-center justify-between text-xs font-mono px-3 py-2 rounded-xl bg-slate-950/90 border border-slate-800">
+                    <span className="text-slate-400">
+                      Total Stake: <strong className="text-white">₹{finalWager.toLocaleString('en-IN')}</strong>
+                    </span>
+                    <span className="text-emerald-400 font-bold">
+                      Win Payout: ₹{estReturn.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBetModalSide(null)}
+                      className="py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-black text-xs transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmittingBet}
+                      onClick={() => void executeDragonTigerBet(betModalSide, finalWager, true)}
+                      className={`col-span-2 py-3 rounded-2xl font-black text-xs sm:text-sm uppercase tracking-wider shadow-lg transition active:scale-98 disabled:opacity-50 ${
+                        betModalSide === 'dragon'
+                          ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white'
+                          : betModalSide === 'tiger'
+                          ? 'bg-gradient-to-r from-amber-400 to-yellow-500 text-slate-950'
+                          : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white'
+                      }`}
+                    >
+                      {isSubmittingBet
+                        ? 'Placing Bet...'
+                        : `Confirm Bet · ₹${finalWager.toLocaleString('en-IN')}`}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

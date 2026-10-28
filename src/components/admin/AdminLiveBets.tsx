@@ -332,11 +332,16 @@ export const AdminLiveBets: React.FC<AdminLiveBetsProps> = ({
                     className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs"
                   >
                     <div>
-                      <div className="font-bold text-slate-100">
-                        {b.username} ({b.uid}) · Period {b.roundPeriod.slice(-4)}
+                      <div className="font-bold text-slate-100 flex items-center gap-1.5 flex-wrap">
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono uppercase">
+                          {b.gameType === 'dragon_tiger' ? 'DRAGON TIGER' : `WINGO ${b.gameType}`}
+                        </span>
+                        <span>
+                          {b.username} ({b.uid}) · #{b.roundPeriod.slice(-6)}
+                        </span>
                       </div>
                       <div className="text-slate-400 mt-0.5">
-                        Pick: <strong className="uppercase text-amber-300">{b.betValue}</strong> · Stake: ₹{b.amount}
+                        Pick: <strong className="uppercase text-amber-300">{b.betValue}</strong> · Stake: ₹{b.amount} ({b.multiplier}x)
                       </div>
                     </div>
                     <span
