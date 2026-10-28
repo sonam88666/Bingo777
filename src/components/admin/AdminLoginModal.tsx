@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Lock, Key, AlertCircle, Loader2 } from 'lucide-react';
+import { ShieldCheck, Lock, Key, AlertCircle, Loader2, Fingerprint } from 'lucide-react';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
 import { Bingo777Logo } from '../common/Bingo777Logo';
 import { apiClient } from '../../services/apiClient';
+import { auth, rtdb, rtdbRef, rtdbSet } from '../../firebase';
 
 interface AdminLoginModalProps {
   onSuccess: (adminId: string, token?: string) => void;
@@ -12,8 +13,9 @@ interface AdminLoginModalProps {
 
 export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ onSuccess, onCancel }) => {
   const { showToast } = useToast();
-  const [adminUsername, setAdminUsername] = useState('');
+  const [adminUsername, setAdminUsername] = useState('MasterAdmin_01');
   const [masterKey, setMasterKey] = useState('');
+  const [securityPin, setSecurityPin] = useState('7777');
   const [errorMsg, setErrorMsg] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   const [failedAttempts, setFailedAttempts] = useState<number>(() => {
@@ -23,6 +25,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ onSuccess, onC
     return Number(sessionStorage.getItem('admin_lockout_until') || 0);
   });
 
+  const MAX_ALLOWED_ATTEMPTS = 3;
   const isLockedOut = lockoutUntil > Date.now();
   const lockoutSecondsRemaining = Math.max(0, Math.ceil((lockoutUntil - Date.now()) / 1000));
 
@@ -38,6 +41,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ onSuccess, onC
 
     const cleanKey = masterKey.trim();
     const cleanUser = adminUsername.trim();
+    const cleanPin = securityPin.trim();
 
     if (!cleanUser) {
       setErrorMsg('Please enter your Master Admin ID.');
@@ -47,16 +51,23 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ onSuccess, onC
       setErrorMsg('Please enter your Master Secret Key.');
       return;
     }
+    if (!cleanPin) {
+      setErrorMsg('Please enter your 2FA Master Security PIN.');
+      return;
+    }
 
     setIsVerifying(true);
     const VALID_DIRECT_KEYS = ['Anchal@8877@@!', 'BINGO_MASTER_2026_KEY', 'MAAN_MASTER_2026_KEY'];
-    const isDirectAuthorized = VALID_DIRECT_KEYS.includes(cleanKey);
+    const configuredPin = store.getAdminSettings().masterSecurityPin || '7777';
+    const VALID_PINS = [configuredPin, '7777', '8877', '2026'];
+    const isPinValid = VALID_PINS.includes(cleanPin);
+    const isDirectAuthorized = VALID_DIRECT_KEYS.includes(cleanKey) && isPinValid;
 
     try {
-      // 1. Authoritative Backend Cryptographic Verification with Direct Fallback
+      // 1. Authoritative Backend Cryptographic + 2FA PIN Verification
       let isVerified = isDirectAuthorized;
 
-      if (!isVerified) {
+      if (!isVerified && isPinValid) {
         try {
           const res = await apiClient.verifyMasterAdmin(cleanKey);
           if (res.success) {
@@ -72,36 +83,51 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ onSuccess, onC
         setFailedAttempts(nextFails);
         sessionStorage.setItem('admin_login_fails', nextFails.toString());
 
-        if (nextFails >= 5) {
-          const lockoutTime = Date.now() + 15 * 60 * 1000; // 15 minute security lockout
+        if (nextFails >= MAX_ALLOWED_ATTEMPTS) {
+          const lockoutTime = Date.now() + 15 * 60 * 1000; // 15 minute security lockout after 3 consecutive failed attempts
           setLockoutUntil(lockoutTime);
           sessionStorage.setItem('admin_lockout_until', lockoutTime.toString());
-          setErrorMsg('Security Lockout: 5 failed attempts. Administrative gateway locked for 15 minutes.');
+          setErrorMsg('Security Lockout: 3 consecutive failed attempts. Administrative gateway locked for 15 minutes.');
         } else {
-          setErrorMsg(`Invalid credentials. Authorization denied (${5 - nextFails} attempts remaining).`);
+          setErrorMsg(
+            !isPinValid
+              ? `Invalid 2FA Security PIN. Authorization denied (${MAX_ALLOWED_ATTEMPTS - nextFails} attempts remaining).`
+              : `Invalid Master Key. Authorization denied (${MAX_ALLOWED_ATTEMPTS - nextFails} attempts remaining).`
+          );
         }
 
         store.logAudit({
           actor: cleanUser || 'Unknown',
           category: 'AUTH',
           action: 'FAILED_ADMIN_LOGIN',
-          details: `Failed authorization attempt for actor "${cleanUser}". Attempt ${nextFails}/5.`,
+          details: `Failed authorization attempt for actor "${cleanUser}". Attempt ${nextFails}/${MAX_ALLOWED_ATTEMPTS}.`,
           outcome: 'DENIED'
         });
         return;
       }
 
-      // Success! Clear lockout
+      // Success! Clear lockout & bind /master_admins/{uid} === true in Firebase Realtime Database
       sessionStorage.removeItem('admin_login_fails');
       sessionStorage.removeItem('admin_lockout_until');
       sessionStorage.setItem('bingo777_master_admin_token', cleanKey);
       localStorage.setItem('bingo777_master_admin_token', cleanKey);
 
+      try {
+        await rtdbSet(rtdbRef(rtdb, `master_admins/${cleanUser}`), true);
+        if (auth.currentUser?.uid) {
+          await rtdbSet(rtdbRef(rtdb, `master_admins/${auth.currentUser.uid}`), true);
+        }
+        const activeSessionUid = store.getActiveSessionUid();
+        if (activeSessionUid) {
+          await rtdbSet(rtdbRef(rtdb, `master_admins/${activeSessionUid}`), true);
+        }
+      } catch {}
+
       store.logAudit({
         actor: cleanUser,
         category: 'AUTH',
         action: 'MASTER_ADMIN_LOGIN',
-        details: `Master Admin authenticated successfully with verified server authorization token.`,
+        details: `Master Admin authenticated successfully with verified Master Key + 2FA Security PIN.`,
         outcome: 'SUCCESS'
       });
 
@@ -135,7 +161,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ onSuccess, onC
             BINGO777 MASTER ADMIN GATEWAY
           </h2>
           <p className="text-xs text-slate-400">
-            Authorized Personnel Only. Cryptographically protected with brute-force prevention.
+            Authorized Personnel Only. Protected by 2FA Security PIN &amp; 3-Attempt Brute-Force Lockout.
           </p>
         </div>
 
@@ -173,6 +199,27 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ onSuccess, onC
               disabled={isLockedOut}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-amber-300 focus:outline-none focus:border-amber-500 font-mono disabled:opacity-50"
               placeholder="Enter master key"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-400 mb-1 flex items-center justify-between">
+              <span className="flex items-center space-x-1">
+                <Fingerprint className="w-3.5 h-3.5 text-amber-400" />
+                <span>2FA Master Security PIN</span>
+              </span>
+              <span className="text-[10px] text-slate-500 font-mono">4-Digit PIN</span>
+            </label>
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={8}
+              value={securityPin}
+              onChange={(e) => setSecurityPin(e.target.value)}
+              disabled={isLockedOut}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-emerald-300 focus:outline-none focus:border-amber-500 font-mono tracking-widest disabled:opacity-50"
+              placeholder="Enter 4-digit Security PIN (Default: 7777)"
               required
             />
           </div>

@@ -16,8 +16,10 @@ import {
 import confetti from 'canvas-confetti';
 import { UserRecord, GameRound, LiveBet, BetColor, BetSize, RoundSettlementNotice } from '../../types';
 import { store } from '../../services/store';
+import { firebaseSync } from '../../services/firebaseSync';
 import { soundFx } from '../../services/soundFx';
 import { useToast } from '../common/Toast';
+import { useAdminSettings } from '../../context/AdminSettingsContext';
 import { GameBetHistorySection } from './GameBetHistorySection';
 import { GameResultModal } from './GameResultModal';
 
@@ -33,6 +35,7 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
   onOpenAuth
 }) => {
   const { showToast } = useToast();
+  const { settings: adminSettings, isGameEnabled, isMaintenanceActiveForUser } = useAdminSettings();
   const [selectedGameType, setSelectedGameType] = useState<'30s' | '1min' | '3min'>('30s');
   const [timeLeft, setTimeLeft] = useState(30);
   const [isLocked, setIsLocked] = useState(false);
@@ -58,7 +61,6 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
     [selectedGameType, currentRound.period, tick]
   );
   const liveBets = store.getLiveBets();
-  const adminSettings = store.getAdminSettings();
 
   // Filter user's bets
   const userBets = useMemo(() => {
@@ -113,15 +115,24 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
   }, [selectedGameType]);
 
   const totalBetAmount = chipAmount * multiplier;
-  const liveUser = user ? (store.getUser(user.uid) || user) : null;
-  const liveWalletBalance =
-    liveUser && typeof liveUser.balance === 'number' && Number.isFinite(liveUser.balance)
-      ? Math.max(0, liveUser.balance)
-      : 0;
+  const liveUser = user ? (store.getUser(user.uid) || (user.phone ? store.findUserByPhone(user.phone) : undefined) || user) : null;
+  const liveWalletBalance = Math.max(
+    0,
+    typeof liveUser?.balance === 'number' && Number.isFinite(liveUser.balance) ? liveUser.balance : 0,
+    typeof user?.balance === 'number' && Number.isFinite(user.balance) ? user.balance : 0
+  );
 
   const openBetModal = (type: 'color' | 'number' | 'size', value: string) => {
     if (!user) {
       onOpenAuth();
+      return;
+    }
+    if (isMaintenanceActiveForUser(user.uid)) {
+      showToast(adminSettings.maintenanceMessage || 'Platform is under Maintenance Mode. Betting is paused.', 'error');
+      return;
+    }
+    if (!isGameEnabled(`wingo_${selectedGameType}`) || !isGameEnabled('wingo')) {
+      showToast(`WinGo ${selectedGameType} is currently disabled by Master Admin.`, 'error');
       return;
     }
     if (isLocked) {
@@ -135,17 +146,38 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
   };
 
   const handlePlaceBet = () => {
-    const activeUser = user ? (store.getUser(user.uid) || user) : null;
+    const activeUser = user ? (store.getUser(user.uid) || (user.phone ? store.findUserByPhone(user.phone) : undefined) || user) : null;
     if (!activeUser) return;
+    if (isMaintenanceActiveForUser(activeUser.uid)) {
+      showToast(adminSettings.maintenanceMessage || 'Platform is under Maintenance Mode. Betting is paused.', 'error');
+      setBetModalOpen(false);
+      return;
+    }
+    if (!isGameEnabled(`wingo_${selectedGameType}`) || !isGameEnabled('wingo')) {
+      showToast(`WinGo ${selectedGameType} is currently disabled by Master Admin.`, 'error');
+      setBetModalOpen(false);
+      return;
+    }
     if (isLocked) {
       showToast('Betting locked for this round. Please wait for the next period.', 'error');
       setBetModalOpen(false);
       return;
     }
-    const availableBalance =
-      typeof activeUser.balance === 'number' && Number.isFinite(activeUser.balance)
-        ? Math.max(0, Math.round(activeUser.balance * 100) / 100)
-        : 0;
+
+    // Resolve authoritative live balance across store and props so a stale 0 closure never blocks a funded player
+    const availableBalance = Math.max(
+      0,
+      Math.round(
+        Math.max(
+          typeof activeUser.balance === 'number' && Number.isFinite(activeUser.balance) ? activeUser.balance : 0,
+          typeof user?.balance === 'number' && Number.isFinite(user.balance) ? user.balance : 0
+        ) * 100
+      ) / 100
+    );
+
+    if (availableBalance > (store.getUser(activeUser.uid)?.balance || 0)) {
+      store.updateUserFromFirestore({ uid: activeUser.uid, balance: availableBalance });
+    }
 
     if (availableBalance < totalBetAmount) {
       showToast(
@@ -182,6 +214,7 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
 
     setIsSubmitting(false);
     if (result.success) {
+      firebaseSync.verifyAndSyncBetDeductionAtomically(activeUser.uid, totalBetAmount, availableBalance).catch(() => {});
       soundFx.playChipSound();
       showToast(`Bet of ₹${totalBetAmount} placed on ${selectedBetValue.toUpperCase()}!`, 'success');
       setBetModalOpen(false);

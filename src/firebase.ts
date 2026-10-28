@@ -18,7 +18,8 @@ import {
   get as rtdbGet,
   onValue as rtdbOnValue,
   update as rtdbUpdate,
-  remove as rtdbRemove
+  remove as rtdbRemove,
+  runTransaction as rtdbRunTransaction
 } from 'firebase/database';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -34,13 +35,21 @@ export const rtdb = firebaseConfig.databaseURL ? getDatabase(app, firebaseConfig
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
-// Automatically ensure an active Firebase Auth session exists so RTDB & Firestore permissions pass
+// Automatically ensure an active Firebase Auth session exists and validate connection on boot
 if (typeof window !== 'undefined') {
-  if (!auth.currentUser) {
-    signInAnonymously(auth).catch((err) => {
-      console.warn('Firebase anonymous auth init:', err?.message || err);
-    });
-  }
+  const initAndValidateConnection = async () => {
+    try {
+      if (!auth.currentUser) {
+        await signInAnonymously(auth).catch(() => {});
+      }
+      await getDocFromServer(doc(db, 'test', 'connection'));
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('the client is offline')) {
+        console.error('Please check your Firebase configuration.');
+      }
+    }
+  };
+  initAndValidateConnection();
 }
 
 export enum OperationType {
@@ -106,5 +115,6 @@ export {
   rtdbGet,
   rtdbOnValue,
   rtdbUpdate,
-  rtdbRemove
+  rtdbRemove,
+  rtdbRunTransaction
 };

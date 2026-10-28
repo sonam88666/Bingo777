@@ -25,6 +25,7 @@ export interface UserRecord {
   referredBy?: string;
   referredByCode?: string;
   referralCount?: number;
+  totalReferrals?: number;
   signupBonusStatus: 'pending' | 'credited';
   signupBonusAmount: number;
   signupBonusTxId?: string;
@@ -428,30 +429,45 @@ export interface ChatMessage {
 
 export interface AdminSettings {
   appName: string;
+  // System & Maintenance
   maintenanceMode: boolean;
   maintenanceMessage?: string;
+  maintenanceResumeTime?: string;
   maintenanceEstimatedResumeTime?: string;
+  maintenanceBypassUids?: string[];
   announcement: string;
-  // Financial Thresholds
+  // Master Game Switchboard
+  allGamesEnabled?: boolean;
+  wingoEnabled?: boolean;
+  aviatorEnabled?: boolean;
+  k3Enabled?: boolean;
+  trxEnabled?: boolean;
+  ludoEnabled?: boolean;
+  dragonTigerEnabled?: boolean;
+  liveQuizEnabled?: boolean;
+  wheelEnabled?: boolean;
+  // Financial & Payment Gateways
   minDeposit: number;
   maxDeposit: number;
   minWithdrawal: number;
   maxWithdrawal: number;
+  usdtAddress?: string;
+  usdtRate?: number;
   // Official UPI Cashier (Primary & Backup Channel)
   officialUpiId: string;
   officialUpiName: string;
-  secondaryUpiId?: string; // Backup UPI ID (e.g. suman.1299@superyes)
-  secondaryUpiName?: string; // Backup UPI Merchant Name (e.g. SUMAN ENTERPRISES)
+  secondaryUpiId?: string;
+  secondaryUpiName?: string;
   // Official USDT (ERC20) Cashier & Limits
-  usdtErc20Address?: string; // Default: 0xF600F72A9d4b9B0D6F6972a9037767ca7A9f3d45
-  usdtNetwork?: string; // Default: 'ERC20'
-  minUsdtDeposit?: number; // Default: $5
-  minUsdtWithdrawal?: number; // Default: $10
-  usdtExchangeRate?: number; // Default: 90 INR per 1 USDT
+  usdtErc20Address?: string;
+  usdtNetwork?: string;
+  minUsdtDeposit?: number;
+  minUsdtWithdrawal?: number;
+  usdtExchangeRate?: number;
   // Platform Zero-Loss Engine & House Edge
-  zeroPlatformLossMode: boolean; // When true: platform never runs at a loss
-  minPlatformProfitPercent: number; // e.g. 15% guaranteed house retention
-  autoGameResolution: boolean; // if false, admin decides outcome
+  zeroPlatformLossMode: boolean;
+  minPlatformProfitPercent: number;
+  autoGameResolution: boolean;
   colorGreenMultiplier: number;
   colorRedMultiplier: number;
   colorVioletMultiplier: number;
@@ -460,22 +476,35 @@ export interface AdminSettings {
   payoutFeePercent: number;
   supportPhone: string;
   supportTelegram: string;
-  aviatorCrashRTP: number; // e.g. 97%
+  aviatorCrashRTP: number;
   k3Multiplier: number;
   minesHouseEdge: number;
-  // Bonus & Referral Configuration
-  signupBonusAmount: number; // default ₹120
-  firstDepositBonusPercent: number; // default 100%
-  firstDepositBonusMaxCap: number; // default e.g. 50000
-  referralBonusAmount: number; // default ₹120
-  referralRequiredDays: number; // default 10 calendar days
-  referralDailyBetRequirement: number; // default ₹100 settled daily turnover
-  checkInBonuses: number[]; // e.g. [10, 25, 50, 80, 150, 250, 500]
-  mlmLevel1Rate?: number; // default 1.0%
-  mlmLevel2Rate?: number; // default 0.5%
-  mlmLevel3Rate?: number; // default 0.25%
-  featureMlm?: boolean; // default true
-  // Feature Modules Management
+  // Promotional & Loyalty Settings
+  signupBonusAmount: number;
+  firstDepositBonusPercent: number;
+  firstDepositBonusMaxCap: number;
+  referralBonusAmount: number;
+  referralRequiredDays: number;
+  referralQualifyingDays?: number;
+  referralDailyBetRequirement: number;
+  referralQualifyingBet?: number;
+  checkInBonuses: number[];
+  dailyStreakRewards?: number[];
+  mlmLevel1Rate?: number;
+  mlmLevel2Rate?: number;
+  mlmLevel3Rate?: number;
+  featureMlm?: boolean;
+  // All 29 Core App Features & Switches
+  allowUserSignup?: boolean;
+  allowUserLogin?: boolean;
+  allowUpiDeposit?: boolean;
+  allowUsdtDeposit?: boolean;
+  allowWithdrawals?: boolean;
+  allowBankWithdrawal?: boolean;
+  allowUpiWithdrawal?: boolean;
+  allowUsdtWithdrawal?: boolean;
+  ludoVoiceChatEnabled?: boolean;
+  ludoChatPresetsEnabled?: boolean;
   featureWinGo30s?: boolean;
   featureWinGo1min?: boolean;
   featureWinGo3min?: boolean;
@@ -499,9 +528,18 @@ export interface AdminSettings {
   upiMerchantName?: string;
   requireDeviceApproval?: boolean;
   announcementText?: string;
+  // Custom Game Parameters
+  aviatorNextCrash?: number | null;
+  aviatorMaxCap?: number;
+  aviatorTargetRtp?: number;
+  wingoResultOverrides?: Record<string, number | null>;
   // Multiple UPI Management
   upiChannels?: UpiChannel[];
   activeUpiChannelId?: string;
+  // Feature Modules Map synced inside /admin_settings
+  featureModulesMap?: Record<string, FeatureModule>;
+  // Master Security PIN
+  masterSecurityPin?: string;
   // Android APK & Update Management
   apkDownloadEnabled?: boolean;
   apkVersionName?: string;
@@ -510,6 +548,7 @@ export interface AdminSettings {
   apkFileSize?: string;
   apkReleaseNotes?: string;
   apkForceUpdatePrompt?: boolean;
+  updatedAt?: number;
 }
 
 export interface UpiChannel {

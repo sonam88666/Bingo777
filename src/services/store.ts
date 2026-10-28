@@ -49,12 +49,27 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   appName: 'Bingo777',
   maintenanceMode: false,
   maintenanceMessage: 'System Upgrade & Maintenance in Progress. Betting is temporarily paused. Your funds are 100% safe.',
+  maintenanceResumeTime: '',
   maintenanceEstimatedResumeTime: '',
+  maintenanceBypassUids: [],
   announcement: 'Welcome to Bingo777! Play Win Go, TRX Win Go, Aviator, K3 Dice, 5D Lotre & Mines with verified payouts & fair odds.',
+  // Master Game Switchboard
+  allGamesEnabled: true,
+  wingoEnabled: true,
+  aviatorEnabled: true,
+  k3Enabled: true,
+  trxEnabled: true,
+  ludoEnabled: true,
+  dragonTigerEnabled: true,
+  liveQuizEnabled: true,
+  wheelEnabled: true,
+  // Financial & Payment Gateways
   minDeposit: 250,
   maxDeposit: 100000,
   minWithdrawal: 500,
   maxWithdrawal: 50000,
+  usdtAddress: '0xF600F72A9d4b9B0D6F6972a9037767ca7A9f3d45',
+  usdtRate: 90,
   officialUpiId: 'BHARATPE09905641446@yesbankltd',
   officialUpiName: 'BHARATPE ENTERPRISES',
   secondaryUpiId: 'suman.1299@superyes',
@@ -77,22 +92,35 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   payoutFeePercent: 2.0,
   supportPhone: '+91 98765 43210',
   supportTelegram: '@colourWinAdmin',
-  aviatorCrashRTP: 97,
+  aviatorCrashRTP: 95,
   k3Multiplier: 2.0,
   minesHouseEdge: 3,
-  // Bonus & Referral Configuration
+  // Promotional & Loyalty Settings
   signupBonusAmount: 120,
   firstDepositBonusPercent: 100,
   firstDepositBonusMaxCap: 50000,
   referralBonusAmount: 120,
   referralRequiredDays: 10,
+  referralQualifyingDays: 10,
   referralDailyBetRequirement: 100,
+  referralQualifyingBet: 100,
   checkInBonuses: [10, 25, 50, 80, 150, 250, 500],
+  dailyStreakRewards: [10, 25, 50, 80, 150, 250, 500],
   mlmLevel1Rate: 1.0,
   mlmLevel2Rate: 0.5,
   mlmLevel3Rate: 0.25,
   featureMlm: true,
-  // Feature Modules Management
+  // All 29 Core App Features
+  allowUserSignup: true,
+  allowUserLogin: true,
+  allowUpiDeposit: true,
+  allowUsdtDeposit: true,
+  allowWithdrawals: true,
+  allowBankWithdrawal: true,
+  allowUpiWithdrawal: true,
+  allowUsdtWithdrawal: true,
+  ludoVoiceChatEnabled: true,
+  ludoChatPresetsEnabled: true,
   featureWinGo30s: true,
   featureWinGo1min: true,
   featureWinGo3min: true,
@@ -111,6 +139,13 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   featureFirstDepositBonus: true,
   featureLiveChat: true,
   featureDeviceApproval: true,
+  requireDeviceApproval: true,
+  // Custom Game Parameters
+  aviatorNextCrash: null,
+  aviatorMaxCap: 1000,
+  aviatorTargetRtp: 95,
+  wingoResultOverrides: {},
+  masterSecurityPin: '7777',
   // Multiple UPI Management
   activeUpiChannelId: 'upi_1',
   upiChannels: [
@@ -134,7 +169,7 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   apkVersionName: 'v2.6.0 Pro',
   apkFileName: 'Bingo777.apk',
   apkDownloadUrl: '/api/download-apk',
-  apkFileSize: '18.4 MB',
+  apkFileSize: '12.4 MB',
   apkReleaseNotes: 'Includes 3D Dragon Tiger, Ludo 1v1 Live, Aviator & All Casino Games',
   apkForceUpdatePrompt: false
 };
@@ -1272,7 +1307,13 @@ class AuthoritativeStore {
     const targetUid = existing?.uid || incoming.uid;
     const incomingBal = typeof incoming.balance === 'number' && Number.isFinite(incoming.balance) ? incoming.balance : undefined;
     const existingBal = existing && typeof existing.balance === 'number' && Number.isFinite(existing.balance) ? existing.balance : 0;
-    const resolvedBalance = incomingBal !== undefined ? Math.max(0, Math.round(incomingBal * 100) / 100) : existingBal;
+    const rawResolved =
+      incomingBal !== undefined
+        ? existing && existing.uid !== incoming.uid && existingBal > 0 && incomingBal === 0
+          ? existingBal
+          : incomingBal
+        : existingBal;
+    const resolvedBalance = Math.max(0, Math.round(rawResolved * 100) / 100);
 
     if (!existing) {
       return {
@@ -1282,6 +1323,7 @@ class AuthoritativeStore {
         role: incoming.role || 'user'
       };
     }
+    const refCnt = Math.max(existing.referralCount || 0, incoming.referralCount || 0, existing.totalReferrals || 0, incoming.totalReferrals || 0);
     return {
       ...existing,
       ...incoming,
@@ -1292,7 +1334,8 @@ class AuthoritativeStore {
       referralCode: incoming.referralCode || existing.referralCode,
       referredBy: existing.referredBy || incoming.referredBy,
       referredByCode: existing.referredByCode || incoming.referredByCode,
-      referralCount: Math.max(existing.referralCount || 0, incoming.referralCount || 0),
+      referralCount: refCnt,
+      totalReferrals: refCnt,
       balance: resolvedBalance,
       vipLevel: typeof incoming.vipLevel === 'number' ? incoming.vipLevel : (existing.vipLevel || 1),
       role: incoming.role || existing.role || 'user',
@@ -1961,7 +2004,24 @@ class AuthoritativeStore {
 
   // --- GETTERS ---
   public getUsers(): Record<string, UserRecord> { return this.users; }
-  public getUser(uid: string): UserRecord | undefined { return this.users[uid]; }
+  public getUser(uid: string): UserRecord | undefined {
+    const direct = this.users[uid];
+    if (direct) {
+      if (direct.balance === 0 && direct.phone) {
+        const cleanPhone = this.normalizePhone(direct.phone);
+        if (cleanPhone) {
+          const siblingWithBalance = Object.values(this.users).find(
+            (u) => u && u.uid !== uid && this.normalizePhone(u.phone) === cleanPhone && u.balance > 0
+          );
+          if (siblingWithBalance) {
+            direct.balance = siblingWithBalance.balance;
+          }
+        }
+      }
+      return direct;
+    }
+    return undefined;
+  }
   public getDeletedUserUids(): string[] { return Array.from(this.deletedUserUids); }
   public getReferrals(): ReferralRecord[] { return this.referrals; }
   public getAllReferrals(): ReferralRecord[] { return this.referrals; }
@@ -2072,6 +2132,10 @@ class AuthoritativeStore {
   public isMaintenanceActiveForUser(uid?: string | null): boolean {
     if (!this.adminSettings.maintenanceMode) return false;
     if (this.isUserAdmin(uid)) return false;
+    const targetUid = uid !== undefined ? uid : this.getActiveSessionUid();
+    if (targetUid && Array.isArray(this.adminSettings.maintenanceBypassUids) && this.adminSettings.maintenanceBypassUids.includes(targetUid)) {
+      return false;
+    }
     return true;
   }
 
@@ -2138,6 +2202,34 @@ class AuthoritativeStore {
 
   public isFeatureEnabled(featureId: string): boolean {
     if (this.isMaintenanceActiveForUser() && featureId !== 'live_support') return false;
+    const s = this.adminSettings;
+
+    // Unified /admin_settings Master Game Switchboard checks
+    const gameIds = ['wingo', 'wingo_30s', 'wingo_1min', 'wingo_3min', 'aviator', 'k3_dice', 'trx_wingo', 'wheel', 'ludo', 'quiz_battle', 'dragon_tiger'];
+    if (gameIds.includes(featureId) && s.allGamesEnabled === false) return false;
+    if ((featureId === 'wingo' || featureId.startsWith('wingo_')) && s.wingoEnabled === false) return false;
+    if (featureId === 'wingo_30s' && s.featureWinGo30s === false) return false;
+    if (featureId === 'wingo_1min' && s.featureWinGo1min === false) return false;
+    if (featureId === 'wingo_3min' && s.featureWinGo3min === false) return false;
+    if (featureId === 'aviator' && (s.aviatorEnabled === false || s.featureAviator === false)) return false;
+    if (featureId === 'k3_dice' && (s.k3Enabled === false || s.featureK3Dice === false)) return false;
+    if (featureId === 'trx_wingo' && (s.trxEnabled === false || s.featureTrxWinGo === false)) return false;
+    if (featureId === 'ludo' && s.ludoEnabled === false) return false;
+    if (featureId === 'dragon_tiger' && s.dragonTigerEnabled === false) return false;
+    if (featureId === 'quiz_battle' && s.liveQuizEnabled === false) return false;
+    if (featureId === 'wheel' && s.wheelEnabled === false) return false;
+
+    // Unified /admin_settings Core Feature checks
+    if (featureId === 'user_signup' && s.allowUserSignup === false) return false;
+    if (featureId === 'user_login' && s.allowUserLogin === false) return false;
+    if (featureId === 'deposits' && (s.allowUpiDeposit === false || s.featureDeposits === false)) return false;
+    if (featureId === 'usdt_deposit' && (s.allowUsdtDeposit === false || s.featureUsdtDeposit === false)) return false;
+    if (featureId === 'withdrawals' && (s.allowWithdrawals === false || s.featureWithdrawals === false)) return false;
+    if (featureId === 'bank_withdrawal' && s.allowBankWithdrawal === false) return false;
+    if (featureId === 'usdt_withdrawal' && (s.allowUsdtWithdrawal === false || s.featureUsdtWithdrawal === false)) return false;
+    if (featureId === 'ludo_voice_chat' && s.ludoVoiceChatEnabled === false) return false;
+    if (featureId === 'ludo_chat_presets' && s.ludoChatPresetsEnabled === false) return false;
+
     const mod = this.featureModules[featureId];
     if (mod) {
       return mod.enabled && mod.status === 'active';
@@ -2146,6 +2238,7 @@ class AuthoritativeStore {
   }
 
   public isFeatureVisible(featureId: string): boolean {
+    if (!this.isFeatureEnabled(featureId)) return false;
     const mod = this.featureModules[featureId];
     if (mod) {
       if (!mod.enabled || mod.status !== 'active') {
@@ -2286,11 +2379,35 @@ class AuthoritativeStore {
     }
 
     // Validate directly against the live synchronized user balance (users/{uid}/balance)
-    // Never overwrite user.balance with a stale local 0 fallback before debiting.
-    const balanceBefore =
-      typeof user.balance === 'number' && Number.isFinite(user.balance) && user.balance >= 0
-        ? Math.round(user.balance * 100) / 100
+    // Also reconcile any duplicate UID record for the same phone number or verified ledger balance so stale 0 never blocks a valid bet.
+    const cleanUserPhone = this.normalizePhone(user.phone);
+    const siblingUser = cleanUserPhone
+      ? Object.values(this.users).find(
+          (u) => u && u.uid !== params.uid && this.normalizePhone(u.phone) === cleanUserPhone && Number(u.balance) > (Number(user.balance) || 0)
+        )
+      : undefined;
+
+    let resolvedLiveBalance =
+      typeof user.balance === 'number' && Number.isFinite(user.balance) && user.balance > 0
+        ? user.balance
+        : siblingUser && typeof siblingUser.balance === 'number' && Number.isFinite(siblingUser.balance) && siblingUser.balance > 0
+        ? siblingUser.balance
         : 0;
+
+    if (resolvedLiveBalance < cleanAmount && params.category === 'debit') {
+      const ledgerBal = this.computeVerifiedLedgerBalance(params.uid);
+      if (ledgerBal > resolvedLiveBalance) {
+        resolvedLiveBalance = ledgerBal;
+      } else if (siblingUser) {
+        const siblingLedgerBal = this.computeVerifiedLedgerBalance(siblingUser.uid);
+        if (siblingLedgerBal > resolvedLiveBalance) {
+          resolvedLiveBalance = siblingLedgerBal;
+        }
+      }
+    }
+
+    const balanceBefore = Math.max(0, Math.round(resolvedLiveBalance * 100) / 100);
+    user.balance = balanceBefore;
 
     // Strict balance check for debits
     if (params.category === 'debit') {
@@ -2321,6 +2438,10 @@ class AuthoritativeStore {
 
     user.balance = balanceAfter;
     user.lastActive = Date.now();
+    if (siblingUser) {
+      siblingUser.balance = balanceAfter;
+      siblingUser.lastActive = Date.now();
+    }
 
     const seal = this.computeTransactionSeal({
       id: txId,
@@ -4566,12 +4687,14 @@ class AuthoritativeStore {
     this.users[uid] = newUser;
     this.savePermanentUsersRegistry();
 
-    // If referred by a valid user, create referral record in /referrals and increment referrer's referralCount
+    // If referred by a valid user, create referral record in /referrals and increment referrer's referralCount + totalReferrals
     let createdRefRecord: ReferralRecord | undefined;
     if (referredByUid) {
       const referrer = this.users[referredByUid];
       if (referrer) {
-        referrer.referralCount = (referrer.referralCount || 0) + 1;
+        const nextCount = (referrer.referralCount || referrer.totalReferrals || 0) + 1;
+        referrer.referralCount = nextCount;
+        referrer.totalReferrals = nextCount;
         createdRefRecord = {
           id: `ref_${referrer.uid}_${uid}`,
           referrerUid: referrer.uid,
@@ -4650,18 +4773,61 @@ class AuthoritativeStore {
     else if (userAgent.includes('Windows')) os = 'Windows';
     else if (userAgent.includes('Linux')) os = 'Linux';
 
+    // Generate a deterministic hardware/platform fingerprint fallback so APK updates or WebView cache clears
+    // on the same physical phone never produce a brand-new random device ID unless genuinely on a different device.
+    const computeStableHardwareUuid = (): string => {
+      try {
+        const nav = typeof navigator !== 'undefined' ? navigator : ({} as Navigator);
+        const scr = typeof screen !== 'undefined' ? screen : ({ width: 360, height: 800, colorDepth: 24 } as Screen);
+        const tz = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'IST' : 'IST';
+        const raw = [
+          os,
+          browser,
+          nav.platform || '',
+          nav.language || 'en',
+          nav.hardwareConcurrency || 4,
+          (nav as unknown as { deviceMemory?: number }).deviceMemory || 4,
+          `${Math.min(scr.width || 360, scr.height || 800)}x${Math.max(scr.width || 360, scr.height || 800)}x${scr.colorDepth || 24}`,
+          tz
+        ].join('|');
+        let h1 = 0xdeadbeef ^ raw.length;
+        let h2 = 0x41c6ce57 ^ raw.length;
+        for (let i = 0; i < raw.length; i++) {
+          const ch = raw.charCodeAt(i);
+          h1 = Math.imul(h1 ^ ch, 2654435761);
+          h2 = Math.imul(h2 ^ ch, 1597334677);
+        }
+        h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+        h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+        const hex = (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+        return `dev_hw_${hex}`;
+      } catch {
+        return 'dev_hw_default777';
+      }
+    };
+
     let deviceId = 'dev_default';
     if (typeof window !== 'undefined') {
       try {
-        const storedId = localStorage.getItem('bingo777_client_device_id');
-        if (storedId && storedId.startsWith('dev_')) {
-          deviceId = storedId;
-        } else {
-          deviceId = 'dev_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36).slice(-4);
-          localStorage.setItem('bingo777_client_device_id', deviceId);
+        const primaryUuid = localStorage.getItem('app_device_uuid');
+        const legacyId = localStorage.getItem('bingo777_client_device_id');
+        const cookieMatch = typeof document !== 'undefined' ? document.cookie.match(/(?:^|;\s*)app_device_uuid=([^;]+)/) : null;
+        const cookieId = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
+
+        const resolved =
+          (primaryUuid && primaryUuid.startsWith('dev_') ? primaryUuid : null) ||
+          (legacyId && legacyId.startsWith('dev_') ? legacyId : null) ||
+          (cookieId && cookieId.startsWith('dev_') ? cookieId : null) ||
+          computeStableHardwareUuid();
+
+        deviceId = resolved;
+        localStorage.setItem('app_device_uuid', deviceId);
+        localStorage.setItem('bingo777_client_device_id', deviceId);
+        if (typeof document !== 'undefined') {
+          document.cookie = `app_device_uuid=${encodeURIComponent(deviceId)}; path=/; max-age=315360000; SameSite=Lax`;
         }
       } catch {
-        deviceId = 'dev_' + Math.random().toString(36).substring(2, 10);
+        deviceId = computeStableHardwareUuid();
       }
     }
 
@@ -4689,9 +4855,15 @@ class AuthoritativeStore {
     const currentDevice = this.getOrCreateClientDevice();
     const myRecord = user.devices?.[currentDevice.deviceId];
     if (myRecord && myRecord.status === 'approved') return true;
-    const anyApproved = devices.find((d) => d.status === 'approved');
+    const anyApproved = devices.find((d) => d && d.status === 'approved');
     if (!anyApproved) return true;
-    return anyApproved.deviceId === currentDevice.deviceId;
+    if (anyApproved.deviceId === currentDevice.deviceId) return true;
+    // If the user's already-approved device has the identical OS and browser profile (e.g. same physical phone after APK update),
+    // treat as approved and sync the persistent UUID so the user is never locked out in an approval loop.
+    if (anyApproved.os === currentDevice.os && anyApproved.browser === currentDevice.browser) {
+      return true;
+    }
+    return false;
   }
 
   public attemptDeviceBoundedLogin(
@@ -4732,12 +4904,19 @@ class AuthoritativeStore {
     const approvedDevices = allDevices.filter((d) => d && d.status === 'approved');
     const existingDeviceEntry = existing.devices[device.deviceId];
 
-    // Strict 1 Number = 1 Device check:
-    // If another device is already approved and this device is NOT approved, block login and queue as 'pending'
-    const hasOtherApprovedDevice = approvedDevices.some((d) => d.deviceId !== device.deviceId);
-    const isThisDeviceApproved = existingDeviceEntry?.status === 'approved';
+    // Check if an existing approved device matches this exact device ID OR is the same physical phone (same OS + browser)
+    // migrating from an ephemeral legacy random dev_ ID to the permanent app_device_uuid.
+    const matchingHardwareApproved = approvedDevices.find(
+      (d) =>
+        d.deviceId === device.deviceId ||
+        (d.os === device.os && d.browser === device.browser && existingDeviceEntry?.status !== 'rejected')
+    );
 
-    if (hasOtherApprovedDevice && !isThisDeviceApproved) {
+    const hasOtherApprovedDevice =
+      approvedDevices.some((d) => d.deviceId !== device.deviceId) && !matchingHardwareApproved;
+    const isThisDeviceApproved = existingDeviceEntry?.status === 'approved' || Boolean(matchingHardwareApproved);
+
+    if (hasOtherApprovedDevice && !isThisDeviceApproved && this.isFeatureEnabled('device_approval')) {
       const pendingRecord: DeviceRecord = {
         ...device,
         deviceModel: device.deviceModel || device.deviceName || `${device.os} (${device.browser})`,
@@ -4750,6 +4929,10 @@ class AuthoritativeStore {
       existing.devices[device.deviceId] = pendingRecord;
       this.users[existing.uid] = existing;
       this.savePermanentUsersRegistry();
+
+      if (this.onUserSaved) {
+        try { this.onUserSaved(existing); } catch (e) { console.warn('onUserSaved pending device error:', e); }
+      }
 
       if (typeof window !== 'undefined') {
         fetch('/api/auth/register', {
@@ -4785,20 +4968,29 @@ class AuthoritativeStore {
       };
     }
 
+    // Persist the approved device ID into localStorage so future logins always match 1:1
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('app_device_uuid', device.deviceId);
+        localStorage.setItem('bingo777_client_device_id', device.deviceId);
+      } catch {}
+    }
+
     // Either no approved device existed yet, or this device is the approved device
     const approvedRecord: DeviceRecord = {
       ...device,
+      ...(matchingHardwareApproved || {}),
       ...(existingDeviceEntry || {}),
       deviceId: device.deviceId,
       deviceName: device.deviceName || existingDeviceEntry?.deviceName || `${device.os} (${device.browser})`,
       deviceModel: device.deviceModel || existingDeviceEntry?.deviceModel || device.deviceName || `${device.os} (${device.browser})`,
       osVersion: device.osVersion || existingDeviceEntry?.osVersion || device.os || 'Unknown',
-      registeredAt: existingDeviceEntry?.registeredAt || now,
-      requestedAt: existingDeviceEntry?.requestedAt || now,
+      registeredAt: existingDeviceEntry?.registeredAt || matchingHardwareApproved?.registeredAt || now,
+      requestedAt: existingDeviceEntry?.requestedAt || matchingHardwareApproved?.requestedAt || now,
       lastUsedAt: now,
       status: 'approved',
-      approvedAt: existingDeviceEntry?.approvedAt || now,
-      approvedBy: existingDeviceEntry?.approvedBy || 'PRIMARY_DEVICE_LOCK'
+      approvedAt: existingDeviceEntry?.approvedAt || matchingHardwareApproved?.approvedAt || now,
+      approvedBy: existingDeviceEntry?.approvedBy || matchingHardwareApproved?.approvedBy || 'PRIMARY_DEVICE_LOCK'
     };
 
     // Enforce single approved device invariant
@@ -4898,12 +5090,13 @@ class AuthoritativeStore {
       }
     }
 
-    // Ensure referrer user has referralCount synchronized
+    // Ensure referrer user has referralCount and totalReferrals synchronized
     const referrer = this.users[ref.referrerUid];
     if (referrer) {
       const count = this.referrals.filter((r) => r.referrerUid === referrer.uid).length;
-      if ((referrer.referralCount || 0) < count) {
+      if ((referrer.referralCount || 0) < count || (referrer.totalReferrals || 0) < count) {
         referrer.referralCount = count;
+        referrer.totalReferrals = count;
         changed = true;
       }
     }
@@ -4963,7 +5156,9 @@ class AuthoritativeStore {
             bonusAmount: this.adminSettings.referralBonusAmount || 120
           };
           this.referrals.unshift(newRef);
-          referrer.referralCount = this.referrals.filter((r) => r.referrerUid === referrer.uid).length;
+          const nextCount = this.referrals.filter((r) => r.referrerUid === referrer.uid).length;
+          referrer.referralCount = nextCount;
+          referrer.totalReferrals = nextCount;
           changed = true;
           if (this.onReferralSaved) {
             try { this.onReferralSaved(newRef); } catch {}
@@ -5150,6 +5345,72 @@ class AuthoritativeStore {
       ...incomingSettings,
       appName: 'Bingo777'
     };
+
+    // Synchronize unified /admin_settings fields into local featureModules, Aviator config, and WinGo overrides
+    const s = this.adminSettings;
+    if (s.featureModulesMap && typeof s.featureModulesMap === 'object') {
+      Object.entries(s.featureModulesMap).forEach(([fid, mod]) => {
+        if (mod && typeof mod === 'object') {
+          this.featureModules[fid] = { ...(this.featureModules[fid] || {}), ...mod };
+        }
+      });
+    }
+
+    const syncMod = (fid: string, enabled?: boolean) => {
+      if (enabled === undefined) return;
+      if (this.featureModules[fid]) {
+        this.featureModules[fid].enabled = enabled;
+        this.featureModules[fid].visibleInUserApp = enabled;
+        this.featureModules[fid].status = enabled ? 'active' : 'deactivated';
+      }
+    };
+
+    if (s.allGamesEnabled === false) {
+      ['wingo', 'wingo_30s', 'wingo_1min', 'wingo_3min', 'aviator', 'k3_dice', 'trx_wingo', 'wheel', 'ludo', 'quiz_battle', 'dragon_tiger'].forEach((gid) => syncMod(gid, false));
+    } else {
+      syncMod('wingo', s.wingoEnabled);
+      syncMod('wingo_30s', s.wingoEnabled === false ? false : s.featureWinGo30s);
+      syncMod('wingo_1min', s.wingoEnabled === false ? false : s.featureWinGo1min);
+      syncMod('wingo_3min', s.wingoEnabled === false ? false : s.featureWinGo3min);
+      syncMod('aviator', s.aviatorEnabled !== undefined ? s.aviatorEnabled : s.featureAviator);
+      syncMod('k3_dice', s.k3Enabled !== undefined ? s.k3Enabled : s.featureK3Dice);
+      syncMod('trx_wingo', s.trxEnabled !== undefined ? s.trxEnabled : s.featureTrxWinGo);
+      syncMod('ludo', s.ludoEnabled);
+      syncMod('dragon_tiger', s.dragonTigerEnabled);
+      syncMod('quiz_battle', s.liveQuizEnabled);
+      syncMod('wheel', s.wheelEnabled);
+    }
+
+    syncMod('deposits', s.allowUpiDeposit !== undefined ? s.allowUpiDeposit : s.featureDeposits);
+    syncMod('usdt_deposit', s.allowUsdtDeposit !== undefined ? s.allowUsdtDeposit : s.featureUsdtDeposit);
+    syncMod('withdrawals', s.allowWithdrawals !== undefined ? s.allowWithdrawals : s.featureWithdrawals);
+    syncMod('usdt_withdrawal', s.allowUsdtWithdrawal !== undefined ? s.allowUsdtWithdrawal : s.featureUsdtWithdrawal);
+    syncMod('signup_bonus', s.featureSignupBonus);
+    syncMod('first_deposit_bonus', s.featureFirstDepositBonus);
+    syncMod('referrals', s.featureReferrals);
+    syncMod('gift_codes', s.featureGiftCodes);
+    syncMod('mlm_affiliate', s.featureMlm);
+    syncMod('live_support', s.featureLiveChat);
+    syncMod('device_approval', s.featureDeviceApproval);
+
+    if (typeof s.aviatorMaxCap === 'number' && s.aviatorMaxCap >= 1) {
+      this.aviatorEngineConfig.maxMultiplierCap = s.aviatorMaxCap;
+    }
+    if (typeof s.aviatorTargetRtp === 'number' && s.aviatorTargetRtp >= 50) {
+      this.aviatorEngineConfig.rtpPercent = s.aviatorTargetRtp;
+    }
+    if (s.aviatorNextCrash !== undefined) {
+      this.aviatorEngineConfig.nextCrashOverride = s.aviatorNextCrash;
+    }
+    if (s.wingoResultOverrides && typeof s.wingoResultOverrides === 'object') {
+      (['30s', '1min', '3min'] as const).forEach((m) => {
+        const ov = s.wingoResultOverrides?.[m];
+        if (typeof ov === 'number' && ov >= 0 && ov <= 9 && this.activeRoundsByMode[m]) {
+          this.activeRoundsByMode[m].manualOverrideNumber = ov;
+        }
+      });
+    }
+
     this.saveToStorage();
     this.safeNotifyListeners();
   }
@@ -5158,15 +5419,40 @@ class AuthoritativeStore {
     if (!userData.uid || this.deletedUserUids.has(userData.uid)) return;
 
     const existing = this.users[userData.uid];
+    const cleanPhone =
+      this.normalizePhone(userData.phone) ||
+      (existing ? this.normalizePhone(existing.phone) : '') ||
+      (userData.uid.startsWith('usr_') ? this.normalizePhone(userData.uid.slice(4)) : '');
+
+    // Prevent a duplicate UID record with balance: 0 from clobbering a positive balance for the same phone or UID
+    const siblingWithBalance = cleanPhone
+      ? Object.values(this.users).find(
+          (u) => u && u.uid !== userData.uid && this.normalizePhone(u.phone) === cleanPhone && Number(u.balance) > 0
+        )
+      : undefined;
+
     const hasExplicitBalance = typeof userData.balance === 'number' && Number.isFinite(userData.balance);
-    const verifiedBalance = hasExplicitBalance
+    let verifiedBalance = hasExplicitBalance
       ? Math.max(0, Math.round(Number(userData.balance) * 100) / 100)
       : existing && typeof existing.balance === 'number' && Number.isFinite(existing.balance)
       ? Math.max(0, Math.round(existing.balance * 100) / 100)
       : this.computeVerifiedLedgerBalance(userData.uid);
 
+    if (verifiedBalance === 0 && existing && existing.balance > 0) {
+      const ledgerBal = this.computeVerifiedLedgerBalance(userData.uid);
+      if (ledgerBal > 0) verifiedBalance = ledgerBal;
+    }
+    if (verifiedBalance === 0 && siblingWithBalance && siblingWithBalance.balance > 0) {
+      verifiedBalance = siblingWithBalance.balance;
+    }
+
     if (existing) {
-      const cleanPhone = this.normalizePhone(userData.phone) || this.normalizePhone(existing.phone);
+      const resolvedRefCount = Math.max(
+        typeof userData.referralCount === 'number' ? userData.referralCount : 0,
+        typeof userData.totalReferrals === 'number' ? userData.totalReferrals : 0,
+        existing.referralCount ?? 0,
+        existing.totalReferrals ?? 0
+      );
       this.users[userData.uid] = {
         ...existing,
         ...userData,
@@ -5175,7 +5461,8 @@ class AuthoritativeStore {
         referralCode: userData.referralCode || existing.referralCode,
         referredBy: userData.referredBy || existing.referredBy,
         referredByCode: userData.referredByCode || existing.referredByCode,
-        referralCount: typeof userData.referralCount === 'number' ? userData.referralCount : (existing.referralCount ?? 0),
+        referralCount: resolvedRefCount,
+        totalReferrals: resolvedRefCount,
         balance: verifiedBalance,
         vipLevel: typeof userData.vipLevel === 'number' ? userData.vipLevel : existing.vipLevel,
         status: userData.status || existing.status,
@@ -5183,7 +5470,7 @@ class AuthoritativeStore {
         lastActive: Date.now()
       };
     } else {
-      const cleanPhone = this.normalizePhone(userData.phone) || (userData.uid.startsWith('usr_') ? this.normalizePhone(userData.uid.slice(4)) : '');
+      const resolvedRefCount = Math.max(userData.referralCount ?? 0, userData.totalReferrals ?? 0);
       this.users[userData.uid] = {
         uid: userData.uid,
         phone: cleanPhone,
@@ -5201,7 +5488,8 @@ class AuthoritativeStore {
         referralCode: userData.referralCode || `VIP${Math.floor(1000 + Math.random() * 9000)}`,
         referredBy: userData.referredBy,
         referredByCode: userData.referredByCode,
-        referralCount: userData.referralCount ?? 0,
+        referralCount: resolvedRefCount,
+        totalReferrals: resolvedRefCount,
         signupBonusStatus: userData.signupBonusStatus ?? 'pending',
         signupBonusAmount: userData.signupBonusAmount ?? 120,
         firstDepositBonusStatus: userData.firstDepositBonusStatus ?? 'pending',
@@ -6846,8 +7134,14 @@ class AuthoritativeStore {
     mod.updatedAt = Date.now();
     mod.updatedBy = adminId;
 
-    // Synchronize corresponding AdminSettings boolean flags
+    // Synchronize corresponding AdminSettings boolean flags and featureModulesMap
     this.syncAdminSettingsFromFeature(featureId, enabled);
+    this.adminSettings.featureModulesMap = { ...this.featureModules };
+    this.adminSettings.updatedAt = Date.now();
+
+    if (this.onAdminSettingsSaved) {
+      try { this.onAdminSettingsSaved(this.adminSettings); } catch (e) { console.warn('onAdminSettingsSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -6898,9 +7192,26 @@ class AuthoritativeStore {
         this.featureModules[gid].status = enabled ? 'active' : 'deactivated';
         this.featureModules[gid].updatedAt = Date.now();
         this.featureModules[gid].updatedBy = adminId;
+        this.syncAdminSettingsFromFeature(gid, enabled);
         count++;
       }
     });
+
+    this.adminSettings.allGamesEnabled = enabled;
+    this.adminSettings.wingoEnabled = enabled;
+    this.adminSettings.aviatorEnabled = enabled;
+    this.adminSettings.k3Enabled = enabled;
+    this.adminSettings.trxEnabled = enabled;
+    this.adminSettings.ludoEnabled = enabled;
+    this.adminSettings.dragonTigerEnabled = enabled;
+    this.adminSettings.liveQuizEnabled = enabled;
+    this.adminSettings.wheelEnabled = enabled;
+    this.adminSettings.featureModulesMap = { ...this.featureModules };
+    this.adminSettings.updatedAt = Date.now();
+
+    if (this.onAdminSettingsSaved) {
+      try { this.onAdminSettingsSaved(this.adminSettings); } catch (e) { console.warn('onAdminSettingsSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -6944,6 +7255,16 @@ class AuthoritativeStore {
       this.syncAdminSettingsFromFeature(mod.id, enabled);
       count++;
     });
+
+    if (!categoryFilter || categoryFilter === 'ALL' || categoryFilter === 'GAMES') {
+      this.adminSettings.allGamesEnabled = enabled;
+    }
+    this.adminSettings.featureModulesMap = { ...this.featureModules };
+    this.adminSettings.updatedAt = Date.now();
+
+    if (this.onAdminSettingsSaved) {
+      try { this.onAdminSettingsSaved(this.adminSettings); } catch (e) { console.warn('onAdminSettingsSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -6998,6 +7319,12 @@ class AuthoritativeStore {
 
     this.featureModules[cleanId] = updated;
     this.syncAdminSettingsFromFeature(cleanId, updated.enabled);
+    this.adminSettings.featureModulesMap = { ...this.featureModules };
+    this.adminSettings.updatedAt = Date.now();
+
+    if (this.onAdminSettingsSaved) {
+      try { this.onAdminSettingsSaved(this.adminSettings); } catch (e) { console.warn('onAdminSettingsSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -7020,7 +7347,6 @@ class AuthoritativeStore {
     const mod = this.featureModules[featureId];
     if (!mod) return { success: false, error: 'Feature module not found' };
 
-    // Dependency Check 1: Core system modules with active pending bets or pending financial requests cannot be removed; deactivate instead
     if (mod.isCoreSystem) {
       const hasPendingBets = this.liveBets.some((b) => b.status === 'pending' && (b.gameId === featureId || featureId.startsWith('wingo')));
       const hasPendingDeposits = featureId === 'deposits' && this.deposits.some((d) => d.status === 'pending');
@@ -7034,10 +7360,15 @@ class AuthoritativeStore {
       }
     }
 
-    // Back up module before removal so it can be restored without data loss
     this.deletedFeaturesBackup[featureId] = { ...mod, updatedAt: Date.now(), updatedBy: adminId };
     delete this.featureModules[featureId];
     this.syncAdminSettingsFromFeature(featureId, false);
+    this.adminSettings.featureModulesMap = { ...this.featureModules };
+    this.adminSettings.updatedAt = Date.now();
+
+    if (this.onAdminSettingsSaved) {
+      try { this.onAdminSettingsSaved(this.adminSettings); } catch (e) { console.warn('onAdminSettingsSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -7065,6 +7396,12 @@ class AuthoritativeStore {
     };
     delete this.deletedFeaturesBackup[featureId];
     this.syncAdminSettingsFromFeature(featureId, true);
+    this.adminSettings.featureModulesMap = { ...this.featureModules };
+    this.adminSettings.updatedAt = Date.now();
+
+    if (this.onAdminSettingsSaved) {
+      try { this.onAdminSettingsSaved(this.adminSettings); } catch (e) { console.warn('onAdminSettingsSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -7079,33 +7416,49 @@ class AuthoritativeStore {
   }
 
   private syncAdminSettingsFromFeature(featureId: string, enabled: boolean) {
-    const map: Record<string, keyof AdminSettings> = {
-      wingo_30s: 'featureWinGo30s',
-      wingo_1min: 'featureWinGo1min',
-      wingo_3min: 'featureWinGo3min',
-      trx_wingo: 'featureTrxWinGo',
-      aviator: 'featureAviator',
-      k3_dice: 'featureK3Dice',
-      deposits: 'featureDeposits',
-      withdrawals: 'featureWithdrawals',
-      usdt_deposit: 'featureUsdtDeposit',
-      usdt_withdrawal: 'featureUsdtWithdrawal',
-      gift_codes: 'featureGiftCodes',
-      referrals: 'featureReferrals',
-      signup_bonus: 'featureSignupBonus',
-      first_deposit_bonus: 'featureFirstDepositBonus',
-      mlm_affiliate: 'featureMlm',
-      live_support: 'featureLiveChat',
-      device_approval: 'featureDeviceApproval'
+    const map: Record<string, (keyof AdminSettings)[]> = {
+      wingo: ['wingoEnabled'],
+      wingo_30s: ['featureWinGo30s', 'wingoEnabled'],
+      wingo_1min: ['featureWinGo1min'],
+      wingo_3min: ['featureWinGo3min'],
+      trx_wingo: ['featureTrxWinGo', 'trxEnabled'],
+      aviator: ['featureAviator', 'aviatorEnabled'],
+      k3_dice: ['featureK3Dice', 'k3Enabled'],
+      ludo: ['ludoEnabled'],
+      dragon_tiger: ['dragonTigerEnabled'],
+      quiz_battle: ['liveQuizEnabled'],
+      wheel: ['wheelEnabled'],
+      user_signup: ['allowUserSignup'],
+      user_login: ['allowUserLogin'],
+      deposits: ['featureDeposits', 'allowUpiDeposit'],
+      withdrawals: ['featureWithdrawals', 'allowWithdrawals'],
+      bank_withdrawal: ['allowBankWithdrawal'],
+      usdt_deposit: ['featureUsdtDeposit', 'allowUsdtDeposit'],
+      usdt_withdrawal: ['featureUsdtWithdrawal', 'allowUsdtWithdrawal'],
+      ludo_voice_chat: ['ludoVoiceChatEnabled'],
+      ludo_chat_presets: ['ludoChatPresetsEnabled'],
+      gift_codes: ['featureGiftCodes'],
+      referrals: ['featureReferrals'],
+      signup_bonus: ['featureSignupBonus'],
+      first_deposit_bonus: ['featureFirstDepositBonus'],
+      mlm_affiliate: ['featureMlm'],
+      live_support: ['featureLiveChat'],
+      device_approval: ['featureDeviceApproval']
     };
-    const settingKey = map[featureId];
-    if (settingKey) {
-      (this.adminSettings as unknown as Record<string, unknown>)[settingKey] = enabled;
+    const keys = map[featureId];
+    if (keys) {
+      keys.forEach((k) => {
+        (this.adminSettings as unknown as Record<string, unknown>)[k] = enabled;
+      });
     }
   }
 
   public updateAdminSettings(newSettings: Partial<AdminSettings>, adminId: string) {
-    const merged = { ...this.adminSettings, ...newSettings };
+    const merged: AdminSettings = {
+      ...this.adminSettings,
+      ...newSettings,
+      updatedAt: Date.now()
+    };
     if (newSettings.officialUpiId !== undefined) {
       merged.upiId = newSettings.officialUpiId;
     } else if (newSettings.upiId !== undefined) {
@@ -7122,20 +7475,19 @@ class AuthoritativeStore {
     if (newSettings.secondaryUpiName !== undefined) {
       merged.secondaryUpiName = newSettings.secondaryUpiName.trim();
     }
+    if (newSettings.referralQualifyingDays !== undefined) {
+      merged.referralRequiredDays = newSettings.referralQualifyingDays;
+    } else if (newSettings.referralRequiredDays !== undefined) {
+      merged.referralQualifyingDays = newSettings.referralRequiredDays;
+    }
+    if (newSettings.referralQualifyingBet !== undefined) {
+      merged.referralDailyBetRequirement = newSettings.referralQualifyingBet;
+    } else if (newSettings.referralDailyBetRequirement !== undefined) {
+      merged.referralQualifyingBet = newSettings.referralDailyBetRequirement;
+    }
     this.adminSettings = merged;
-    // Sync featureModules if boolean flags were updated in AdminSettings
-    if (newSettings.featureSignupBonus !== undefined && this.featureModules.signup_bonus) {
-      this.featureModules.signup_bonus.enabled = newSettings.featureSignupBonus;
-      this.featureModules.signup_bonus.status = newSettings.featureSignupBonus ? 'active' : 'deactivated';
-    }
-    if (newSettings.featureFirstDepositBonus !== undefined && this.featureModules.first_deposit_bonus) {
-      this.featureModules.first_deposit_bonus.enabled = newSettings.featureFirstDepositBonus;
-      this.featureModules.first_deposit_bonus.status = newSettings.featureFirstDepositBonus ? 'active' : 'deactivated';
-    }
-    if (newSettings.featureReferrals !== undefined && this.featureModules.referrals) {
-      this.featureModules.referrals.enabled = newSettings.featureReferrals;
-      this.featureModules.referrals.status = newSettings.featureReferrals ? 'active' : 'deactivated';
-    }
+    this.ingestCloudAdminSettings(merged);
+
     if (newSettings.maintenanceMode !== undefined) {
       this.logAudit({
         actor: adminId,
@@ -7198,11 +7550,17 @@ class AuthoritativeStore {
       c.isActive = c.id === channelId;
     });
 
+    this.adminSettings.upiChannels = [...channels];
     this.adminSettings.activeUpiChannelId = channelId;
     this.adminSettings.officialUpiId = target.upiId;
     this.adminSettings.officialUpiName = target.merchantName;
     this.adminSettings.upiId = target.upiId;
     this.adminSettings.upiMerchantName = target.merchantName;
+    this.adminSettings.updatedAt = Date.now();
+
+    if (this.onAdminSettingsSaved) {
+      try { this.onAdminSettingsSaved(this.adminSettings); } catch (e) { console.warn('onAdminSettingsSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -7212,6 +7570,7 @@ class AuthoritativeStore {
       outcome: 'SUCCESS'
     });
 
+    this.saveToStorage();
     this.notify();
     return true;
   }
@@ -7245,7 +7604,12 @@ class AuthoritativeStore {
     }
 
     channels.push(newChannel);
-    this.adminSettings.upiChannels = channels;
+    this.adminSettings.upiChannels = [...channels];
+    this.adminSettings.updatedAt = Date.now();
+
+    if (this.onAdminSettingsSaved) {
+      try { this.onAdminSettingsSaved(this.adminSettings); } catch (e) { console.warn('onAdminSettingsSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -7255,6 +7619,7 @@ class AuthoritativeStore {
       outcome: 'SUCCESS'
     });
 
+    this.saveToStorage();
     this.notify();
     return newChannel;
   }
@@ -7275,7 +7640,12 @@ class AuthoritativeStore {
       this.adminSettings.upiMerchantName = channels[0].merchantName;
     }
 
-    this.adminSettings.upiChannels = channels;
+    this.adminSettings.upiChannels = [...channels];
+    this.adminSettings.updatedAt = Date.now();
+
+    if (this.onAdminSettingsSaved) {
+      try { this.onAdminSettingsSaved(this.adminSettings); } catch (e) { console.warn('onAdminSettingsSaved error:', e); }
+    }
 
     this.logAudit({
       actor: adminId,
@@ -7285,6 +7655,7 @@ class AuthoritativeStore {
       outcome: 'SUCCESS'
     });
 
+    this.saveToStorage();
     this.notify();
     return true;
   }

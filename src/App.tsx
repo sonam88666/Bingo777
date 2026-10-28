@@ -33,9 +33,11 @@ import { store } from './services/store';
 import { firebaseSync } from './services/firebaseSync';
 import { auth } from './firebase';
 import { UserRecord, DeviceRecord, GameId, RoundSettlementNotice } from './types';
+import { AdminSettingsProvider, useAdminSettings } from './context/AdminSettingsContext';
 
 function MainApp() {
   const { showToast } = useToast();
+  const { settings: liveAdminSettings, isGameEnabled } = useAdminSettings();
 
   // Mode: Player App vs Master Admin
   const [viewMode, setViewMode] = useState<'user_app' | 'master_admin'>('user_app');
@@ -63,19 +65,46 @@ function MainApp() {
   // Store Sync & User Session Persistence
   const [storeTick, setStoreTick] = useState(0);
 
-  // If currently opened sub-game or tab is disabled by Master Admin, safely return user to lobby
+  // If currently opened sub-game or tab is disabled by Master Admin via live /admin_settings stream, safely return user to lobby within 200ms
   useEffect(() => {
-    if (selectedSubGame && (!store.isFeatureEnabled(selectedSubGame) || !store.isFeatureVisible(selectedSubGame))) {
+    if (selectedSubGame && (!isGameEnabled(selectedSubGame) || !store.isFeatureEnabled(selectedSubGame) || !store.isFeatureVisible(selectedSubGame))) {
       setSelectedSubGame(null);
       showToast('This game was disabled by Master Admin. Returning to Lobby.', 'info');
     }
-    if (activeNavTab === 'wingo' && (!store.isFeatureEnabled('wingo') || !store.isFeatureVisible('wingo'))) {
+    if (activeNavTab === 'wingo' && (!isGameEnabled('wingo') || !store.isFeatureEnabled('wingo') || !store.isFeatureVisible('wingo'))) {
       setActiveNavTab('home');
     }
-    if (activeNavTab === 'aviator' && (!store.isFeatureEnabled('aviator') || !store.isFeatureVisible('aviator'))) {
+    if (activeNavTab === 'aviator' && (!isGameEnabled('aviator') || !store.isFeatureEnabled('aviator') || !store.isFeatureVisible('aviator'))) {
       setActiveNavTab('home');
     }
-  }, [selectedSubGame, activeNavTab, storeTick]);
+  }, [selectedSubGame, activeNavTab, storeTick, liveAdminSettings, isGameEnabled]);
+
+  // Master Admin Session Timeout (auto-lock after 30 minutes of inactivity)
+  useEffect(() => {
+    if (viewMode !== 'master_admin' || !masterAdminId) return;
+    const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+    let timeoutId: ReturnType<typeof setTimeout> = setTimeout(() => {
+      handleAdminLogout();
+    }, SESSION_TIMEOUT_MS);
+
+    const resetTimer = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        handleAdminLogout();
+      }, SESSION_TIMEOUT_MS);
+    };
+
+    window.addEventListener('mousemove', resetTimer, { passive: true });
+    window.addEventListener('keydown', resetTimer, { passive: true });
+    window.addEventListener('touchstart', resetTimer, { passive: true });
+
+    return () => {
+      clearTimeout(timeoutId);
+      window.removeEventListener('mousemove', resetTimer);
+      window.removeEventListener('keydown', resetTimer);
+      window.removeEventListener('touchstart', resetTimer);
+    };
+  }, [viewMode, masterAdminId]);
 
   const syncUnacknowledgedSettlements = (uid: string | null) => {
     if (!uid) {
@@ -729,7 +758,9 @@ export default function App() {
   return (
     <AppErrorBoundary>
       <ToastProvider>
-        <MainApp />
+        <AdminSettingsProvider>
+          <MainApp />
+        </AdminSettingsProvider>
       </ToastProvider>
     </AppErrorBoundary>
   );

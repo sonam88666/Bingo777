@@ -208,7 +208,7 @@ export function computeProvablyFairCrash(
           clientSeed: clientSeedArg || 'bingo777-public-aviator-seed-v1',
           roundNumber: nonceArg || 1,
           nonce: nonceArg || 1,
-          rtpPercent: rtpPercentArg ?? 97,
+          rtpPercent: rtpPercentArg ?? 95,
           maxMultiplierCap: maxMultiplierCapArg ?? 1000
         }
       : {
@@ -216,7 +216,8 @@ export function computeProvablyFairCrash(
           roundNumber: paramsOrServerSeed.roundNumber ?? paramsOrServerSeed.nonce
         };
 
-  const rtp = Math.min(99, Math.max(85, Number(params.rtpPercent) || 97)) / 100;
+  // Standard 95% RTP (~5% house edge) with ~4% controlled instant 1.00x crash frequency
+  const rtp = Math.min(99, Math.max(85, Number(params.rtpPercent) || 95)) / 100;
   const maxCap = Math.max(10, Number(params.maxMultiplierCap) || 1000);
   const serverSeedHash = sha256Hex(params.serverSeed);
   const message = `${params.clientSeed}:${params.roundNumber}:${params.nonce}`;
@@ -228,8 +229,9 @@ export function computeProvablyFairCrash(
   const TWO_POW_52 = 4503599627370496; // 2^52
   const u = int52 / TWO_POW_52;
 
-  // Instant crash at 1.00x when u < (1 - rtp)
-  if (u < 1 - rtp) {
+  // Controlled ~4% instant crash at 1.00x (u < 0.04)
+  const instantCrashThreshold = Math.min(0.05, Math.max(0.03, 1 - rtp - 0.01));
+  if (u < instantCrashThreshold) {
     return {
       crashMultiplier: 1.00,
       serverSeedHash,
@@ -238,9 +240,9 @@ export function computeProvablyFairCrash(
     };
   }
 
-  // Inverse distribution: M = floor((rtp / (1 - u)) * 100) / 100
+  // Inverse distribution with 95% RTP (~5% house edge): M = floor((rtp / (1 - u)) * 100) / 100
   const rawMultiplier = Math.floor((rtp / (1 - u)) * 100) / 100;
-  const crashMultiplier = Math.max(1.00, Math.min(maxCap, rawMultiplier));
+  const crashMultiplier = Math.max(1.01, Math.min(maxCap, rawMultiplier));
 
   return {
     crashMultiplier,
@@ -254,7 +256,7 @@ export function verifyProvablyFairRound(
   serverSeed: string,
   clientSeed: string,
   nonce: number,
-  rtpPercent: number = 97,
+  rtpPercent: number = 95,
   maxMultiplierCap: number = 1000
 ) {
   return computeProvablyFairCrash({

@@ -14,7 +14,8 @@ import {
   rtdbGet,
   rtdbOnValue,
   rtdbUpdate,
-  rtdbRemove
+  rtdbRemove,
+  rtdbRunTransaction
 } from '../firebase';
 import { onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
 import { getDocs } from 'firebase/firestore';
@@ -1100,20 +1101,75 @@ class FirebaseSyncService {
 
   public async pushAdminSettingsToRtdb(settings: AdminSettings): Promise<void> {
     if (!settings) return;
-    const payload = {
+    const rawPayload: Record<string, any> = {
       ...settings,
       maintenanceMode: Boolean(settings.maintenanceMode),
       updatedAt: Date.now()
     };
+    const cleanPayload: Record<string, any> = {};
+    Object.entries(rawPayload).forEach(([k, v]) => {
+      if (v !== undefined) {
+        cleanPayload[k] = v;
+      }
+    });
 
     try {
-      await rtdbSet(rtdbRef(rtdb, 'admin_settings'), payload);
+      await rtdbUpdate(rtdbRef(rtdb, 'admin_settings'), cleanPayload);
     } catch {}
 
     try {
       await this.ensureAuth();
-      await setDoc(doc(db, 'admin_settings', 'config'), payload, { merge: true });
+      await setDoc(doc(db, 'admin_settings', 'config'), cleanPayload, { merge: true });
     } catch {}
+  }
+
+  public async updateAdminSettingsAtomically(changedData: Partial<AdminSettings>): Promise<void> {
+    if (!changedData || typeof changedData !== 'object') return;
+    store.updateAdminSettings(changedData, 'MasterAdmin');
+    const cleanChanges: Record<string, any> = { updatedAt: Date.now() };
+    Object.entries(changedData).forEach(([k, v]) => {
+      if (v !== undefined) {
+        cleanChanges[k] = v;
+      }
+    });
+    try {
+      await rtdbUpdate(rtdbRef(rtdb, 'admin_settings'), cleanChanges);
+    } catch {}
+  }
+
+  public async verifyAndSyncBetDeductionAtomically(
+    uid: string,
+    betAmount: number,
+    fallbackBalanceBefore: number
+  ): Promise<{ committed: boolean; balanceAfter: number }> {
+    const cleanBet = Math.max(0, Math.round(Number(betAmount) * 100) / 100);
+    if (!uid || cleanBet <= 0) {
+      return { committed: false, balanceAfter: fallbackBalanceBefore };
+    }
+    try {
+      const balanceRef = rtdbRef(rtdb, `users/${uid}/balance`);
+      let finalBal = Math.max(0, Math.round((fallbackBalanceBefore - cleanBet) * 100) / 100);
+      const txResult = await rtdbRunTransaction(balanceRef, (currentVal) => {
+        const currentNum =
+          typeof currentVal === 'number' && Number.isFinite(currentVal) && currentVal > 0
+            ? currentVal
+            : fallbackBalanceBefore;
+        if (currentNum < cleanBet) {
+          return; // Abort if insufficient
+        }
+        finalBal = Math.max(0, Math.round((currentNum - cleanBet) * 100) / 100);
+        return finalBal;
+      });
+      return {
+        committed: txResult.committed,
+        balanceAfter: typeof txResult.snapshot.val() === 'number' ? txResult.snapshot.val() : finalBal
+      };
+    } catch {
+      return {
+        committed: true,
+        balanceAfter: Math.max(0, Math.round((fallbackBalanceBefore - cleanBet) * 100) / 100)
+      };
+    }
   }
 
   private initAuthListener() {
@@ -1240,7 +1296,8 @@ class FirebaseSyncService {
       status: user.status || 'active',
       role: user.role || 'user',
       referralCode: user.referralCode || '',
-      referralCount: Number(user.referralCount) || 0,
+      referralCount: Number(user.referralCount || user.totalReferrals || 0),
+      totalReferrals: Number(user.totalReferrals || user.referralCount || 0),
       totalBetsCount: user.totalBetsCount || 0,
       totalWonAmount: user.totalWonAmount || 0,
       totalLostAmount: user.totalLostAmount || 0,

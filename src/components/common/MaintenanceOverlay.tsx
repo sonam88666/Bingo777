@@ -10,30 +10,33 @@ import {
   Lock
 } from 'lucide-react';
 import { store } from '../../services/store';
-import { AdminSettings } from '../../types';
+import { useAdminSettings } from '../../context/AdminSettingsContext';
 
 interface MaintenanceOverlayProps {
   onOpenSupport?: () => void;
 }
 
 export const MaintenanceOverlay: React.FC<MaintenanceOverlayProps> = ({ onOpenSupport }) => {
-  const [settings, setSettings] = useState<AdminSettings>(store.getAdminSettings());
-  const [isBypassedForAdmin, setIsBypassedForAdmin] = useState<boolean>(() => !store.isMaintenanceActiveForUser());
+  const { settings, isMaintenanceActiveForUser } = useAdminSettings();
+  const [isBypassedForAdmin, setIsBypassedForAdmin] = useState<boolean>(() => !isMaintenanceActiveForUser(store.getActiveSessionUid()));
   const [isModalDismissed, setIsModalDismissed] = useState<boolean>(false);
 
   useEffect(() => {
-    return store.subscribe(() => {
-      const updated = store.getAdminSettings();
-      setSettings(updated);
-      setIsBypassedForAdmin(!store.isMaintenanceActiveForUser());
-      // Reset dismissed state if maintenance mode gets turned ON freshly
-      if (!updated.maintenanceMode) {
-        setIsModalDismissed(false);
-      }
-    });
-  }, []);
+    const activeUid = store.getActiveSessionUid();
+    setIsBypassedForAdmin(!isMaintenanceActiveForUser(activeUid));
+    if (!settings.maintenanceMode) {
+      setIsModalDismissed(false);
+    }
+  }, [settings, isMaintenanceActiveForUser]);
 
-  // Selected Admin users (up to 5 Admins) bypass Maintenance Mode and use the app normally
+  useEffect(() => {
+    return store.subscribe(() => {
+      const activeUid = store.getActiveSessionUid();
+      setIsBypassedForAdmin(!isMaintenanceActiveForUser(activeUid));
+    });
+  }, [isMaintenanceActiveForUser]);
+
+  // Selected Admin users (up to 5 Admins or maintenanceBypassUids) bypass Maintenance Mode and use the app normally
   if (!settings.maintenanceMode || isBypassedForAdmin) {
     return null;
   }
@@ -41,7 +44,7 @@ export const MaintenanceOverlay: React.FC<MaintenanceOverlayProps> = ({ onOpenSu
   const defaultMsg =
     'Our platform is currently undergoing scheduled maintenance to upgrade system infrastructure. Placing new bets is temporarily paused. All existing wallet balances and transaction histories are 100% secure.';
   const displayMsg = settings.maintenanceMessage || defaultMsg;
-  const resumeTime = settings.maintenanceEstimatedResumeTime;
+  const resumeTime = settings.maintenanceResumeTime || settings.maintenanceEstimatedResumeTime;
 
   return (
     <>
