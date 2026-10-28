@@ -39,7 +39,9 @@ import {
   rtdbRef,
   rtdbSet,
   rtdbGet,
+  rtdbPush,
   rtdbOnValue,
+  rtdbOnChildAdded,
   rtdbUpdate,
   rtdbRemove,
   rtdbRunTransaction
@@ -149,7 +151,19 @@ interface LudoRoomState {
   isPrivate: boolean;
   status: 'waiting' | 'playing' | 'finished' | 'cancelled';
   players?: { p1: string; p2?: string };
-  currentTurn?: string;
+  currentTurn: string;
+  turnColor: LudoColor;
+  diceValue: number | null;
+  diceRolled: boolean;
+  hasRolled: boolean;
+  tokens: {
+    red: [number, number, number, number];
+    green: [number, number, number, number];
+    yellow?: [number, number, number, number];
+    blue?: [number, number, number, number];
+  };
+  turnDeadline: number;
+  consecutiveSixes: number;
   boardState?: {
     p1: [number, number, number, number];
     p2: [number, number, number, number];
@@ -159,8 +173,6 @@ interface LudoRoomState {
   player3?: LudoPlayerState | null;
   player4?: LudoPlayerState | null;
   turn: LudoPlayerKey;
-  diceValue: number | null;
-  hasRolled: boolean;
   movablePawns: number[];
   lastAction: string;
   lastRoll?: LudoRollEvent | null;
@@ -286,10 +298,10 @@ function getGlobalTrackIndex(color: LudoColor, step: number): number | null {
 
 function computeClientMovablePawns(pawns: [number, number, number, number], dice: number): number[] {
   const valid: number[] = [];
-  const hasBoardPawnMovable = pawns.some((pos) => pos >= 1 && pos < 57 && pos + dice <= 57);
   pawns.forEach((pos, idx) => {
-    if (pos === 0) {
-      if (dice === 6 || dice === 1 || !hasBoardPawnMovable) {
+    if (pos <= 0) {
+      // Tokens at base (0) can ONLY be deployed when rolling a 6
+      if (dice === 6) {
         valid.push(idx);
       }
     } else if (pos >= 1 && pos < 57 && pos + dice <= 57) {
@@ -389,14 +401,14 @@ const STAR_COORDS = new Set([
 const QUICK_EMOJIS = ['🔥', '🎲', '😂', '👏', '😱', '😎', '👑', '🙏', '👍', '🎯'];
 
 const QUICK_1VS1_REACTIONS = [
+  'Six aayega abhi! 🎲',
+  'Roll fast bro! ⏰',
+  'Bach ke rehna! 😎',
   'Well Played! 👏',
   'Oops! 😅',
-  'Hurry Up! ⏰',
   'Good Game! 🤝',
-  'Nice Roll! 🎲',
+  'Nice Roll! 🔥',
   'Don\'t Cut! 🙏',
-  'Watch Out! 😎',
-  'Good Luck! 🍀',
   'Haha! 😂'
 ];
 
@@ -1026,6 +1038,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
   }, []);
 
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -1036,6 +1049,9 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
   const activeWebRtcPeersRef = useRef<Set<string>>(new Set());
   const remoteAudioElementsRef = useRef<Record<string, HTMLAudioElement>>({});
   const processedSignalsRef = useRef<Set<string>>(new Set());
+  const processedOfferTsRef = useRef<Record<string, number>>({});
+  const processedAnswerTsRef = useRef<Record<string, number>>({});
+  const processedIceIdsRef = useRef<Set<string>>(new Set());
   const voiceBroadcastChannelRef = useRef<BroadcastChannel | null>(null);
   const isLocalSpeakingRef = useRef<boolean>(false);
 
@@ -1376,7 +1392,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     const defaultPrize = Math.round((totalPool - houseCut) * 100) / 100;
 
     const p1Raw = raw?.player1 || {};
-    const p1Pawns = normalizePawnsTuple(p1Raw.pawns ?? raw?.boardState?.p1, [0, 0, 0, 0]);
+    const p1Pawns = normalizePawnsTuple(raw?.tokens?.red ?? p1Raw.pawns ?? raw?.boardState?.p1, [0, 0, 0, 0]);
     const safePlayer1: LudoPlayerState = {
       uid: p1Raw.uid || raw?.hostUid || raw?.players?.p1 || 'player_1',
       username: p1Raw.username || 'Player 1',
@@ -1394,17 +1410,21 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       lastActiveAt: p1Raw.lastActiveAt || now
     };
 
-    const p2Color: LudoColor = maxP === 2 ? 'yellow' : 'green';
+    const p2Color: LudoColor = 'green';
     let safePlayer2: LudoPlayerState | null = null;
     if (raw?.player2 || raw?.status === 'playing' || raw?.players?.p2) {
       const p2Raw = raw?.player2 || {};
-      const p2Pawns = normalizePawnsTuple(p2Raw.pawns ?? raw?.boardState?.p2, [0, 0, 0, 0]);
+      const resolvedP2Color: LudoColor = maxP === 2 ? 'green' : (p2Raw.color || p2Color);
+      const p2Pawns = normalizePawnsTuple(
+        raw?.tokens?.[resolvedP2Color] ?? raw?.tokens?.green ?? p2Raw.pawns ?? raw?.boardState?.p2,
+        [0, 0, 0, 0]
+      );
       safePlayer2 = {
         uid: p2Raw.uid || raw?.players?.p2 || 'player_2',
         username: p2Raw.username || 'Challenger_2',
         location: p2Raw.location || 'India',
         flag: p2Raw.flag || '🇮🇳',
-        color: p2Raw.color || p2Color,
+        color: resolvedP2Color,
         pawns: p2Pawns,
         score: typeof p2Raw.score === 'number' ? p2Raw.score : 0,
         captures: typeof p2Raw.captures === 'number' ? p2Raw.captures : 0,
@@ -1438,12 +1458,49 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         ? ['player1', 'player2', 'player3']
         : ['player1', 'player2', 'player3', 'player4'];
 
-    const safeTurn: LudoPlayerKey =
-      raw?.turn === 'player2' || raw?.turn === 'player3' || raw?.turn === 'player4'
-        ? raw.turn
-        : raw?.currentTurn && safePlayer2 && raw.currentTurn === safePlayer2.uid
-        ? 'player2'
-        : 'player1';
+    let safeTurn: LudoPlayerKey = 'player1';
+    if (raw?.currentTurn && safePlayer2 && raw.currentTurn === safePlayer2.uid) {
+      safeTurn = 'player2';
+    } else if (raw?.currentTurn && raw.currentTurn === safePlayer1.uid) {
+      safeTurn = 'player1';
+    } else if (raw?.turn === 'player2' || raw?.turn === 'player3' || raw?.turn === 'player4') {
+      safeTurn = raw.turn;
+    }
+
+    const resolvedCurrentTurnUid =
+      safeTurn === 'player2' && safePlayer2
+        ? safePlayer2.uid
+        : safeTurn === 'player3' && raw?.player3?.uid
+        ? raw.player3.uid
+        : safeTurn === 'player4' && raw?.player4?.uid
+        ? raw.player4.uid
+        : safePlayer1.uid;
+
+    const resolvedTurnColor: LudoColor =
+      safeTurn === 'player2' && safePlayer2
+        ? safePlayer2.color
+        : safeTurn === 'player3'
+        ? 'yellow'
+        : safeTurn === 'player4'
+        ? 'blue'
+        : 'red';
+
+    const resolvedDiceRolled = Boolean(raw?.diceRolled ?? raw?.hasRolled);
+    const resolvedTurnDeadline =
+      typeof raw?.turnDeadline === 'number' && raw.turnDeadline > 0
+        ? raw.turnDeadline
+        : now + 15000;
+    const resolvedConsecutiveSixes =
+      typeof raw?.consecutiveSixes === 'number' && raw.consecutiveSixes >= 0
+        ? raw.consecutiveSixes
+        : 0;
+
+    const safeP3 = raw?.player3
+      ? { ...raw.player3, color: 'yellow' as LudoColor, pawns: normalizePawnsTuple(raw?.tokens?.yellow ?? raw.player3.pawns, [0, 0, 0, 0]) }
+      : null;
+    const safeP4 = raw?.player4
+      ? { ...raw.player4, color: 'blue' as LudoColor, pawns: normalizePawnsTuple(raw?.tokens?.blue ?? raw.player4.pawns, [0, 0, 0, 0]) }
+      : null;
 
     return {
       ...raw,
@@ -1461,18 +1518,28 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         p1: safePlayer1.uid,
         ...(safePlayer2 ? { p2: safePlayer2.uid } : {})
       },
-      currentTurn: safeTurn === 'player2' && safePlayer2 ? safePlayer2.uid : safePlayer1.uid,
+      currentTurn: resolvedCurrentTurnUid,
+      turnColor: resolvedTurnColor,
+      diceValue: typeof raw?.diceValue === 'number' ? raw.diceValue : null,
+      diceRolled: resolvedDiceRolled,
+      hasRolled: resolvedDiceRolled,
+      tokens: {
+        red: safePlayer1.pawns,
+        green: safePlayer2 ? safePlayer2.pawns : [0, 0, 0, 0],
+        ...(safeP3 ? { yellow: safeP3.pawns } : {}),
+        ...(safeP4 ? { blue: safeP4.pawns } : {})
+      },
+      turnDeadline: resolvedTurnDeadline,
+      consecutiveSixes: resolvedConsecutiveSixes,
       boardState: {
         p1: safePlayer1.pawns,
         p2: safePlayer2 ? safePlayer2.pawns : [0, 0, 0, 0]
       },
       player1: safePlayer1,
       player2: safePlayer2,
-      player3: raw?.player3 ? { ...raw.player3, pawns: normalizePawnsTuple(raw.player3.pawns, [0, 0, 0, 0]) } : null,
-      player4: raw?.player4 ? { ...raw.player4, pawns: normalizePawnsTuple(raw.player4.pawns, [0, 0, 0, 0]) } : null,
+      player3: safeP3,
+      player4: safeP4,
       turn: safeTurn,
-      diceValue: typeof raw?.diceValue === 'number' ? raw.diceValue : null,
-      hasRolled: Boolean(raw?.hasRolled),
       movablePawns: safeMovables,
       lastAction: raw?.lastAction || 'Match in progress',
       winner: raw?.winner || null,
@@ -1491,11 +1558,18 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         blue: [0, 0, 0, 0]
       };
       if (!targetRoom) return result;
+      if (targetRoom.tokens) {
+        if (targetRoom.tokens.red) result.red = normalizePawnsTuple(targetRoom.tokens.red, [0, 0, 0, 0]);
+        if (targetRoom.tokens.green) result.green = normalizePawnsTuple(targetRoom.tokens.green, [0, 0, 0, 0]);
+        if (targetRoom.tokens.yellow) result.yellow = normalizePawnsTuple(targetRoom.tokens.yellow, [0, 0, 0, 0]);
+        if (targetRoom.tokens.blue) result.blue = normalizePawnsTuple(targetRoom.tokens.blue, [0, 0, 0, 0]);
+      }
       const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
       keys.forEach((k) => {
         const p = targetRoom[k];
         if (p && p.color) {
-          result[p.color] = normalizePawnsTuple(p.pawns, [0, 0, 0, 0]);
+          const fromTokens = targetRoom.tokens?.[p.color];
+          result[p.color] = normalizePawnsTuple(fromTokens ?? p.pawns, [0, 0, 0, 0]);
         }
       });
       return result;
@@ -1541,7 +1615,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     [extractPawnsByColorFromRoom, normalizeLudoRoomState]
   );
 
-  // ==================== LIVE WEBRTC VOICE CHAT & HYBRID AUDIO RELAY ENGINE ====================
+  // ==================== LIVE P2P WEBRTC VOICE CALLING (/ludo_rooms/{roomId}/voice/{senderUid}) ====================
   const playIncomingAudioBase64 = useCallback(
     (fromUid: string, audioDataUrl: string) => {
       if (!speakerEnabled || mutedPlayerUids[fromUid]) return;
@@ -1560,19 +1634,17 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
   const syncVoiceStateToServer = useCallback(
     async (roomId: string, nextMic: boolean, nextSpeaker: boolean, speaking: boolean) => {
       if (!user) return;
+      const voicePayload: LudoVoiceState = {
+        uid: user.uid,
+        micEnabled: nextMic,
+        speakerEnabled: nextSpeaker,
+        isSpeaking: speaking,
+        updatedAt: Date.now()
+      };
       try {
-        await fetch(`/api/ludo/room/${roomId}/voice-state`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            uid: user.uid,
-            micEnabled: nextMic,
-            speakerEnabled: nextSpeaker,
-            isSpeaking: speaking
-          })
-        });
+        await rtdbSet(rtdbRef(rtdb, `ludo_rooms/${roomId}/voiceStates/${user.uid}`), voicePayload);
       } catch {
-        // Ignore transient network errors
+        // Ignore transient RTDB errors
       }
     },
     [user]
@@ -1616,6 +1688,19 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     pendingIceCandidatesRef.current = {};
     offeredPeersRef.current.clear();
     activeWebRtcPeersRef.current.clear();
+    processedOfferTsRef.current = {};
+    processedAnswerTsRef.current = {};
+    processedIceIdsRef.current.clear();
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = null;
+    }
+    Object.values(remoteAudioElementsRef.current).forEach((el) => {
+      try {
+        el.pause();
+        el.srcObject = null;
+      } catch {}
+    });
+    remoteAudioElementsRef.current = {};
     isLocalSpeakingRef.current = false;
     setIsLocalSpeaking(false);
     setMicLevel(0);
@@ -1656,6 +1741,9 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
   // Update volume/mute on remote WebRTC audio elements when speakerEnabled or mutedPlayerUids changes
   useEffect(() => {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.muted = !speakerEnabled;
+    }
     Object.entries(remoteAudioElementsRef.current).forEach(([peerUid, audioEl]) => {
       audioEl.muted = !speakerEnabled || Boolean(mutedPlayerUids[peerUid]);
     });
@@ -1710,15 +1798,16 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
       pc.onicecandidate = (ev) => {
         if (ev.candidate && user) {
-          fetch(`/api/ludo/room/${currentRoomId}/voice-signal`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fromUid: user.uid,
-              toUid: peerUid,
-              type: 'ice',
-              payload: ev.candidate
-            })
+          const candJson = ev.candidate.toJSON ? ev.candidate.toJSON() : {
+            candidate: ev.candidate.candidate,
+            sdpMid: ev.candidate.sdpMid,
+            sdpMLineIndex: ev.candidate.sdpMLineIndex
+          };
+          rtdbPush(rtdbRef(rtdb, `ludo_rooms/${currentRoomId}/voice/${user.uid}/ice_candidates`), {
+            ...candJson,
+            fromUid: user.uid,
+            toUid: peerUid,
+            timestamp: Date.now()
           }).catch(() => {});
         }
       };
@@ -1726,6 +1815,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'connected') {
           activeWebRtcPeersRef.current.add(peerUid);
+          setVoiceStatusNote('P2P Voice Connected');
         } else if (
           pc.connectionState === 'disconnected' ||
           pc.connectionState === 'failed' ||
@@ -1739,6 +1829,12 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         const remoteStream = ev.streams?.[0] || new MediaStream([ev.track]);
         if (remoteStream) {
           activeWebRtcPeersRef.current.add(peerUid);
+          setVoiceStatusNote('P2P Voice Connected');
+          if (remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = remoteStream;
+            remoteAudioRef.current.muted = !speakerEnabled || Boolean(mutedPlayerUids[peerUid]);
+            remoteAudioRef.current.play().catch(() => {});
+          }
           let audioEl = remoteAudioElementsRef.current[peerUid];
           if (!audioEl) {
             audioEl = new Audio();
@@ -1757,7 +1853,153 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     [user, speakerEnabled, mutedPlayerUids, attachLocalTracksToPeer]
   );
 
-  // Start MediaRecorder live audio chunk relay as NAT-proof fallback alongside WebRTC
+  // Real-time Firebase RTDB WebRTC SDP & ICE Signaling Listener (/ludo_rooms/{roomId}/voice)
+  useEffect(() => {
+    if (!room?.roomId || !user?.uid) return;
+    const currentRoomId = room.roomId;
+
+    const unsubVoice = rtdbOnValue(
+      rtdbRef(rtdb, `ludo_rooms/${currentRoomId}/voice`),
+      async (snap) => {
+        if (!snap.exists()) return;
+        const allVoiceMap = snap.val() as Record<string, any>;
+        for (const [senderUid, senderData] of Object.entries(allVoiceMap || {})) {
+          if (!senderData || senderUid === user.uid) continue;
+
+          try {
+            // 1. Handle incoming SDP Offer from opponent
+            if (
+              senderData.offer &&
+              senderData.offer.sdp &&
+              (!senderData.offer.targetUid || senderData.offer.targetUid === user.uid)
+            ) {
+              const offerTs = Number(senderData.offer.timestamp) || 1;
+              if (processedOfferTsRef.current[senderUid] !== offerTs) {
+                processedOfferTsRef.current[senderUid] = offerTs;
+                const pc = createOrGetPeerConnection(senderUid, currentRoomId);
+                attachLocalTracksToPeer(pc);
+                await pc.setRemoteDescription(
+                  new RTCSessionDescription({
+                    type: senderData.offer.type || 'offer',
+                    sdp: senderData.offer.sdp
+                  })
+                );
+                await flushPendingIceCandidates(senderUid, pc);
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                await rtdbUpdate(rtdbRef(rtdb, `ludo_rooms/${currentRoomId}/voice/${user.uid}`), {
+                  senderUid: user.uid,
+                  targetUid: senderUid,
+                  answer: {
+                    type: answer.type,
+                    sdp: answer.sdp,
+                    forOfferTs: offerTs,
+                    timestamp: Date.now()
+                  },
+                  updatedAt: Date.now()
+                });
+              }
+            }
+
+            // 2. Handle incoming SDP Answer from opponent
+            if (
+              senderData.answer &&
+              senderData.answer.sdp &&
+              (!senderData.answer.targetUid || senderData.answer.targetUid === user.uid)
+            ) {
+              const answerTs = Number(senderData.answer.timestamp) || 1;
+              if (processedAnswerTsRef.current[senderUid] !== answerTs) {
+                const pc = peerConnectionsRef.current[senderUid];
+                if (pc && pc.signalingState === 'have-local-offer') {
+                  processedAnswerTsRef.current[senderUid] = answerTs;
+                  await pc.setRemoteDescription(
+                    new RTCSessionDescription({
+                      type: senderData.answer.type || 'answer',
+                      sdp: senderData.answer.sdp
+                    })
+                  );
+                  await flushPendingIceCandidates(senderUid, pc);
+                }
+              }
+            }
+
+            // 3. Handle incoming ICE Candidates from opponent
+            if (senderData.ice_candidates && typeof senderData.ice_candidates === 'object') {
+              const pc = peerConnectionsRef.current[senderUid] || createOrGetPeerConnection(senderUid, currentRoomId);
+              for (const [candId, candObj] of Object.entries(senderData.ice_candidates as Record<string, any>)) {
+                if (!candObj || processedIceIdsRef.current.has(candId)) continue;
+                if (candObj.toUid && candObj.toUid !== user.uid) continue;
+                processedIceIdsRef.current.add(candId);
+                const candidateInit: RTCIceCandidateInit = {
+                  candidate: candObj.candidate,
+                  sdpMid: candObj.sdpMid ?? null,
+                  sdpMLineIndex: candObj.sdpMLineIndex ?? null
+                };
+                if (pc.remoteDescription && pc.remoteDescription.type) {
+                  await pc.addIceCandidate(new RTCIceCandidate(candidateInit)).catch(() => {});
+                } else {
+                  if (!pendingIceCandidatesRef.current[senderUid]) {
+                    pendingIceCandidatesRef.current[senderUid] = [];
+                  }
+                  pendingIceCandidatesRef.current[senderUid].push(candidateInit);
+                }
+              }
+            }
+
+            // 4. Handle NAT-fallback Audio Chunk or Spoken Voice Phrase
+            if (senderData.audio_chunk && senderData.audio_chunk.audioData) {
+              const chunkId = `chunk_${senderUid}_${senderData.audio_chunk.timestamp || 0}`;
+              if (!processedSignalsRef.current.has(chunkId)) {
+                processedSignalsRef.current.add(chunkId);
+                if (Date.now() - (senderData.audio_chunk.timestamp || 0) < 8000) {
+                  playIncomingAudioBase64(senderUid, senderData.audio_chunk.audioData);
+                }
+              }
+            }
+            if (senderData.voice_phrase && senderData.voice_phrase.text) {
+              const phraseId = `phrase_${senderUid}_${senderData.voice_phrase.timestamp || 0}`;
+              if (!processedSignalsRef.current.has(phraseId)) {
+                processedSignalsRef.current.add(phraseId);
+                if (
+                  Date.now() - (senderData.voice_phrase.timestamp || 0) < 10000 &&
+                  !mutedPlayerUids[senderUid]
+                ) {
+                  setFloatingBubbles((prev) => ({
+                    ...prev,
+                    [senderData.voice_phrase.senderColor || 'green']: {
+                      text: `🎙️ ${senderData.voice_phrase.text}`,
+                      ts: Date.now()
+                    }
+                  }));
+                  playTone(720, 110, 'sine', 0.07);
+                  speakVoiceOutLoud(senderData.voice_phrase.text, 1.06, 1.04);
+                }
+              }
+            }
+          } catch {
+            // Ignore transient WebRTC negotiation races
+          }
+        }
+      },
+      () => {}
+    );
+
+    return () => {
+      unsubVoice();
+    };
+  }, [
+    room?.roomId,
+    user?.uid,
+    mutedPlayerUids,
+    createOrGetPeerConnection,
+    attachLocalTracksToPeer,
+    flushPendingIceCandidates,
+    playIncomingAudioBase64,
+    playTone,
+    speakVoiceOutLoud
+  ]);
+
+  // Start MediaRecorder live audio chunk relay over Firebase RTDB as NAT-proof fallback alongside WebRTC
   const startLiveAudioChunkRelay = useCallback(
     (stream: MediaStream, currentRoomId: string) => {
       if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined' || !user) return;
@@ -1795,35 +2037,26 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
               reader.onloadend = () => {
                 const base64Audio = reader.result;
                 if (typeof base64Audio !== 'string' || !roomRef.current || !user) return;
-                // Broadcast immediately over BroadcastChannel
                 voiceBroadcastChannelRef.current?.postMessage({
                   fromUid: user.uid,
                   type: 'audio_chunk',
                   audioData: base64Audio
                 });
-                // Also relay to human peers in the room who aren't yet connected over direct WebRTC
                 const activeRoom = roomRef.current;
                 const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
-                keys.forEach((k) => {
+                const hasUnconnectedHuman = keys.some((k) => {
                   const p = activeRoom[k];
-                  if (
-                    p &&
-                    !p.isBot &&
-                    p.uid !== user.uid &&
-                    !activeWebRtcPeersRef.current.has(p.uid)
-                  ) {
-                    fetch(`/api/ludo/room/${currentRoomId}/voice-signal`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        fromUid: user.uid,
-                        toUid: p.uid,
-                        type: 'audio_chunk',
-                        payload: { audioData: base64Audio }
-                      })
-                    }).catch(() => {});
-                  }
+                  return p && !p.isBot && p.uid !== user.uid && !activeWebRtcPeersRef.current.has(p.uid);
                 });
+                if (hasUnconnectedHuman) {
+                  rtdbUpdate(rtdbRef(rtdb, `ludo_rooms/${currentRoomId}/voice/${user.uid}`), {
+                    audio_chunk: {
+                      audioData: base64Audio,
+                      timestamp: Date.now()
+                    },
+                    updatedAt: Date.now()
+                  }).catch(() => {});
+                }
               };
               reader.readAsDataURL(blob);
             };
@@ -1849,7 +2082,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     [user]
   );
 
-  // Instant Spoken Voice Phrase Broadcast (works both with hardware mic and in Smart Voice Talk mode)
+  // Instant Spoken Voice Phrase Broadcast via Firebase RTDB (/ludo_rooms/{roomId}/voice/{uid})
   const handleBroadcastVoicePhrase = useCallback(
     async (phraseText: string) => {
       if (!room || !user) return;
@@ -1858,7 +2091,6 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         return;
       }
 
-      // Unlock & speak locally so user immediately hears confirmation
       playTone(680, 90, 'sine', 0.07, 880);
       speakVoiceOutLoud(phraseText, 1.0, 1.05);
 
@@ -1881,22 +2113,15 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         text: phraseText
       });
 
-      // Send voice_phrase signal to all human opponents in the room
-      for (const k of keys) {
-        const p = room[k];
-        if (p && !p.isBot && p.uid !== user.uid) {
-          fetch(`/api/ludo/room/${room.roomId}/voice-signal`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fromUid: user.uid,
-              toUid: p.uid,
-              type: 'voice_phrase',
-              payload: { text: phraseText, senderName: user.username, senderColor: myCol }
-            })
-          }).catch(() => {});
-        }
-      }
+      rtdbUpdate(rtdbRef(rtdb, `ludo_rooms/${room.roomId}/voice/${user.uid}`), {
+        voice_phrase: {
+          text: phraseText,
+          senderName: user.username,
+          senderColor: myCol,
+          timestamp: Date.now()
+        },
+        updatedAt: Date.now()
+      }).catch(() => {});
 
       setTimeout(() => {
         setIsLocalSpeaking(false);
@@ -1921,11 +2146,24 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     ]
   );
 
-  // Toggle Live Microphone ON / OFF
+  // Toggle Live Microphone ON / OFF (WebRTC 1v1 P2P Audio + Mute/Unmute Track)
   const handleToggleMicrophone = async () => {
     if (!room || !user) return;
     if (!featureFlags.voiceChat) {
       showToast('Voice Chat is currently disabled by Admin.', 'error');
+      return;
+    }
+
+    // If hardware stream is already running, toggle track.enabled for instant mute/unmute
+    if (localStreamRef.current) {
+      const nextMicState = !micEnabled;
+      localStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = nextMicState;
+      });
+      setMicEnabled(nextMicState);
+      setVoiceStatusNote(nextMicState ? 'Live Mic Active' : 'Mic Muted');
+      syncVoiceStateToServer(room.roomId, nextMicState, speakerEnabled, false);
+      showToast(nextMicState ? 'Microphone unmuted — Live Voice Active!' : 'Microphone muted', 'info');
       return;
     }
 
@@ -1939,6 +2177,9 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
     // Unlock audio context & speech synthesis on user tap
     getAudioContext();
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.play().catch(() => {});
+    }
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try {
         window.speechSynthesis.getVoices();
@@ -1974,11 +2215,11 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true
-          }
+          },
+          video: false
         });
       } catch {
-        // Fallback to basic audio constraint if advanced constraints fail on device
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       }
 
       localStreamRef.current = stream;
@@ -1987,7 +2228,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       setVoiceStatusNote('Live Mic Active');
       syncVoiceStateToServer(room.roomId, true, speakerEnabled, false);
       playTone(660, 110, 'sine', 0.08, 920);
-      showToast('Live Microphone ON — Speak now or tap any Voice Talk phrase!', 'success');
+      showToast('Live Microphone ON — Connected to P2P Voice Chat!', 'success');
 
       // Attach local audio level detector so speaking rings & volume meter animate in real time
       const Ctx =
@@ -2008,6 +2249,11 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         let lastSpeakingSent = false;
 
         analyserIntervalRef.current = setInterval(() => {
+          if (!localStreamRef.current || !localStreamRef.current.getAudioTracks().some((t) => t.enabled)) {
+            setMicLevel(0);
+            setIsLocalSpeaking(false);
+            return;
+          }
           if (audioCtx.state === 'suspended') {
             audioCtx.resume().catch(() => {});
           }
@@ -2030,29 +2276,30 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       // Start hybrid MediaRecorder live audio chunk relay alongside WebRTC
       startLiveAudioChunkRelay(stream, room.roomId);
 
-      // Initiate WebRTC offers to all human opponents in the room
+      // Initiate WebRTC SDP Offers to all human opponents in the room via /ludo_rooms/{roomId}/voice/{senderUid}
       const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
       for (const k of keys) {
         const p = room[k];
         if (p && !p.isBot && p.uid !== user.uid) {
           offeredPeersRef.current.add(p.uid);
           const pc = createOrGetPeerConnection(p.uid, room.roomId);
+          attachLocalTracksToPeer(pc);
           const offer = await pc.createOffer({ offerToReceiveAudio: true });
           await pc.setLocalDescription(offer);
-          await fetch(`/api/ludo/room/${room.roomId}/voice-signal`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fromUid: user.uid,
-              toUid: p.uid,
-              type: 'offer',
-              payload: offer
-            })
+          await rtdbUpdate(rtdbRef(rtdb, `ludo_rooms/${room.roomId}/voice/${user.uid}`), {
+            senderUid: user.uid,
+            targetUid: p.uid,
+            offer: {
+              type: offer.type,
+              sdp: offer.sdp,
+              targetUid: p.uid,
+              timestamp: Date.now()
+            },
+            updatedAt: Date.now()
           });
         }
       }
     } catch {
-      // Instead of leaving voice broken when mic hardware/permission is blocked, enable Smart Voice Talk Mode!
       activateSmartVoiceTalkFallback('Smart Voice Talk Mode ON');
     }
   };
@@ -2060,6 +2307,10 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
   const handleToggleSpeaker = () => {
     const next = !speakerEnabled;
     setSpeakerEnabled(next);
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.muted = !next;
+      if (next) remoteAudioRef.current.play().catch(() => {});
+    }
     if (!next && typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
@@ -2347,18 +2598,19 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     };
   }, []);
 
-  // Local Optimistic Move Engine (100% identical to server.ts executeLudoPawnMove for 2, 3, or 4 players)
+  // Local & RTDB Move Engine — updates /ludo_rooms/{roomId}/tokens and strictly alternates currentTurn
   const applyLocalPawnMove = useCallback(
     (currentRoom: LudoRoomState, playerKey: LudoPlayerKey, pawnIdx: number): LudoRoomState => {
       const nextRoom: LudoRoomState = JSON.parse(JSON.stringify(currentRoom));
       const activePlayer = nextRoom[playerKey];
       const dice = nextRoom.diceValue;
 
-      if (!activePlayer || !dice || !nextRoom.hasRolled) return currentRoom;
+      if (!activePlayer || !dice || (!nextRoom.hasRolled && !nextRoom.diceRolled)) return currentRoom;
       if (!nextRoom.movablePawns.includes(pawnIdx)) return currentRoom;
 
       const currentStep = activePlayer.pawns[pawnIdx];
       const isDeployingFromYard = currentStep === 0;
+      if (isDeployingFromYard && dice !== 6) return currentRoom;
       const nextStep = isDeployingFromYard ? 1 : currentStep + dice;
       if (nextStep > 57) return currentRoom;
 
@@ -2368,7 +2620,9 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       activePlayer.lastDice = dice;
 
       const order: LudoPlayerKey[] = nextRoom.seatOrder || ['player1', 'player2'];
-      let bonusTurn = dice === 6;
+      const currentSixes = nextRoom.consecutiveSixes ?? activePlayer.consecutiveSixes ?? (dice === 6 ? 1 : 0);
+      let bonusTurn = dice === 6 && currentSixes < 3;
+      let capturedOpponent = false;
       let actionNote = isDeployingFromYard
         ? `${activePlayer.username} rolled ${dice} & deployed Token #${pawnIdx + 1} to Start ★ (+6 pts${bonusTurn ? ' · Bonus Roll' : ''})`
         : `${activePlayer.username} rolled ${dice} & moved Token #${pawnIdx + 1} (+${dice} steps${bonusTurn ? ' · Bonus Roll' : ''})`;
@@ -2405,6 +2659,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
               oppPlayer.score = Math.max(0, oppPlayer.score - lostSteps);
               activePlayer.captures += 1;
               activePlayer.score += 25;
+              capturedOpponent = true;
               bonusTurn = true;
               actionNote = `⚔️ SUPER CUT! ${activePlayer.username} captured ${oppPlayer.username}'s Token #${cutIdx + 1}! (+25 pts & Bonus Roll)`;
               break;
@@ -2417,11 +2672,32 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         activePlayer.movesLeft = Math.max(0, activePlayer.movesLeft - 1);
       }
 
+      const now = Date.now();
       nextRoom.lastAction = actionNote;
       nextRoom.diceValue = null;
       nextRoom.hasRolled = false;
+      nextRoom.diceRolled = false;
       nextRoom.movablePawns = [];
-      nextRoom.updatedAt = Date.now();
+      nextRoom.turnDeadline = now + 15000;
+      nextRoom.updatedAt = now;
+
+      // Sync centralized tokens map (/ludo_rooms/{roomId}/tokens)
+      const redPawns = [...(nextRoom.player1?.pawns || [0, 0, 0, 0])];
+      const greenPawns = [
+        ...(nextRoom.player2?.color === 'green'
+          ? nextRoom.player2.pawns
+          : nextRoom.player2?.pawns || [0, 0, 0, 0])
+      ];
+      nextRoom.tokens = {
+        red: redPawns,
+        green: greenPawns,
+        ...(nextRoom.player3 ? { yellow: [...nextRoom.player3.pawns] } : {}),
+        ...(nextRoom.player4 ? { blue: [...nextRoom.player4.pawns] } : {})
+      };
+      nextRoom.boardState = {
+        p1: redPawns,
+        p2: greenPawns
+      };
 
       activePlayer.homeCount = activePlayer.pawns.filter((p) => p === 57).length;
       if (activePlayer.homeCount >= 4) {
@@ -2432,6 +2708,8 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       }
 
       if (!bonusTurn || activePlayer.movesLeft <= 0) {
+        nextRoom.consecutiveSixes = 0;
+        activePlayer.consecutiveSixes = 0;
         const startIdx = Math.max(0, order.indexOf(playerKey));
         let foundNext = false;
         for (let offset = 1; offset <= order.length; offset++) {
@@ -2439,6 +2717,8 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
           const cand = nextRoom[candKey];
           if (cand && cand.movesLeft > 0) {
             nextRoom.turn = candKey;
+            nextRoom.currentTurn = cand.uid;
+            nextRoom.turnColor = cand.color;
             foundNext = true;
             break;
           }
@@ -2458,6 +2738,15 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
           nextRoom.winner = bestKey;
           nextRoom.winReason = `${nextRoom[bestKey]?.username || 'Player'} won on highest score (${bestScore} pts)!`;
         }
+      } else {
+        // Bonus turn earned (rolled 6 with <3 consecutive sixes, or captured opponent, or home goal)
+        if (dice !== 6 && capturedOpponent) {
+          nextRoom.consecutiveSixes = 0;
+          activePlayer.consecutiveSixes = 0;
+        }
+        nextRoom.turn = playerKey;
+        nextRoom.currentTurn = activePlayer.uid;
+        nextRoom.turnColor = activePlayer.color;
       }
 
       return nextRoom;
@@ -2534,258 +2823,101 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     }
   }, [room, user]);
 
-  // Poll Active Room State for real-time moves, opponent 3D dice rolls, WebRTC voice signals, presence & chat
+  // Real-Time Chat & Floating Quick Reactions Listener (/ludo_rooms/{roomId}/chat via onChildAdded)
   useEffect(() => {
-    if (!room) return;
-    let active = true;
+    if (!room?.roomId) return;
+    let unsubChat: (() => void) | null = null;
+    try {
+      const chatNodeRef = rtdbRef(rtdb, `ludo_rooms/${room.roomId}/chat`);
+      unsubChat = rtdbOnChildAdded(
+        chatNodeRef,
+        (snap) => {
+          if (!snap.exists()) return;
+          const chatKey = snap.key || `chat_${Date.now()}`;
+          if (seenChatIdsRef.current.has(chatKey)) return;
+          seenChatIdsRef.current.add(chatKey);
 
-    const syncRoom = async () => {
-      if (
-        Date.now() < actionLockUntilRef.current ||
-        isRollingLockRef.current ||
-        isMovingLockRef.current ||
-        stepLoopRunningRef.current ||
-        rollingPlayerKeyRef.current !== null
-      ) {
-        return;
-      }
-      try {
-        const query = user?.uid ? `?uid=${encodeURIComponent(user.uid)}` : '';
-        const res = await fetch(`/api/ludo/room/${room.roomId}${query}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!active || !data.success || !data.room) return;
-        if (
-          Date.now() < actionLockUntilRef.current ||
-          isRollingLockRef.current ||
-          isMovingLockRef.current ||
-          stepLoopRunningRef.current ||
-          rollingPlayerKeyRef.current !== null
-        ) {
-          return;
-        }
-        const updatedRoom: LudoRoomState = normalizeLudoRoomState(data.room);
+          const raw = snap.val();
+          if (!raw) return;
+          const senderUid = String(raw.senderUid || '');
+          const senderName = String(raw.senderName || 'Player');
+          const msgText = String(raw.message || raw.text || '').trim();
+          if (!msgText) return;
+          const ts = Number(raw.timestamp) || Date.now();
 
-        const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
-        const myRoleNow: LudoPlayerKey =
-          keys.find((k) => updatedRoom[k]?.uid === user?.uid) || 'player1';
+          const currentRoom = roomRef.current;
+          const seatKeys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
+          const matchedSeatKey =
+            (currentRoom && seatKeys.find((k) => currentRoom[k]?.uid === senderUid)) ||
+            (currentRoom?.player1?.uid === senderUid ? 'player1' : 'player2');
+          const senderColor: LudoColor =
+            raw.senderColor ||
+            (currentRoom && matchedSeatKey ? currentRoom[matchedSeatKey]?.color : undefined) ||
+            (matchedSeatKey === 'player1' ? 'red' : 'green');
 
-        // If our mic is active and a new human opponent joined after we turned on the mic, send them a WebRTC offer
-        if (user && micEnabled && localStreamRef.current) {
-          for (const k of keys) {
-            const p = updatedRoom[k];
-            if (p && !p.isBot && p.uid !== user.uid && !offeredPeersRef.current.has(p.uid)) {
-              offeredPeersRef.current.add(p.uid);
-              try {
-                const pc = createOrGetPeerConnection(p.uid, updatedRoom.roomId);
-                const offer = await pc.createOffer({ offerToReceiveAudio: true });
-                await pc.setLocalDescription(offer);
-                await fetch(`/api/ludo/room/${updatedRoom.roomId}/voice-signal`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    fromUid: user.uid,
-                    toUid: p.uid,
-                    type: 'offer',
-                    payload: offer
-                  })
-                });
-              } catch {
-                // Ignore transient offer error
-              }
-            }
+          // Trigger animated floating speech bubble directly over sender's avatar on both screens
+          if (chatEnabled && featureFlags.textChat) {
+            setFloatingBubbles((prev) => ({
+              ...prev,
+              [senderColor]: { text: msgText, ts: Date.now() }
+            }));
           }
-        }
 
-        // Process incoming WebRTC Voice Signals & Hybrid Audio Chunks addressed to this user
-        if (user && updatedRoom.voiceSignals) {
-          for (const sig of updatedRoom.voiceSignals) {
-            if (sig.toUid === user.uid && !processedSignalsRef.current.has(sig.id)) {
-              processedSignalsRef.current.add(sig.id);
-              try {
-                if (sig.type === 'audio_chunk') {
-                  const chunkPayload = sig.payload as { audioData?: string };
-                  if (chunkPayload?.audioData) {
-                    playIncomingAudioBase64(sig.fromUid, chunkPayload.audioData);
-                  }
-                  continue;
-                }
-                if (sig.type === 'voice_phrase') {
-                  const phrasePayload = sig.payload as {
-                    text?: string;
-                    senderName?: string;
-                    senderColor?: LudoColor;
-                  };
-                  if (phrasePayload?.text && !mutedPlayerUids[sig.fromUid]) {
-                    setFloatingBubbles((prev) => ({
-                      ...prev,
-                      [phrasePayload.senderColor || 'yellow']: {
-                        text: `🎙️ ${phrasePayload.text}`,
-                        ts: Date.now()
-                      }
-                    }));
-                    playTone(720, 110, 'sine', 0.07);
-                    speakVoiceOutLoud(phrasePayload.text, 1.06, 1.04);
-                  }
-                  continue;
-                }
-
-                const pc = createOrGetPeerConnection(sig.fromUid, updatedRoom.roomId);
-                if (sig.type === 'offer') {
-                  offeredPeersRef.current.add(sig.fromUid);
-                  await pc.setRemoteDescription(new RTCSessionDescription(sig.payload as RTCSessionDescriptionInit));
-                  await flushPendingIceCandidates(sig.fromUid, pc);
-                  const answer = await pc.createAnswer();
-                  await pc.setLocalDescription(answer);
-                  await fetch(`/api/ludo/room/${updatedRoom.roomId}/voice-signal`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      fromUid: user.uid,
-                      toUid: sig.fromUid,
-                      type: 'answer',
-                      payload: answer
-                    })
-                  });
-                } else if (sig.type === 'answer') {
-                  await pc.setRemoteDescription(new RTCSessionDescription(sig.payload as RTCSessionDescriptionInit));
-                  await flushPendingIceCandidates(sig.fromUid, pc);
-                } else if (sig.type === 'ice' && sig.payload) {
-                  const candidateInit = sig.payload as RTCIceCandidateInit;
-                  if (pc.remoteDescription && pc.remoteDescription.type) {
-                    await pc.addIceCandidate(new RTCIceCandidate(candidateInit));
-                  } else {
-                    if (!pendingIceCandidatesRef.current[sig.fromUid]) {
-                      pendingIceCandidatesRef.current[sig.fromUid] = [];
-                    }
-                    pendingIceCandidatesRef.current[sig.fromUid].push(candidateInit);
-                  }
-                }
-              } catch {
-                // Ignore WebRTC signaling negotiation races
-              }
-            }
-          }
-        }
-
-        // Process incoming chat messages & challenger spoken voice replies
-        (updatedRoom.chatMessages || []).forEach((msg) => {
-          if (!seenChatIdsRef.current.has(msg.id)) {
-            seenChatIdsRef.current.add(msg.id);
-            if (msg.messageType !== 'system') {
-              if (chatEnabled && featureFlags.textChat) {
-                setFloatingBubbles((prev) => ({
-                  ...prev,
-                  [msg.senderColor || 'red']: { text: msg.text, ts: Date.now() }
-                }));
-              }
-              if (msg.senderUid !== user?.uid && !mutedPlayerUids[msg.senderUid]) {
-                playTone(660, 140, 'triangle');
-                speakChatMessage(msg.text);
-                if (!showChatDrawer && chatEnabled && featureFlags.textChat) {
-                  setUnreadChatCount((c) => c + 1);
-                }
-              }
-            }
-          }
-        });
-
-        const incomingPawns = extractPawnsByColorFromRoom(updatedRoom);
-        const pawnsChanged = hasPawnPositionDiff(visualPawnsRef.current, incomingPawns);
-
-        // Detect new opponent 3D dice roll event so that opponent's 3D cube rotates continuously for 1.52s!
-        if (
-          updatedRoom.lastRoll &&
-          !seenRollIdsRef.current.has(updatedRoom.lastRoll.rollId)
-        ) {
-          seenRollIdsRef.current.add(updatedRoom.lastRoll.rollId);
-          const rollerKey = updatedRoom.lastRoll.player;
-          const rolledVal = updatedRoom.lastRoll.value;
-          setConfirmedDiceByPlayer((prev) => ({ ...prev, [rollerKey]: rolledVal }));
-
-          if (rollerKey !== myRoleNow) {
-            isRollingLockRef.current = true;
-            rollingPlayerKeyRef.current = rollerKey;
-            setRollingPlayerKey(rollerKey);
-
-            // If server state also already moved the pawn, hold post-move state until dice lands + token walks!
-            if (pawnsChanged) {
-              targetPawnsRef.current = incomingPawns;
-              deferredRoomAfterMoveRef.current = updatedRoom;
+          // Play reaction sound effect & optional voice readout
+          if (senderUid !== user?.uid && !mutedPlayerUids[senderUid]) {
+            playTone(720, 130, 'triangle', 0.09);
+            if (raw.type === 'voice_phrase') {
+              speakVoiceOutLoud(msgText, 1.06, 1.04);
             } else {
-              setRoom(updatedRoom);
+              speakChatMessage(msgText);
             }
-
-            // 3D dice flip sound effects synchronized with the 1.52s multi-axis rotation
-            playDiceFlipSound();
-            setTimeout(() => {
-              if (!active) return;
-              rollingPlayerKeyRef.current = null;
-              isRollingLockRef.current = false;
-              setRollingPlayerKey((curr) => (curr === rollerKey ? null : curr));
-              playTone(rolledVal === 6 ? 840 : 560, 170, 'sine', 0.08);
-              startOrContinueTokenWalk();
-            }, DICE_ROLL_DURATION_MS);
-            return;
+            if (!showChatDrawer && chatEnabled && featureFlags.textChat) {
+              setUnreadChatCount((c) => c + 1);
+            }
           }
-        }
 
-        // If any token position changed on the server, walk it step-by-step BEFORE updating turn state!
-        if (pawnsChanged) {
-          targetPawnsRef.current = incomingPawns;
-          deferredRoomAfterMoveRef.current = updatedRoom;
-          startOrContinueTokenWalk();
-          return;
-        }
+          const newMsg: LudoChatMessage = {
+            id: chatKey,
+            senderUid,
+            senderName,
+            senderLocation: raw.senderLocation || 'India',
+            senderColor,
+            text: msgText,
+            messageType:
+              raw.type === 'emoji'
+                ? 'emoji'
+                : raw.type === 'quick_reaction' || raw.type === 'quick'
+                ? 'quick'
+                : 'text',
+            timestamp: ts
+          };
 
-        if (roomRef.current?.status === 'waiting' && updatedRoom.status === 'playing') {
-          const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
-          const humanOpponent = keys
-            .map((k) => updatedRoom[k])
-            .find((p) => p && !p.isBot && p.uid !== user?.uid);
-          if (humanOpponent) {
-            setMatchedRealOpponent({
-              name: humanOpponent.username,
-              loc: humanOpponent.location,
-              flag: humanOpponent.flag || getFlagForLocation(humanOpponent.location)
-            });
-            setShowRealMatchCelebration(true);
-            playTone(880, 240, 'sine');
-            setTimeout(() => setShowRealMatchCelebration(false), 2600);
-          }
-        }
+          setRoom((prev) => {
+            if (!prev || prev.roomId !== room.roomId) return prev;
+            if ((prev.chatMessages || []).some((m) => m.id === chatKey)) return prev;
+            return {
+              ...prev,
+              chatMessages: [...(prev.chatMessages || []).slice(-39), newMsg]
+            };
+          });
+        },
+        () => {}
+      );
+    } catch {}
 
-        setRoom(updatedRoom);
-        checkAndSettleFinishedRoom(updatedRoom);
-      } catch {
-        // Ignore transient fetch errors
-      }
-    };
-
-    const interval = setInterval(syncRoom, 550);
     return () => {
-      active = false;
-      clearInterval(interval);
+      if (unsubChat) unsubChat();
     };
   }, [
     room?.roomId,
-    user,
-    micEnabled,
-    mutedPlayerUids,
-    featureFlags.textChat,
+    user?.uid,
     chatEnabled,
+    featureFlags.textChat,
+    mutedPlayerUids,
     showChatDrawer,
     playTone,
-    playDiceFlipSound,
     speakChatMessage,
-    speakVoiceOutLoud,
-    playIncomingAudioBase64,
-    flushPendingIceCandidates,
-    createOrGetPeerConnection,
-    extractPawnsByColorFromRoom,
-    hasPawnPositionDiff,
-    startOrContinueTokenWalk,
-    checkAndSettleFinishedRoom
+    speakVoiceOutLoud
   ]);
 
   // Central Real-Time 2-Device Matchmaking Queue Listener (/ludo_matchmaking/{stake} & /ludo_user_match/{uid})
@@ -2887,7 +3019,12 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
                 status: 'playing',
                 players: { p1: p1Entry.uid, p2: p2Entry.uid },
                 currentTurn: p1Entry.uid,
+                turnColor: 'red',
                 turn: 'player1',
+                tokens: {
+                  red: [0, 0, 0, 0],
+                  green: [0, 0, 0, 0]
+                },
                 boardState: {
                   p1: [0, 0, 0, 0],
                   p2: [0, 0, 0, 0]
@@ -2913,7 +3050,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
                   username: p2Entry.username || 'Player 2',
                   location: p2Entry.location || 'India',
                   flag: p2Entry.flag || '🇮🇳',
-                  color: 'yellow',
+                  color: 'green',
                   pawns: [0, 0, 0, 0],
                   score: 0,
                   captures: 0,
@@ -2925,7 +3062,10 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
                   lastActiveAt: now
                 },
                 diceValue: null,
+                diceRolled: false,
                 hasRolled: false,
+                consecutiveSixes: 0,
+                turnDeadline: now + 15000,
                 movablePawns: [],
                 lastAction: `Match started! ${p1Entry.username}'s turn to roll the 3D dice.`,
                 winner: null,
@@ -3003,26 +3143,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
             rtdbRemove(rtdbRef(rtdb, `ludo_matchmaking/${stakeKey}/${user.uid}`)).catch(() => {});
           }
           setMatchmakingStatusText('Connecting to table...');
-          fetch(`/api/ludo/room/${room.roomId}/pair-instant`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-          })
-            .then((res) => res.json())
-            .then((data) => {
-              if (data && data.success && data.room) {
-                const safePaired = normalizeLudoRoomState(data.room);
-                safePaired.chatMessages.forEach((m: LudoChatMessage) => seenChatIdsRef.current.add(m.id));
-                syncVisualPawnsFromRoom(safePaired);
-                setRoom(safePaired);
-                rtdbSet(rtdbRef(rtdb, `ludo_rooms/${safePaired.roomId}`), safePaired).catch(() => {});
-                playTone(580, 180, 'sine');
-              } else {
-                pairLocalWaitingRoomWithChallenger(room);
-              }
-            })
-            .catch(() => {
-              pairLocalWaitingRoomWithChallenger(room);
-            });
+          pairLocalWaitingRoomWithChallenger(room);
           return 0;
         }
 
@@ -3044,10 +3165,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     room?.status,
     room?.isPrivate,
     room?.entryFee,
-    user?.uid,
-    playTone,
-    normalizeLudoRoomState,
-    syncVisualPawnsFromRoom
+    user?.uid
   ]);
 
   // Helper to pair a waiting room with realistic Challenger(s) via RTDB / client engine with pre-initialized [0,0,0,0] tokens
@@ -3066,7 +3184,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       const now = Date.now();
       const seatColors: Record<LudoPlayerKey, LudoColor> = {
         player1: 'red',
-        player2: maxP === 2 ? 'yellow' : 'green',
+        player2: 'green',
         player3: 'yellow',
         player4: 'blue'
       };
@@ -3106,16 +3224,24 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       updated.status = 'playing';
       updated.turn = 'player1';
       updated.currentTurn = updated.player1.uid;
+      updated.turnColor = 'red';
       updated.players = {
         p1: updated.player1.uid,
         ...(updated.player2 ? { p2: updated.player2.uid } : {})
+      };
+      updated.tokens = {
+        red: updated.player1.pawns,
+        green: updated.player2 ? updated.player2.pawns : [0, 0, 0, 0]
       };
       updated.boardState = {
         p1: updated.player1.pawns,
         p2: updated.player2 ? updated.player2.pawns : [0, 0, 0, 0]
       };
       updated.hasRolled = false;
+      updated.diceRolled = false;
       updated.diceValue = null;
+      updated.consecutiveSixes = 0;
+      updated.turnDeadline = now + 15000;
       updated.movablePawns = [];
       updated.chatMessages = updated.chatMessages || [];
       updated.updatedAt = now;
@@ -3130,65 +3256,140 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     [playTone, normalizeLudoRoomState, syncVisualPawnsFromRoom]
   );
 
-  // Firebase Realtime Database (/ludo_rooms/{roomId}) live listener for instant 2-device synchronization
+  // Unified Single Live-Stream Firebase Realtime Database (/ludo_rooms/{roomId}) Listener for 2-Device Synchronization
   useEffect(() => {
     if (!room?.roomId) return;
+    let active = true;
     let unsub: (() => void) | null = null;
     try {
       unsub = rtdbOnValue(
         rtdbRef(rtdb, `ludo_rooms/${room.roomId}`),
         (snap) => {
-          if (!snap.exists()) return;
+          if (!active || !snap.exists()) return;
           const rawRemote = snap.val();
           if (!rawRemote || !rawRemote.roomId) return;
           const remoteRoom = normalizeLudoRoomState(rawRemote);
 
+          const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
+          const myRoleNow: LudoPlayerKey =
+            keys.find((k) => remoteRoom[k]?.uid === user?.uid) || 'player1';
+
+          // Celebrate when waiting room transitions to playing with a real opponent
           const wasWaiting = roomRef.current?.status === 'waiting';
-          const isNewer =
-            remoteRoom.updatedAt > (roomRef.current?.updatedAt || 0) ||
-            (wasWaiting && remoteRoom.status === 'playing');
-
-          if (isNewer) {
-            if (wasWaiting && remoteRoom.status === 'playing' && remoteRoom.player2) {
-              const opp =
-                remoteRoom.player1.uid === user?.uid ? remoteRoom.player2 : remoteRoom.player1;
-              if (opp && !opp.isBot) {
-                setMatchedRealOpponent({
-                  name: opp.username,
-                  loc: opp.location || 'India',
-                  flag: opp.flag || '🇮🇳'
-                });
-                setShowRealMatchCelebration(true);
-                playTone(880, 240, 'sine');
-                setTimeout(() => setShowRealMatchCelebration(false), 2600);
-              }
-            }
-
-            if (
-              !isRollingLockRef.current &&
-              !isMovingLockRef.current &&
-              !stepLoopRunningRef.current
-            ) {
-              syncVisualPawnsFromRoom(remoteRoom);
-              setRoom(remoteRoom);
-              checkAndSettleFinishedRoom(remoteRoom);
+          if (wasWaiting && remoteRoom.status === 'playing' && remoteRoom.player2) {
+            const opp =
+              remoteRoom.player1.uid === user?.uid ? remoteRoom.player2 : remoteRoom.player1;
+            if (opp && !opp.isBot) {
+              setMatchedRealOpponent({
+                name: opp.username,
+                loc: opp.location || 'India',
+                flag: opp.flag || '🇮🇳'
+              });
+              setShowRealMatchCelebration(true);
+              playTone(880, 240, 'sine');
+              setTimeout(() => setShowRealMatchCelebration(false), 2600);
             }
           }
+
+          const incomingPawns = extractPawnsByColorFromRoom(remoteRoom);
+          const pawnsChanged = hasPawnPositionDiff(visualPawnsRef.current, incomingPawns);
+
+          // 1. Detect new opponent 3D dice roll event so opponent's 3D cube spins smoothly on this screen
+          if (
+            remoteRoom.lastRoll &&
+            remoteRoom.lastRoll.rollId &&
+            !seenRollIdsRef.current.has(remoteRoom.lastRoll.rollId)
+          ) {
+            seenRollIdsRef.current.add(remoteRoom.lastRoll.rollId);
+            const rollerKey = remoteRoom.lastRoll.player;
+            const rolledVal = remoteRoom.lastRoll.value;
+            setConfirmedDiceByPlayer((prev) => ({ ...prev, [rollerKey]: rolledVal }));
+
+            if (rollerKey !== myRoleNow) {
+              isRollingLockRef.current = true;
+              rollingPlayerKeyRef.current = rollerKey;
+              setRollingPlayerKey(rollerKey);
+
+              if (pawnsChanged) {
+                targetPawnsRef.current = incomingPawns;
+                deferredRoomAfterMoveRef.current = remoteRoom;
+              } else {
+                setRoom(remoteRoom);
+              }
+
+              playDiceFlipSound();
+              setTimeout(() => {
+                if (!active) return;
+                rollingPlayerKeyRef.current = null;
+                isRollingLockRef.current = false;
+                setRollingPlayerKey((curr) => (curr === rollerKey ? null : curr));
+                playTone(rolledVal === 6 ? 840 : 560, 170, 'sine', 0.08);
+                if (hasPawnPositionDiff(visualPawnsRef.current, targetPawnsRef.current)) {
+                  startOrContinueTokenWalk();
+                } else if (deferredRoomAfterMoveRef.current) {
+                  const pending = deferredRoomAfterMoveRef.current;
+                  deferredRoomAfterMoveRef.current = null;
+                  setRoom(pending);
+                  checkAndSettleFinishedRoom(pending);
+                }
+              }, DICE_ROLL_DURATION_MS);
+              return;
+            }
+          }
+
+          // 2. If any token coordinate changed in /ludo_rooms/{roomId}/tokens, animate step-by-step to target cell!
+          if (pawnsChanged) {
+            targetPawnsRef.current = incomingPawns;
+            deferredRoomAfterMoveRef.current = remoteRoom;
+            if (!isRollingLockRef.current && rollingPlayerKeyRef.current === null) {
+              startOrContinueTokenWalk();
+            }
+            return;
+          }
+
+          // 3. If currently animating dice or token walk, queue latest room state for completion
+          if (
+            isRollingLockRef.current ||
+            isMovingLockRef.current ||
+            stepLoopRunningRef.current ||
+            rollingPlayerKeyRef.current !== null
+          ) {
+            deferredRoomAfterMoveRef.current = remoteRoom;
+            return;
+          }
+
+          syncVisualPawnsFromRoom(remoteRoom);
+          setRoom(remoteRoom);
+          checkAndSettleFinishedRoom(remoteRoom);
         },
         () => {}
       );
     } catch {}
     return () => {
+      active = false;
       if (unsub) unsub();
     };
-  }, [room?.roomId, user?.uid, normalizeLudoRoomState, syncVisualPawnsFromRoom, checkAndSettleFinishedRoom, playTone]);
+  }, [
+    room?.roomId,
+    user?.uid,
+    normalizeLudoRoomState,
+    extractPawnsByColorFromRoom,
+    hasPawnPositionDiff,
+    startOrContinueTokenWalk,
+    syncVisualPawnsFromRoom,
+    checkAndSettleFinishedRoom,
+    playDiceFlipSound,
+    playTone
+  ]);
 
-  // Automatic Challenger Turn Executor when playing on client/RTDB fallback (if backend hasn't acted within 1.9s)
+  // Automatic Challenger Turn Executor when playing against AI Challenger
   useEffect(() => {
     if (!room || room.status !== 'playing') return;
     const currentTurnKey = room.turn;
     const activeBot = room[currentTurnKey];
     if (!activeBot || !activeBot.isBot) return;
+    // Only host / player1 executes bot turns to prevent duplicate execution
+    if (user?.uid && room.player1.uid !== user.uid) return;
 
     const timer = setTimeout(() => {
       const cur = roomRef.current;
@@ -3197,8 +3398,8 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       if (!botPlayer || !botPlayer.isBot) return;
       if (isRollingLockRef.current || isMovingLockRef.current || stepLoopRunningRef.current) return;
 
-      // Roll dice for Challenger
       const rolled = Math.floor(Math.random() * 6) + 1;
+      const nextSixes = rolled === 6 ? (cur.consecutiveSixes || 0) + 1 : 0;
       isRollingLockRef.current = true;
       rollingPlayerKeyRef.current = currentTurnKey;
       setRollingPlayerKey(currentTurnKey);
@@ -3215,31 +3416,42 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
         const bPlayer = latest[currentTurnKey];
         if (!bPlayer) return;
 
-        const movables = computeClientMovablePawns(bPlayer.pawns, rolled);
+        const movables = nextSixes >= 3 ? [] : computeClientMovablePawns(bPlayer.pawns, rolled);
         if (movables.length === 0) {
-          const nextState: LudoRoomState = JSON.parse(JSON.stringify(latest));
-          const bp = nextState[currentTurnKey]!;
-          bp.movesLeft = Math.max(0, bp.movesLeft - 1);
-          bp.lastDice = rolled;
-          nextState.diceValue = null;
-          nextState.hasRolled = false;
-          nextState.movablePawns = [];
-          const order: LudoPlayerKey[] = nextState.seatOrder || ['player1', 'player2'];
-          const startIdx = Math.max(0, order.indexOf(currentTurnKey));
-          for (let offset = 1; offset <= order.length; offset++) {
-            const candKey = order[(startIdx + offset) % order.length];
-            if (nextState[candKey] && nextState[candKey]!.movesLeft > 0) {
-              nextState.turn = candKey;
-              break;
+          // 1-second delay before passing turn to opponent when bot has no valid moves or 3 sixes
+          setTimeout(() => {
+            const curAfterDelay = roomRef.current;
+            if (!curAfterDelay || curAfterDelay.status !== 'playing' || curAfterDelay.turn !== currentTurnKey) return;
+            const nextState: LudoRoomState = normalizeLudoRoomState(curAfterDelay);
+            const bp = nextState[currentTurnKey]!;
+            bp.movesLeft = Math.max(0, bp.movesLeft - 1);
+            bp.lastDice = rolled;
+            bp.consecutiveSixes = 0;
+            nextState.diceValue = null;
+            nextState.hasRolled = false;
+            nextState.diceRolled = false;
+            nextState.consecutiveSixes = 0;
+            nextState.movablePawns = [];
+            const order: LudoPlayerKey[] = nextState.seatOrder || ['player1', 'player2'];
+            const startIdx = Math.max(0, order.indexOf(currentTurnKey));
+            for (let offset = 1; offset <= order.length; offset++) {
+              const candKey = order[(startIdx + offset) % order.length];
+              if (nextState[candKey] && nextState[candKey]!.movesLeft > 0) {
+                nextState.turn = candKey;
+                nextState.currentTurn = nextState[candKey]!.uid;
+                nextState.turnColor = nextState[candKey]!.color;
+                break;
+              }
             }
-          }
-          nextState.updatedAt = Date.now();
-          setRoom(nextState);
-          rtdbSet(rtdbRef(rtdb, `ludo_rooms/${nextState.roomId}`), nextState).catch(() => {});
+            nextState.turnDeadline = Date.now() + 15000;
+            nextState.updatedAt = Date.now();
+            setRoom(nextState);
+            rtdbSet(rtdbRef(rtdb, `ludo_rooms/${nextState.roomId}`), nextState).catch(() => {});
+          }, 1000);
           return;
         }
 
-        // Pick best pawn for Challenger (prefer capture, home goal, or advancing active pawn)
+        // Pick best pawn for Challenger
         let chosenPawn = movables[0];
         for (const pIdx of movables) {
           const curStep = bPlayer.pawns[pIdx];
@@ -3256,15 +3468,17 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
           ...latest,
           diceValue: rolled,
           hasRolled: true,
+          diceRolled: true,
+          consecutiveSixes: nextSixes,
           movablePawns: movables
         };
-        const movedRoom = applyLocalPawnMove(tempWithRoll, currentTurnKey, chosenPawn);
+        const movedRoom = normalizeLudoRoomState(applyLocalPawnMove(tempWithRoll, currentTurnKey, chosenPawn));
         targetPawnsRef.current = extractPawnsByColorFromRoom(movedRoom);
         deferredRoomAfterMoveRef.current = movedRoom;
         rtdbSet(rtdbRef(rtdb, `ludo_rooms/${movedRoom.roomId}`), movedRoom).catch(() => {});
         startOrContinueTokenWalk();
       }, DICE_ROLL_DURATION_MS);
-    }, 1900);
+    }, 1700);
 
     return () => clearTimeout(timer);
   }, [
@@ -3272,48 +3486,14 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     room?.status,
     room?.turn,
     room?.updatedAt,
+    user?.uid,
     playDiceFlipSound,
     computeClientMovablePawns,
     applyLocalPawnMove,
+    normalizeLudoRoomState,
     extractPawnsByColorFromRoom,
     startOrContinueTokenWalk
   ]);
-
-  // Dedicated Active Match Heartbeat: Maintains connection on backend & handles reconnection/auto-win results
-  useEffect(() => {
-    if (!room || room.status !== 'playing' || !user?.uid) return;
-    let active = true;
-
-    const emitHeartbeat = async () => {
-      try {
-        const res = await fetch(`/api/ludo/room/${room.roomId}/heartbeat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uid: user.uid })
-        });
-        if (!res.ok || !active) return;
-        const data = await res.json();
-        if (data.success && data.room) {
-          // If match finished (e.g. automatic win from timeout or opponent disconnect), settle match
-          if (data.room.status === 'finished') {
-            setRoom(data.room);
-            checkAndSettleFinishedRoom(data.room);
-          } else if (data.disconnectInfo !== undefined) {
-            setRoom((prev) => (prev ? { ...prev, disconnectInfo: data.disconnectInfo } : prev));
-          }
-        }
-      } catch {
-        // Network transient error
-      }
-    };
-
-    emitHeartbeat();
-    const hbInterval = setInterval(emitHeartbeat, 3000);
-    return () => {
-      active = false;
-      clearInterval(hbInterval);
-    };
-  }, [room?.roomId, room?.status, user?.uid, checkAndSettleFinishedRoom]);
 
   // Scroll chat to bottom when drawer is opened
   useEffect(() => {
@@ -3570,7 +3750,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
             });
           } catch {}
 
-          const p2Color: LudoColor = (targetRemoteRoom.maxPlayers || 2) === 2 ? 'yellow' : 'green';
+          const p2Color: LudoColor = 'green';
           const joinedRoom = normalizeLudoRoomState({
             ...targetRemoteRoom,
             stake: roomStake,
@@ -3578,9 +3758,14 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
             status: 'playing',
             turn: 'player1',
             currentTurn: targetRemoteRoom.player1.uid,
+            turnColor: 'red',
             players: {
               p1: targetRemoteRoom.player1.uid,
               p2: user.uid
+            },
+            tokens: {
+              red: targetRemoteRoom.player1.pawns || [0, 0, 0, 0],
+              green: [0, 0, 0, 0]
             },
             boardState: {
               p1: targetRemoteRoom.player1.pawns || [0, 0, 0, 0],
@@ -3603,7 +3788,10 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
               lastActiveAt: now
             },
             diceValue: null,
+            diceRolled: false,
             hasRolled: false,
+            consecutiveSixes: 0,
+            turnDeadline: now + 15000,
             movablePawns: [],
             lastAction: `${user.username} joined Room ${targetRemoteRoom.roomId}! ${targetRemoteRoom.player1.username}'s turn to roll.`,
             updatedAt: now
@@ -3774,7 +3962,12 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
               p2: user.uid
             },
             currentTurn: matchedOpponentEntry.uid,
+            turnColor: 'red',
             turn: 'player1',
+            tokens: {
+              red: [0, 0, 0, 0],
+              green: [0, 0, 0, 0]
+            },
             boardState: {
               p1: [0, 0, 0, 0],
               p2: [0, 0, 0, 0]
@@ -3800,7 +3993,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
               username: user.username,
               location: playerLocation,
               flag: '🇮🇳',
-              color: 'yellow',
+              color: 'green',
               pawns: [0, 0, 0, 0],
               score: 0,
               captures: 0,
@@ -3812,7 +4005,10 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
               lastActiveAt: now
             },
             diceValue: null,
+            diceRolled: false,
             hasRolled: false,
+            consecutiveSixes: 0,
+            turnDeadline: now + 15000,
             movablePawns: [],
             lastAction: `Match started! ${matchedOpponentEntry.username}'s turn to roll the 3D dice.`,
             winner: null,
@@ -4005,7 +4201,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     pairLocalWaitingRoomWithChallenger(room);
   };
 
-  // Move Pawn Handler - Walks token strictly 1 cell at a time (225ms/cell) and updates turn ONLY after landing
+  // Move Pawn Handler - Updates token coordinates in /ludo_rooms/{roomId}/tokens and switches currentTurn atomically if no bonus turn
   const handleMovePawn = useCallback(
     async (pawnIndex: number) => {
       const currentRoom = roomRef.current;
@@ -4021,7 +4217,10 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
       const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
       const myRole: LudoPlayerKey = keys.find((k) => currentRoom[k]?.uid === user.uid) || 'player1';
-      if (currentRoom.turn !== myRole || !currentRoom.hasRolled) return;
+      const isTurnMine = currentRoom.currentTurn
+        ? currentRoom.currentTurn === user.uid
+        : currentRoom.turn === myRole;
+      if (!isTurnMine || (!currentRoom.hasRolled && !currentRoom.diceRolled)) return;
       if (!(currentRoom.movablePawns || []).includes(pawnIndex)) return;
 
       isMovingLockRef.current = true;
@@ -4033,42 +4232,22 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       const stepDurationMs = curStep === 0 ? 320 : stepsToHop * 235 + 350;
       actionLockUntilRef.current = Date.now() + stepDurationMs + 450;
 
-      // Clear movablePawns on current room immediately to lock duplicate token taps while keeping turn on current player
+      // Clear movablePawns immediately to prevent double token taps
       setRoom((prev) => (prev ? { ...prev, movablePawns: [] } : prev));
 
-      // Compute post-move state and defer turn switch until the token finishes stepping onto its final cell!
+      // Compute post-move state (updates /ludo_rooms/{roomId}/tokens and switches currentTurn if no bonus turn)
       const optimisticRoom = normalizeLudoRoomState(applyLocalPawnMove(currentRoom, myRole, pawnIndex));
       deferredRoomAfterMoveRef.current = optimisticRoom;
       targetPawnsRef.current = extractPawnsByColorFromRoom(optimisticRoom);
+
+      // Persist directly to /ludo_rooms/{roomId} so opponent's screen animates step-by-step in real time
       rtdbSet(rtdbRef(rtdb, `ludo_rooms/${optimisticRoom.roomId}`), optimisticRoom).catch(() => {});
       startOrContinueTokenWalk();
-
-      try {
-        const res = await fetch(`/api/ludo/room/${currentRoom.roomId}/move`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uid: user.uid, pawnIndex })
-        });
-        const data = await res.json();
-        if (data.success && data.room) {
-          const safeServerRoom = normalizeLudoRoomState(data.room);
-          rtdbSet(rtdbRef(rtdb, `ludo_rooms/${safeServerRoom.roomId}`), safeServerRoom).catch(() => {});
-          targetPawnsRef.current = extractPawnsByColorFromRoom(safeServerRoom);
-          if (stepLoopRunningRef.current || isMovingLockRef.current) {
-            deferredRoomAfterMoveRef.current = safeServerRoom;
-          } else {
-            setRoom(safeServerRoom);
-            checkAndSettleFinishedRoom(safeServerRoom);
-          }
-        }
-      } catch {
-        // Optimistic move already synced to RTDB and queued in deferredRoomAfterMoveRef
-      }
     },
-    [user, applyLocalPawnMove, normalizeLudoRoomState, extractPawnsByColorFromRoom, startOrContinueTokenWalk, checkAndSettleFinishedRoom]
+    [user, applyLocalPawnMove, normalizeLudoRoomState, extractPawnsByColorFromRoom, startOrContinueTokenWalk]
   );
 
-  // Roll Dice Handler - Plays continuous 1.52s 3D Dice Cube animation and reveals number ONLY after landing
+  // Roll Dice Handler - Strict Roll Lock (currentTurn === user.uid && !diceRolled) & Turn Alternation Engine
   const handleRollDice = async () => {
     if (
       !room ||
@@ -4084,11 +4263,15 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
     const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
     const myRole: LudoPlayerKey = keys.find((k) => room[k]?.uid === user.uid) || 'player1';
-    if (room.turn !== myRole) {
+    const isStrictMyTurn = room.currentTurn
+      ? room.currentTurn === user.uid
+      : room.turn === myRole;
+
+    if (!isStrictMyTurn) {
       showToast('Wait for your turn!', 'info');
       return;
     }
-    if (room.hasRolled) {
+    if (room.diceRolled || room.hasRolled) {
       showToast('Tap any glowing 3D token on the board or button below to move!', 'info');
       return;
     }
@@ -4101,163 +4284,172 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     // 3D dice flip sound effects synchronized with the 1.52s multi-axis rotation
     playDiceFlipSound();
 
-    const rollStartTime = Date.now();
-    const targetDurationMs = DICE_ROLL_DURATION_MS; // 1.52s continuous 3D roll
+    const rolled = Math.floor(Math.random() * 6) + 1;
+    const rollId = `roll_${Date.now()}_${myRole}`;
+    seenRollIdsRef.current.add(rollId);
+    setConfirmedDiceByPlayer((prev) => ({ ...prev, [myRole]: rolled }));
 
-    try {
-      const res = await fetch(`/api/ludo/room/${room.roomId}/roll`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uid: user.uid })
-      });
-      const data = await res.json();
-
-      if (data.success && data.room) {
-        const safeRolledRoom = normalizeLudoRoomState(data.room);
-        rtdbSet(rtdbRef(rtdb, `ludo_rooms/${safeRolledRoom.roomId}`), safeRolledRoom).catch(() => {});
-        if (data.rollId) {
-          seenRollIdsRef.current.add(data.rollId);
-        }
-        // Provide authoritative rolled face to Realistic3DDice ref so its 60fps deceleration lands on data.rolled
-        setConfirmedDiceByPlayer((prev) => ({ ...prev, [myRole]: data.rolled }));
-
-        const elapsed = Date.now() - rollStartTime;
-        const remainingWait = Math.max(80, targetDurationMs - elapsed);
-
-        setTimeout(() => {
-          rollingPlayerKeyRef.current = null;
-          setRollingPlayerKey(null);
-          isRollingLockRef.current = false;
-
-          if (data.tripleSixForfeit) {
-            playTone(240, 260, 'sawtooth');
-            showToast(`Rolled ${data.rolled} — Three 6s in a row! Turn forfeited.`, 'info');
-            setRoom(safeRolledRoom);
-            checkAndSettleFinishedRoom(safeRolledRoom);
-            return;
-          }
-          if (data.noValidMoves) {
-            playTone(300, 220, 'triangle');
-            showToast(`Rolled ${data.rolled} — No legal move available.`, 'info');
-            setRoom(safeRolledRoom);
-            checkAndSettleFinishedRoom(safeRolledRoom);
-            return;
-          }
-
-          playTone(data.rolled === 6 ? 860 : 580, 190, 'sine');
-          setRoom(safeRolledRoom);
-
-          // Auto-move after 480ms settle pause if there is only 1 legal token move
-          const movables: number[] = safeRolledRoom.movablePawns || [];
-          if (movables.length === 1) {
-            setTimeout(() => {
-              handleMovePawn(movables[0]);
-            }, 480);
-          }
-        }, remainingWait);
-        return;
-      }
-    } catch {
-      // Fallback local roll if offline
+    const currentRoomSnap = normalizeLudoRoomState(room);
+    const me = currentRoomSnap[myRole];
+    if (!me) {
+      rollingPlayerKeyRef.current = null;
+      setRollingPlayerKey(null);
+      isRollingLockRef.current = false;
+      return;
     }
 
-    const elapsedFallback = Date.now() - rollStartTime;
-    const remainingFallback = Math.max(80, targetDurationMs - elapsedFallback);
-    const localRolled = Math.floor(Math.random() * 6) + 1;
-    setConfirmedDiceByPlayer((prev) => ({ ...prev, [myRole]: localRolled }));
+    const nextConsecutiveSixes = rolled === 6 ? (currentRoomSnap.consecutiveSixes || 0) + 1 : 0;
+    const isTripleSix = nextConsecutiveSixes >= 3;
+    const movables = isTripleSix ? [] : computeClientMovablePawns(me.pawns, rolled);
+
+    // Write rolled state to /ludo_rooms/{roomId} immediately so opponent sees the 3D dice spin simultaneously
+    const rolledStateRoom: LudoRoomState = normalizeLudoRoomState({
+      ...currentRoomSnap,
+      diceValue: rolled,
+      diceRolled: true,
+      hasRolled: true,
+      consecutiveSixes: nextConsecutiveSixes,
+      movablePawns: movables,
+      turnDeadline: Date.now() + 15000,
+      lastRoll: {
+        rollId,
+        player: myRole,
+        color: me.color,
+        value: rolled,
+        outcome: isTripleSix ? 'triple_six_forfeit' : movables.length === 0 ? 'no_moves' : 'normal',
+        timestamp: Date.now()
+      },
+      lastAction: isTripleSix
+        ? `${me.username} rolled three 6s in a row! Turn passes to opponent.`
+        : movables.length === 0
+        ? `${me.username} rolled ${rolled} (No valid move available)`
+        : `${me.username} rolled a ${rolled}! Select a glowing token to move.`,
+      updatedAt: Date.now()
+    });
+
+    rtdbSet(rtdbRef(rtdb, `ludo_rooms/${rolledStateRoom.roomId}`), rolledStateRoom).catch(() => {});
 
     setTimeout(() => {
       rollingPlayerKeyRef.current = null;
       setRollingPlayerKey(null);
       isRollingLockRef.current = false;
-      playTone(localRolled === 6 ? 860 : 580, 190, 'sine');
-      setRoom((prev) => {
-        if (!prev) return prev;
-        const copy: LudoRoomState = normalizeLudoRoomState(prev);
-        const me = copy[myRole];
-        if (!me) return prev;
 
-        copy.diceValue = localRolled;
-        me.lastDice = localRolled;
-        copy.lastRoll = {
-          rollId: `roll_${Date.now()}_${myRole}`,
-          player: myRole,
-          color: me.color,
-          value: localRolled,
-          outcome: 'normal',
-          timestamp: Date.now()
-        };
-        seenRollIdsRef.current.add(copy.lastRoll.rollId);
+      if (isTripleSix || movables.length === 0) {
+        if (isTripleSix) {
+          playTone(240, 260, 'sawtooth');
+          showToast(`Rolled ${rolled} — Three consecutive 6s! Turn passing to opponent...`, 'info');
+        } else {
+          playTone(300, 220, 'triangle');
+          showToast(`Rolled ${rolled} — No valid moves available. Passing turn...`, 'info');
+        }
+        setRoom(rolledStateRoom);
 
-        const movables = computeClientMovablePawns(me.pawns, localRolled);
-        if (movables.length === 0) {
-          me.movesLeft = Math.max(0, me.movesLeft - 1);
-          copy.diceValue = null;
-          copy.hasRolled = false;
-          copy.movablePawns = [];
-          const order: LudoPlayerKey[] = copy.seatOrder || ['player1', 'player2'];
+        // Automatically trigger a 1-second delay and switch currentTurn to opponent's UID in Firebase
+        setTimeout(() => {
+          const latest = normalizeLudoRoomState(roomRef.current || rolledStateRoom);
+          const activeP = latest[myRole];
+          if (activeP) {
+            activeP.movesLeft = Math.max(0, activeP.movesLeft - 1);
+            activeP.lastDice = rolled;
+            activeP.consecutiveSixes = 0;
+          }
+          const order: LudoPlayerKey[] = latest.seatOrder || ['player1', 'player2'];
           const startIdx = Math.max(0, order.indexOf(myRole));
+          let nextTurnKey: LudoPlayerKey = myRole === 'player1' ? 'player2' : 'player1';
           for (let offset = 1; offset <= order.length; offset++) {
             const candKey = order[(startIdx + offset) % order.length];
-            if (copy[candKey] && copy[candKey]!.movesLeft > 0) {
-              copy.turn = candKey;
-              copy.currentTurn = copy[candKey]!.uid;
+            if (latest[candKey] && latest[candKey]!.movesLeft > 0) {
+              nextTurnKey = candKey;
               break;
             }
           }
-          copy.lastAction = `${me.username} rolled ${localRolled} (No valid move available)`;
-          copy.updatedAt = Date.now();
-          rtdbSet(rtdbRef(rtdb, `ludo_rooms/${copy.roomId}`), copy).catch(() => {});
-          return copy;
-        }
-        copy.hasRolled = true;
-        copy.movablePawns = movables;
-        copy.lastAction = `${me.username} rolled a ${localRolled}! Tap any glowing 3D token to move.`;
-        copy.updatedAt = Date.now();
-        rtdbSet(rtdbRef(rtdb, `ludo_rooms/${copy.roomId}`), copy).catch(() => {});
-        if (movables.length === 1) {
-          setTimeout(() => {
-            handleMovePawn(movables[0]);
-          }, 480);
-        }
-        return copy;
-      });
-    }, remainingFallback);
+          const nextPlayer = latest[nextTurnKey] || latest.player2 || latest.player1;
+          const passedRoom = normalizeLudoRoomState({
+            ...latest,
+            turn: nextTurnKey,
+            currentTurn: nextPlayer.uid,
+            turnColor: nextPlayer.color,
+            diceValue: null,
+            diceRolled: false,
+            hasRolled: false,
+            consecutiveSixes: 0,
+            movablePawns: [],
+            turnDeadline: Date.now() + 15000,
+            lastAction: isTripleSix
+              ? `Three 6s rolled! Now ${nextPlayer.username}'s turn to roll.`
+              : `No valid move on ${rolled}. Now ${nextPlayer.username}'s turn to roll.`,
+            updatedAt: Date.now()
+          });
+          setRoom(passedRoom);
+          rtdbSet(rtdbRef(rtdb, `ludo_rooms/${passedRoom.roomId}`), passedRoom).catch(() => {});
+        }, 1000);
+        return;
+      }
+
+      playTone(rolled === 6 ? 860 : 580, 190, 'sine');
+      setRoom(rolledStateRoom);
+
+      // Auto-move after 450ms settle pause if there is only 1 legal token move
+      if (movables.length === 1) {
+        setTimeout(() => {
+          handleMovePawn(movables[0]);
+        }, 450);
+      }
+    }, DICE_ROLL_DURATION_MS);
   };
 
-  // Send Match Chat
+  // Send Match Chat & Quick Reactions via Firebase Realtime Database (/ludo_rooms/{roomId}/chat)
   const handleSendMatchChat = async (textOverride?: string, type: 'text' | 'quick' | 'emoji' = 'text') => {
     if (!room || !user || !chatEnabled) return;
     const msgText = (textOverride ?? matchChatInput).trim();
     if (!msgText) return;
     if (!textOverride) setMatchChatInput('');
 
+    const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
+    const mySeat = keys.find((k) => room[k]?.uid === user.uid) || 'player1';
+    const myCol: LudoColor = room[mySeat]?.color || 'red';
+    const now = Date.now();
+
+    // Show immediate floating bubble over sender's avatar locally
+    setFloatingBubbles((prev) => ({
+      ...prev,
+      [myCol]: { text: msgText, ts: now }
+    }));
+
     try {
-      const res = await fetch(`/api/ludo/room/${room.roomId}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: user.uid,
-          username: user.username,
-          location: playerLocation,
-          text: msgText,
-          messageType: type
-        })
+      const chatListRef = rtdbRef(rtdb, `ludo_rooms/${room.roomId}/chat`);
+      const pushedRef = await rtdbPush(chatListRef, {
+        senderUid: user.uid,
+        senderName: user.username,
+        senderLocation: playerLocation,
+        senderColor: myCol,
+        message: msgText,
+        type: type === 'text' ? 'chat_message' : type === 'emoji' ? 'emoji' : 'quick_reaction',
+        timestamp: now
       });
-      const data = await res.json();
-      if (data.success && data.room) {
-        if (data.message) seenChatIdsRef.current.add(data.message.id);
-        const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
-        const mySeat = keys.find((k) => room[k]?.uid === user.uid) || 'player1';
-        const myCol = room[mySeat]?.color || 'red';
-        setFloatingBubbles((prev) => ({
-          ...prev,
-          [myCol]: { text: msgText, ts: Date.now() }
-        }));
-        setRoom(data.room);
+      if (pushedRef.key) {
+        seenChatIdsRef.current.add(pushedRef.key);
+        const localMsg: LudoChatMessage = {
+          id: pushedRef.key,
+          senderUid: user.uid,
+          senderName: user.username,
+          senderLocation: playerLocation,
+          senderColor: myCol,
+          text: msgText,
+          messageType: type,
+          timestamp: now
+        };
+        setRoom((prev) =>
+          prev
+            ? {
+                ...prev,
+                chatMessages: [...(prev.chatMessages || []).slice(-39), localMsg]
+              }
+            : prev
+        );
       }
     } catch {
-      // Ignore
+      // Ignore transient network errors
     }
   };
 
@@ -4296,15 +4488,19 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
-  // Determine seat assignments and active local player
+  // Determine seat assignments and active local player using strict currentTurn UID matching
   const allSeatKeys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
   const myRole: LudoPlayerKey =
     (room && user && allSeatKeys.find((k) => room[k]?.uid === user.uid)) || 'player1';
   const activeMyPlayer = room ? room[myRole] : null;
   const myColor: LudoColor = activeMyPlayer?.color || 'red';
-  const isMyTurn = Boolean(room && room.status === 'playing' && room.turn === myRole);
+  const isMyTurn = Boolean(
+    room &&
+      room.status === 'playing' &&
+      (room.currentTurn ? room.currentTurn === user?.uid : room.turn === myRole)
+  );
 
-  // 15-Second Anti-AFK Safety Timer: resets when turn or roll status changes
+  // 15-Second Turn Deadline Synchronizer & Timeout Auto-Pass via Atomic Transaction
   useEffect(() => {
     if (!room || room.status !== 'playing') {
       setTurnTimeRemaining(15);
@@ -4312,64 +4508,101 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       return;
     }
 
-    const currentTurnToken = `${room.turn}_rolled:${room.hasRolled}_dice:${room.diceValue}`;
+    const currentTurnToken = `${room.currentTurn || room.turn}_rolled:${room.diceRolled || room.hasRolled}_deadline:${room.turnDeadline || 0}`;
     if (lastTurnTokenRef.current !== currentTurnToken) {
       lastTurnTokenRef.current = currentTurnToken;
-      setTurnTimeRemaining(15);
       autoActionTriggeredRef.current = false;
     }
 
-    const timer = setInterval(() => {
-      setTurnTimeRemaining((prev) => {
-        if (prev <= 1) {
-          return 0;
-        }
-        if (prev <= 4 && isMyTurn) {
-          playTone(880, 50, 'sine', 0.04);
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    const updateTimer = () => {
+      const cur = roomRef.current;
+      if (!cur || cur.status !== 'playing') return;
+      const deadline = cur.turnDeadline || Date.now() + 15000;
+      const remainingSec = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setTurnTimeRemaining(remainingSec);
 
+      if (remainingSec > 0 && remainingSec <= 4 && isMyTurn) {
+        playTone(880, 50, 'sine', 0.04);
+      }
+
+      // Timeout Auto-Pass: If player does not complete roll/move within 15s, pass turn atomically
+      if (
+        remainingSec <= 0 &&
+        !autoActionTriggeredRef.current &&
+        !isRollingLockRef.current &&
+        !isMovingLockRef.current &&
+        !stepLoopRunningRef.current
+      ) {
+        autoActionTriggeredRef.current = true;
+        const targetRoomId = cur.roomId;
+        const expiredDeadline = cur.turnDeadline;
+
+        rtdbRunTransaction(rtdbRef(rtdb, `ludo_rooms/${targetRoomId}`), (rawRoom) => {
+          if (!rawRoom || rawRoom.status !== 'playing') return rawRoom;
+          if (expiredDeadline && rawRoom.turnDeadline && rawRoom.turnDeadline !== expiredDeadline) {
+            return; // Another client already advanced the turn
+          }
+          const norm = normalizeLudoRoomState(rawRoom);
+          const order: LudoPlayerKey[] = norm.seatOrder || ['player1', 'player2'];
+          const currentKey: LudoPlayerKey =
+            order.find((k) => norm[k]?.uid === norm.currentTurn) || norm.turn || 'player1';
+          const timedOutPlayer = norm[currentKey];
+          if (timedOutPlayer) {
+            timedOutPlayer.movesLeft = Math.max(0, timedOutPlayer.movesLeft - 1);
+            timedOutPlayer.consecutiveSixes = 0;
+          }
+
+          let nextKey: LudoPlayerKey = currentKey === 'player1' ? 'player2' : 'player1';
+          const startIdx = Math.max(0, order.indexOf(currentKey));
+          for (let offset = 1; offset <= order.length; offset++) {
+            const candKey = order[(startIdx + offset) % order.length];
+            if (norm[candKey] && norm[candKey]!.movesLeft > 0) {
+              nextKey = candKey;
+              break;
+            }
+          }
+          const nextP = norm[nextKey] || norm.player2 || norm.player1;
+          const now = Date.now();
+          norm.turn = nextKey;
+          norm.currentTurn = nextP.uid;
+          norm.turnColor = nextP.color;
+          norm.diceValue = null;
+          norm.diceRolled = false;
+          norm.hasRolled = false;
+          norm.consecutiveSixes = 0;
+          norm.movablePawns = [];
+          norm.turnDeadline = now + 15000;
+          norm.lastAction = `⏰ 15s timeout! Turn passed to ${nextP.username}.`;
+          norm.updatedAt = now;
+          return norm;
+        })
+          .then((res) => {
+            if (res.committed && res.snapshot.exists()) {
+              const updated = normalizeLudoRoomState(res.snapshot.val());
+              setRoom(updated);
+              if (isMyTurn) {
+                showToast('⏰ 15s turn timer expired! Turn passed to opponent.', 'info');
+              }
+            }
+          })
+          .catch(() => {});
+      }
+    };
+
+    updateTimer();
+    const timer = setInterval(updateTimer, 500);
     return () => clearInterval(timer);
-  }, [room?.status, room?.turn, room?.hasRolled, room?.diceValue, isMyTurn, playTone]);
-
-  // Execute Auto-Roll or Auto-Move on 15-Second AFK Timeout
-  useEffect(() => {
-    if (
-      turnTimeRemaining !== 0 ||
-      !room ||
-      room.status !== 'playing' ||
-      !isMyTurn ||
-      autoActionTriggeredRef.current ||
-      isRollingLockRef.current ||
-      isMovingLockRef.current ||
-      stepLoopRunningRef.current ||
-      rollingPlayerKey !== null ||
-      isTokenWalking ||
-      hoppingToken !== null
-    ) {
-      return;
-    }
-
-    autoActionTriggeredRef.current = true;
-    if (!room.hasRolled) {
-      showToast('⏰ Auto-rolled 3D Dice due to 15s turn timeout!', 'info');
-      handleRollDice();
-    } else if (room.hasRolled && room.movablePawns && room.movablePawns.length > 0) {
-      const targetPawn = room.movablePawns[0];
-      showToast(`⏰ Auto-moved Token #${targetPawn + 1} due to 15s turn timeout!`, 'info');
-      handleMovePawn(targetPawn);
-    }
   }, [
-    turnTimeRemaining,
-    room,
+    room?.roomId,
+    room?.status,
+    room?.currentTurn,
+    room?.turn,
+    room?.diceRolled,
+    room?.hasRolled,
+    room?.turnDeadline,
     isMyTurn,
-    rollingPlayerKey,
-    isTokenWalking,
-    hoppingToken,
-    handleRollDice,
-    handleMovePawn,
+    normalizeLudoRoomState,
+    playTone,
     showToast
   ]);
 
@@ -4661,6 +4894,9 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
   return (
     <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#1E1B4B] via-[#0B1120] to-[#040711] text-slate-100 flex flex-col pb-6 select-none">
+      {/* Hidden WebRTC Remote Audio Stream Element for 1v1 Live Voice Calling */}
+      <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
       {/* ==================== ROYAL 3D TOP CONTROL HEADER ==================== */}
       <header className="flex items-center justify-between gap-2 px-3 sm:px-5 py-2 bg-slate-950/95 backdrop-blur-md border-b border-amber-500/30 sticky top-0 z-40 shadow-lg">
         <div className="flex items-center gap-2 min-w-0">

@@ -149,6 +149,33 @@
         ".read": true,
         ".write": true
       }
+    },
+
+    "ludo_rooms": {
+      ".read": true,
+      ".write": true,
+      "$roomId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+
+    "ludo_matchmaking": {
+      ".read": true,
+      ".write": true,
+      "$stake": {
+        ".read": true,
+        ".write": true
+      }
+    },
+
+    "ludo_user_match": {
+      ".read": true,
+      ".write": true,
+      "$uid": {
+        ".read": true,
+        ".write": true
+      }
     }
   }
 }

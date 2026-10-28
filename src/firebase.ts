@@ -16,7 +16,9 @@ import {
   ref as rtdbRef,
   set as rtdbSet,
   get as rtdbGet,
+  push as rtdbPush,
   onValue as rtdbOnValue,
+  onChildAdded as rtdbOnChildAdded,
   update as rtdbUpdate,
   remove as rtdbRemove,
   runTransaction as rtdbRunTransaction
@@ -113,7 +115,9 @@ export {
   rtdbRef,
   rtdbSet,
   rtdbGet,
+  rtdbPush,
   rtdbOnValue,
+  rtdbOnChildAdded,
   rtdbUpdate,
   rtdbRemove,
   rtdbRunTransaction
