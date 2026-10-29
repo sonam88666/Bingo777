@@ -36,7 +36,7 @@ import { AdminTransactions } from './AdminTransactions';
 import { AdminBonusesReferral } from './AdminBonusesReferral';
 import { AdminGiftCodes } from './AdminGiftCodes';
 import { AdminReportsAnalytics } from './AdminReportsAnalytics';
-import { AdminSupportChat } from './AdminSupportChat';
+import { AdminTelegramSupport } from './AdminTelegramSupport';
 import { AdminSettingsPanel } from './AdminSettings';
 import { AdminAuditLogs } from './AdminAuditLogs';
 import { AdminDataBackup } from './AdminDataBackup';
@@ -118,8 +118,7 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
     });
   });
 
-  const unreadMessagesCount = supportMessages.filter((m) => m.sender === 'user' && !m.read).length;
-  const totalAlerts = pendingDepositsCount + pendingWithdrawalsCount + unreadMessagesCount + pendingDevicesCount;
+  const totalAlerts = pendingDepositsCount + pendingWithdrawalsCount + pendingDevicesCount;
 
   // Navigation items matching the organized Admin Console sidebar in the app's native dark & gold palette
   const navItems = [
@@ -152,11 +151,9 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
     { id: 'reports', label: 'Reports & Analytics', title: 'Reports & Analytics', icon: BarChart3 },
     {
       id: 'support',
-      label: 'Notifications & Support',
-      title: 'Support & Notifications',
-      icon: Bell,
-      badge: unreadMessagesCount,
-      alert: unreadMessagesCount > 0
+      label: 'Telegram Support',
+      title: 'Official Telegram Support Manager',
+      icon: Bell
     },
     { id: 'settings', label: 'Admin Settings', title: 'Admin Settings', icon: Settings },
     { id: 'audit', label: 'Audit Logs', title: 'Audit Logs', icon: ShieldCheck },
@@ -407,7 +404,7 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
           )}
           {activeTab === 'features' && <AdminFeatures adminId={adminId} masterToken={masterToken} />}
           {activeTab === 'reports' && <AdminReportsAnalytics />}
-          {activeTab === 'support' && <AdminSupportChat adminId={adminId} />}
+          {activeTab === 'support' && <AdminTelegramSupport adminId={adminId} />}
           {activeTab === 'settings' && <AdminSettingsPanel adminId={adminId} />}
           {activeTab === 'audit' && <AdminAuditLogs />}
           {activeTab === 'data_backup' && <AdminDataBackup adminId={adminId} />}

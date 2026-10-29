@@ -29,6 +29,7 @@ import { MasterAdminSuite } from './components/admin/MasterAdminSuite';
 import { AdminLoginModal } from './components/admin/AdminLoginModal';
 import { MaintenanceOverlay } from './components/common/MaintenanceOverlay';
 import { AppPopupModal } from './components/common/AppPopupModal';
+import { TelegramFloatingWidget } from './components/common/TelegramFloatingWidget';
 import { GameErrorBoundary } from './components/common/ErrorBoundary';
 import { store } from './services/store';
 import { firebaseSync } from './services/firebaseSync';
@@ -250,10 +251,8 @@ function MainApp() {
     ? Object.values(currentUser.devices)[0] || null
     : null;
 
-  // Unread support messages & local notifications
-  const unreadSupportCount = currentUser
-    ? store.getSupportMessages().filter((m) => m.uid === currentUser.uid && m.sender === 'admin' && !m.read).length
-    : 0;
+  // Legacy live chat disabled; official support handled via Telegram
+  const unreadSupportCount = 0;
 
   const handleAdminLoginSuccess = (adminId: string, token?: string) => {
     setMasterAdminId(adminId);
@@ -590,6 +589,9 @@ function MainApp() {
               </div>
             )}
           </main>
+
+          {/* 3D Floating Official Telegram Support Widget (Above Bottom Navigation) */}
+          <TelegramFloatingWidget />
 
           {/* Native Bottom Navigation Bar */}
           <BottomNav

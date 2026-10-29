@@ -182,7 +182,20 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   apkDownloadUrl: '/api/download-apk',
   apkFileSize: '12.4 MB',
   apkReleaseNotes: 'Includes 3D Dragon Tiger, Ludo 1v1 Live, Aviator & All Casino Games',
-  apkForceUpdatePrompt: false
+  apkForceUpdatePrompt: false,
+  // Global Authentication & OTP Configuration (/admin_settings/auth_config)
+  auth_config: {
+    otpLoginEnabled: true,
+    passwordLoginEnabled: true,
+    directLoginEnabled: true
+  },
+  // Official Telegram Support Configuration (/admin_settings/telegram_support)
+  telegram_support: {
+    enabled: true,
+    supportTitle: '24/7 Official Support',
+    telegramUsernameOrLink: 'https://t.me/colourWinAdmin',
+    buttonText: 'Chat on Telegram'
+  }
 };
 
 export const INITIAL_FEATURE_MODULES: Record<string, FeatureModule> = {

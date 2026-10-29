@@ -7,7 +7,9 @@ import {
   RefreshCw,
   Eye,
   EyeOff,
-  ShieldCheck
+  ShieldCheck,
+  Zap,
+  Key
 } from 'lucide-react';
 import { UserRecord, DeviceRecord } from '../../types';
 import { store } from '../../services/store';
@@ -15,6 +17,9 @@ import { useToast } from '../common/Toast';
 import { firebaseSync } from '../../services/firebaseSync';
 import { apiClient } from '../../services/apiClient';
 import { Bingo777Logo } from '../common/Bingo777Logo';
+import { rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
+
+import { PhoneLoginModal } from './PhoneLoginModal';
 
 interface UserAuthModalProps {
   onSuccess: (user: UserRecord) => void;
@@ -32,10 +37,24 @@ const generateCaptcha = (): string => {
 
 export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose }) => {
   const { showToast } = useToast();
-  const [tab, setTab] = useState<'login' | 'register'>(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('ref') ? 'register' : 'login';
+
+  // Real-time listener for /admin_settings/auth_config/otpLoginEnabled
+  const [otpLoginEnabled, setOtpLoginEnabled] = useState<boolean>(() => {
+    return store.getAdminSettings().auth_config?.otpLoginEnabled ?? true;
   });
+
+  const [tab, setTab] = useState<'otp' | 'login' | 'register'>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const initialOtpEnabled = store.getAdminSettings().auth_config?.otpLoginEnabled ?? true;
+    if (!initialOtpEnabled) {
+      return params.get('ref') ? 'register' : 'login';
+    }
+    if (params.get('mode') === 'password') return 'login';
+    return 'otp';
+  });
+
+  // Alternative login sub-mode when on 'login' tab: 'password' | 'direct'
+  const [loginMethod, setLoginMethod] = useState<'password' | 'direct'>('password');
 
   // Form Fields
   const [phone, setPhone] = useState(() => localStorage.getItem('bingo777_last_phone') || '');
@@ -58,6 +77,31 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
   const refreshCaptcha = useCallback(() => {
     setCaptchaCode(generateCaptcha());
     setCaptchaInput('');
+  }, []);
+
+  // Real-time onValue listener to /admin_settings/auth_config/otpLoginEnabled
+  useEffect(() => {
+    const otpRef = rtdbRef(rtdb, 'admin_settings/auth_config/otpLoginEnabled');
+    const unsub = rtdbOnValue(
+      otpRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const enabled = Boolean(snapshot.val());
+          setOtpLoginEnabled(enabled);
+          if (!enabled) {
+            // Gracefully fall back to alternative login method (Password or Direct Mobile)
+            setTab((curr) => (curr === 'otp' ? 'login' : curr));
+          }
+        } else {
+          setOtpLoginEnabled(true);
+        }
+      },
+      (err) => {
+        console.warn('[UserAuthModal] RTDB otpLoginEnabled notice:', err);
+      }
+    );
+
+    return () => unsub();
   }, []);
 
   useEffect(() => {
@@ -204,6 +248,78 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
   };
 
   /**
+   * Handle Direct Mobile Login (No Password required)
+   * Fallback / fast verification method when OTP is disabled or user prefers direct access.
+   */
+  const handleDirectLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmitting) return;
+    setPendingDeviceNotice(null);
+    const cleanPhone = phone.trim().replace(/\D/g, '').slice(-10);
+    if (cleanPhone.length !== 10) {
+      showToast('Please enter a valid 10-digit mobile number', 'error');
+      return;
+    }
+    const existingCandidate = store.findUserByPhone(cleanPhone);
+    const isSelectedAdmin = Boolean(existingCandidate && existingCandidate.role === 'master_admin');
+    if (!isSelectedAdmin && !store.isFeatureEnabled('user_login')) {
+      showToast('Member Login is temporarily paused by Master Admin for maintenance.', 'error');
+      return;
+    }
+    if (captchaInput.trim().toUpperCase() !== captchaCode) {
+      showToast('Invalid Captcha code! Please enter the correct Captcha.', 'error');
+      refreshCaptcha();
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await firebaseSync.pullUsersFromRtdb().catch(() => {});
+      const device = getClientDevice();
+      device.status = 'approved';
+
+      const existingLocal = store.findUserByPhone(cleanPhone);
+      if (existingLocal) {
+        localStorage.setItem('bingo777_active_uid', existingLocal.uid);
+        localStorage.setItem('maanwin_active_uid', existingLocal.uid);
+        localStorage.setItem('bingo777_last_phone', cleanPhone);
+        await firebaseSync.pushUserToFirestore(existingLocal, cleanPhone);
+        firebaseSync.attachRealtimeUserSync(existingLocal.uid, cleanPhone);
+
+        showToast(`Welcome back, ${existingLocal.username}! Direct Mobile Login successful.`, 'success');
+        onSuccess(existingLocal);
+        onClose();
+        return;
+      }
+
+      // If user doesn't exist yet, auto-register them with Welcome Signup Bonus!
+      const defaultUsername = `Player_${cleanPhone.slice(-4)}`;
+      const newUser = store.registerUser(cleanPhone, defaultUsername, device);
+      await apiClient
+        .registerUser({
+          user: newUser,
+          phone: cleanPhone,
+          username: newUser.username,
+          uid: newUser.uid,
+          device
+        })
+        .catch(() => {});
+
+      localStorage.setItem('bingo777_active_uid', newUser.uid);
+      localStorage.setItem('maanwin_active_uid', newUser.uid);
+      localStorage.setItem('bingo777_last_phone', cleanPhone);
+      await firebaseSync.pushUserToFirestore(newUser, cleanPhone);
+      firebaseSync.attachRealtimeUserSync(newUser.uid, cleanPhone);
+
+      showToast(`Welcome! ₹${newUser.balance} Signup Bonus credited to your wallet.`, 'success');
+      onSuccess(newUser);
+      onClose();
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  /**
    * Handle Sign Up (Mobile Number + Password + Confirm Password + Refer Code + Captcha)
    * Permanently saves account to local registry, backend disk, and Firestore on first registration.
    */
@@ -314,6 +430,16 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
     }
   };
 
+  if (otpLoginEnabled && tab === 'otp') {
+    return (
+      <PhoneLoginModal
+        onSuccess={onSuccess}
+        onClose={onClose}
+        onSwitchToPasswordLogin={() => setTab('login')}
+      />
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
       <div className="w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-3xl overflow-hidden shadow-2xl space-y-4 p-5 sm:p-6">
@@ -334,31 +460,75 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
           </button>
         </div>
 
-        {/* Login / Sign Up Switcher */}
-        <div className="grid grid-cols-2 p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs font-bold">
-          <button
-            type="button"
-            onClick={() => setTab('login')}
-            className={`py-2.5 rounded-lg transition ${
-              tab === 'login'
-                ? 'bg-amber-500 text-slate-950 shadow-md'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Login
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('register')}
-            className={`py-2.5 rounded-lg transition ${
-              tab === 'register'
-                ? 'bg-amber-500 text-slate-950 shadow-md'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Sign Up
-          </button>
-        </div>
+        {/* Login / Sign Up Switcher (Respects Admin otpLoginEnabled) */}
+        {otpLoginEnabled ? (
+          <div className="grid grid-cols-3 p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs font-bold gap-1">
+            <button
+              type="button"
+              onClick={() => setTab('otp')}
+              className={`py-2 rounded-lg transition text-[11px] font-bold ${
+                tab === 'otp'
+                  ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                  : 'text-amber-400 hover:text-amber-300'
+              }`}
+            >
+              ⚡ Phone OTP
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab('login')}
+              className={`py-2 rounded-lg transition text-[11px] ${
+                tab === 'login'
+                  ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Password
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab('register')}
+              className={`py-2 rounded-lg transition text-[11px] ${
+                tab === 'register'
+                  ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Sign Up
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 p-1 bg-slate-950 rounded-xl border border-slate-800 text-xs font-bold gap-1">
+              <button
+                type="button"
+                onClick={() => setTab('login')}
+                className={`py-2.5 rounded-lg transition text-xs ${
+                  tab === 'login'
+                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Login
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab('register')}
+                className={`py-2.5 rounded-lg transition text-xs ${
+                  tab === 'register'
+                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Sign Up
+              </button>
+            </div>
+            <div className="flex items-center space-x-1.5 text-[10px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded-xl">
+              <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>Direct Mobile & Password Login Active (SMS OTP paused by Admin)</span>
+            </div>
+          </div>
+        )}
 
         {/* 1 Number = 1 Device Pending Approval Notice */}
         {pendingDeviceNotice && (
@@ -368,8 +538,41 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
           </div>
         )}
 
+        {/* Sub-method switcher on Login tab (Password vs Direct Mobile Login) */}
+        {tab === 'login' && (
+          <div className="grid grid-cols-2 p-1 bg-slate-950 rounded-xl border border-slate-800 text-[11px] font-bold gap-1">
+            <button
+              type="button"
+              onClick={() => setLoginMethod('password')}
+              className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1.5 ${
+                loginMethod === 'password'
+                  ? 'bg-slate-800 text-amber-300 font-bold border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Key className="w-3 h-3" />
+              <span>Password Login</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setLoginMethod('direct')}
+              className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1.5 ${
+                loginMethod === 'direct'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Zap className="w-3 h-3" />
+              <span>Direct Mobile Login</span>
+            </button>
+          </div>
+        )}
+
         {/* Form */}
-        <form onSubmit={tab === 'login' ? handleLogin : handleRegister} className="space-y-3.5">
+        <form
+          onSubmit={tab === 'login' ? (loginMethod === 'direct' ? handleDirectLogin : handleLogin) : handleRegister}
+          className="space-y-3.5"
+        >
           {/* Mobile Number */}
           <div>
             <label className="text-xs font-semibold text-slate-300 mb-1 block">
@@ -392,30 +595,37 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
             </div>
           </div>
 
-          {/* Password */}
-          <div>
-            <label className="text-xs font-semibold text-slate-300 mb-1 block">
-              Password
-            </label>
-            <div className="relative flex items-center">
-              <Lock className="w-4 h-4 text-slate-500 absolute left-3.5" />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                placeholder="Enter password"
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-amber-500"
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 text-slate-500 hover:text-slate-300"
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+          {/* Password (Only when not in direct mobile mode) */}
+          {tab === 'login' && loginMethod === 'direct' ? (
+            <div className="p-3 rounded-xl bg-slate-950/80 border border-amber-500/20 text-[11px] text-amber-200/90 flex items-center space-x-2">
+              <Zap className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Instant 1-Click Verification: Login with mobile number without password.</span>
             </div>
-          </div>
+          ) : (
+            <div>
+              <label className="text-xs font-semibold text-slate-300 mb-1 block">
+                Password
+              </label>
+              <div className="relative flex items-center">
+                <Lock className="w-4 h-4 text-slate-500 absolute left-3.5" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  placeholder="Enter password"
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-amber-500"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 text-slate-500 hover:text-slate-300"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Confirm Password (Only on Sign Up) */}
           {tab === 'register' && (
@@ -503,8 +713,44 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
             type="submit"
             className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs shadow-lg shadow-amber-950/40 active:scale-95 transition mt-2"
           >
-            {tab === 'login' ? 'Login' : 'Sign Up'}
+            {tab === 'login' ? (loginMethod === 'direct' ? 'Direct Mobile Login' : 'Login') : 'Sign Up'}
           </button>
+
+          {/* Conditional footer switch */}
+          {otpLoginEnabled ? (
+            <div className="pt-2 text-center border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setTab('otp')}
+                className="text-xs text-amber-400 hover:text-amber-300 font-bold transition flex items-center justify-center space-x-1.5 mx-auto"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>Login / Sign Up with Phone OTP &rarr;</span>
+              </button>
+            </div>
+          ) : (
+            tab === 'login' && (
+              <div className="pt-2 text-center border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setLoginMethod(loginMethod === 'password' ? 'direct' : 'password')}
+                  className="text-xs text-amber-400/90 hover:text-amber-300 font-semibold transition flex items-center justify-center space-x-1.5 mx-auto"
+                >
+                  {loginMethod === 'password' ? (
+                    <>
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>Prefer no password? Switch to Direct Mobile Login &rarr;</span>
+                    </>
+                  ) : (
+                    <>
+                      <Key className="w-3.5 h-3.5" />
+                      <span>Have password? Switch to Password Login &rarr;</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )
+          )}
         </form>
       </div>
     </div>

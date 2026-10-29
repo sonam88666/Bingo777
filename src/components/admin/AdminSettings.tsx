@@ -28,6 +28,7 @@ import { AdminSettings, UpiChannel, AppPopupConfig, UserRecord } from '../../typ
 import { store } from '../../services/store';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
+import { AdminTelegramSupport } from './AdminTelegramSupport';
 import {
   rtdb,
   rtdbRef,
@@ -74,6 +75,12 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
   const [masterAdminPassInput, setMasterAdminPassInput] = useState('Anchal@8877@@!');
   const [showAdminPass, setShowAdminPass] = useState(false);
 
+  // 📱 Authentication & Phone OTP Toggle State (/admin_settings/auth_config/otpLoginEnabled)
+  const [otpLoginEnabled, setOtpLoginEnabled] = useState<boolean>(() => {
+    return store.getAdminSettings().auth_config?.otpLoginEnabled ?? true;
+  });
+  const [isUpdatingOtpToggle, setIsUpdatingOtpToggle] = useState<boolean>(false);
+
   useEffect(() => {
     const unsubStore = store.subscribe(() => {
       setTick((t) => t + 1);
@@ -94,12 +101,19 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
     let unsubPopup: (() => void) | null = null;
     let unsubPhones: (() => void) | null = null;
     let unsubDevices: (() => void) | null = null;
+    let unsubOtp: (() => void) | null = null;
 
     try {
       unsubPopup = rtdbOnValue(rtdbRef(rtdb, 'admin_settings/app_popup'), (snap) => {
         if (snap.exists()) {
           const val = snap.val() as AppPopupConfig;
           if (val) setAppPopup(val);
+        }
+      });
+
+      unsubOtp = rtdbOnValue(rtdbRef(rtdb, 'admin_settings/auth_config/otpLoginEnabled'), (snap) => {
+        if (snap.exists()) {
+          setOtpLoginEnabled(Boolean(snap.val()));
         }
       });
 
@@ -126,6 +140,7 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
     return () => {
       unsubStore();
       if (unsubPopup) unsubPopup();
+      if (unsubOtp) unsubOtp();
       if (unsubPhones) unsubPhones();
       if (unsubDevices) unsubDevices();
     };
@@ -345,6 +360,51 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
     showToast('Master Admin Password updated in Firebase RTDB!', 'success');
   };
 
+  const handleToggleOtpLogin = async (newValue: boolean) => {
+    setIsUpdatingOtpToggle(true);
+    try {
+      await rtdbSet(rtdbRef(rtdb, 'admin_settings/auth_config/otpLoginEnabled'), newValue);
+      setOtpLoginEnabled(newValue);
+
+      const updatedAuthConfig = {
+        ...(formState.auth_config || { passwordLoginEnabled: true, directLoginEnabled: true }),
+        otpLoginEnabled: newValue,
+        updatedAt: Date.now(),
+        updatedBy: adminId
+      };
+
+      setFormState((prev) => ({
+        ...prev,
+        auth_config: updatedAuthConfig
+      }));
+
+      store.updateAdminSettings(
+        {
+          auth_config: updatedAuthConfig
+        },
+        adminId
+      );
+
+      store.logAudit({
+        actor: adminId,
+        category: 'AUTH',
+        action: newValue ? 'PHONE_OTP_LOGIN_ENABLED' : 'PHONE_OTP_LOGIN_DISABLED',
+        details: `Phone OTP login globally ${newValue ? 'ENABLED' : 'DISABLED'} by Master Admin. Users will ${newValue ? 'verify via Firebase SMS OTP' : 'log in via Password or Direct Mobile Login'}.`,
+        outcome: 'SUCCESS'
+      });
+
+      showToast(
+        `Phone OTP Login is now ${newValue ? 'ENABLED (SMS OTP active)' : 'DISABLED (Users will log in via Password/Mobile)'}!`,
+        newValue ? 'success' : 'info'
+      );
+    } catch (err: any) {
+      console.error('Failed to toggle OTP login in RTDB:', err);
+      showToast('Failed to update Phone OTP toggle. Please check connection.', 'error');
+    } finally {
+      setIsUpdatingOtpToggle(false);
+    }
+  };
+
   const handleUnblockUser = async (u: UserRecord) => {
     store.setUserBlocked(u.uid, false, 'Unblocked by Master Admin', adminId);
     await rtdbSet(rtdbRef(rtdb, `users/${u.uid}/isBlocked`), false).catch(() => {});
@@ -382,6 +442,7 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
   };
 
   return (
+    <div className="space-y-6">
     <form onSubmit={handleSave} className="space-y-4">
       {/* 1. MASTER ADMIN MAINTENANCE MODE & EMERGENCY BETTING FREEZE */}
       <div className={`p-5 rounded-3xl border-2 transition-all shadow-2xl ${
@@ -1183,6 +1244,87 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
           </div>
         </div>
 
+        {/* 4.5. 📱 GLOBAL USER AUTHENTICATION & PHONE OTP TOGGLE (/admin_settings/auth_config/otpLoginEnabled) */}
+        <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 border-2 border-amber-500/40 shadow-2xl space-y-4 md:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center">
+                <Smartphone className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-100 flex items-center gap-2">
+                  <span>Phone Number OTP Login Control</span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-amber-400">
+                    /admin_settings/auth_config/otpLoginEnabled
+                  </span>
+                </h3>
+                <p className="text-[10px] text-slate-400">
+                  Globally enable or disable Firebase Phone SMS OTP authentication across the User App in real time
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span
+                className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${
+                  otpLoginEnabled
+                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 animate-pulse'
+                    : 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                }`}
+              >
+                {otpLoginEnabled ? '● PHONE OTP ACTIVE' : '● PHONE OTP DISABLED'}
+              </span>
+
+              {/* Toggle Switch */}
+              <button
+                type="button"
+                disabled={isUpdatingOtpToggle}
+                onClick={() => handleToggleOtpLogin(!otpLoginEnabled)}
+                className={`relative inline-flex h-7 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  otpLoginEnabled ? 'bg-amber-500' : 'bg-slate-700'
+                }`}
+                title={`Click to ${otpLoginEnabled ? 'Disable' : 'Enable'} Phone OTP Login`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-slate-950 shadow-lg ring-0 transition duration-200 ease-in-out ${
+                    otpLoginEnabled ? 'translate-x-7' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            <div className={`p-3.5 rounded-xl border ${
+              otpLoginEnabled 
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200' 
+                : 'bg-slate-950 border-slate-800 text-slate-400'
+            }`}>
+              <div className="font-bold flex items-center gap-1.5 mb-1 text-slate-200">
+                <CheckCircle2 className={`w-4 h-4 ${otpLoginEnabled ? 'text-emerald-400' : 'text-slate-500'}`} />
+                <span>When Enabled (otpLoginEnabled: true)</span>
+              </div>
+              <p className="text-[11px] leading-relaxed">
+                Players will see the <strong>Phone OTP login screen</strong> with Country Code (+91) selector, receive SMS OTP via Firebase Auth, enter the 6-digit code, and automatically receive the Welcome Signup Bonus on new registrations.
+              </p>
+            </div>
+
+            <div className={`p-3.5 rounded-xl border ${
+              !otpLoginEnabled 
+                ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' 
+                : 'bg-slate-950 border-slate-800 text-slate-400'
+            }`}>
+              <div className="font-bold flex items-center gap-1.5 mb-1 text-slate-200">
+                <Lock className={`w-4 h-4 ${!otpLoginEnabled ? 'text-amber-400' : 'text-slate-500'}`} />
+                <span>When Disabled (otpLoginEnabled: false)</span>
+              </div>
+              <p className="text-[11px] leading-relaxed">
+                The User App automatically and gracefully <strong>hides the OTP verification fields</strong>. Players log in or register seamlessly using <strong>Password Login</strong> or <strong>Direct Mobile Verification</strong> without SMS delays or quotas.
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* 5. 📢 LIVE ADMIN ADS & APP UPDATE POPUP SYSTEM (/admin_settings/app_popup) */}
         <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 border-2 border-amber-500/40 shadow-2xl space-y-4 md:col-span-2">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
@@ -1611,5 +1753,9 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
         <span>Save All Admin Settings</span>
       </button>
     </form>
+
+    {/* Dedicated Telegram Support Manager (/admin_settings/telegram_support) */}
+    <AdminTelegramSupport adminId={adminId} />
+    </div>
   );
 };

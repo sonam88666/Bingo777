@@ -510,28 +510,28 @@ export const AccountView: React.FC<AccountViewProps> = ({
           </button>
         )}
 
-        {/* 24/7 Support Chat */}
+        {/* 24/7 Official Telegram Support */}
         {isLiveSupportEnabled && (
           <button
             onClick={onOpenSupport}
             className="w-full p-4 flex items-center justify-between hover:bg-slate-800/50 transition group"
           >
             <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center">
+              <div className="w-8 h-8 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400 flex items-center justify-center">
                 <MessageSquare className="w-4 h-4" />
               </div>
               <div className="text-left">
                 <div className="flex items-center space-x-2">
                   <span className="font-bold text-slate-200 group-hover:text-amber-300">
-                    24/7 Live Support Chat
+                    {store.getAdminSettings().telegram_support?.supportTitle || '24/7 Official Telegram Support'}
                   </span>
-                  {unreadSupportCount > 0 && (
-                    <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-bold text-[9px] animate-bounce">
-                      {unreadSupportCount} new
-                    </span>
-                  )}
+                  <span className="px-1.5 py-0.2 rounded-full bg-sky-500/20 text-sky-300 font-black text-[9px] uppercase">
+                    Telegram
+                  </span>
                 </div>
-                <span className="text-[11px] text-slate-500">Direct 1-on-1 line with Master Admin</span>
+                <span className="text-[11px] text-slate-500">
+                  {store.getAdminSettings().telegram_support?.buttonText || 'Chat on Telegram for instant assistance'}
+                </span>
               </div>
             </div>
             <ChevronRight className="w-4 h-4 text-slate-600 group-hover:translate-x-0.5 transition" />

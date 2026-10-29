@@ -567,7 +567,28 @@ export interface AdminSettings {
   apkForceUpdatePrompt?: boolean;
   // Live Admin Ads & App Update Popup System (/admin_settings/app_popup)
   app_popup?: AppPopupConfig;
+  // Global Authentication & OTP Configuration (/admin_settings/auth_config)
+  auth_config?: AuthConfig;
+  // Official Telegram Support Configuration (/admin_settings/telegram_support)
+  telegram_support?: TelegramSupportConfig;
   updatedAt?: number;
+}
+
+export interface TelegramSupportConfig {
+  enabled: boolean;
+  supportTitle: string;
+  telegramUsernameOrLink: string;
+  buttonText: string;
+  updatedAt?: number;
+  updatedBy?: string;
+}
+
+export interface AuthConfig {
+  otpLoginEnabled: boolean;
+  passwordLoginEnabled?: boolean;
+  directLoginEnabled?: boolean;
+  updatedAt?: number;
+  updatedBy?: string;
 }
 
 export interface AppPopupConfig {

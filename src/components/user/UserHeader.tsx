@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Wallet, 
   Plus, 
-  MessageSquare, 
+  Send, 
   Volume2, 
   VolumeX, 
   Crown,
@@ -23,7 +23,6 @@ interface UserHeaderProps {
 
 export const UserHeader: React.FC<UserHeaderProps> = ({
   user,
-  unreadSupportCount,
   onOpenDeposit,
   onOpenSupport,
   onOpenAuth
@@ -105,22 +104,24 @@ export const UserHeader: React.FC<UserHeaderProps> = ({
               {isMuted ? <VolumeX className="w-4 h-4 text-slate-500" /> : <Volume2 className="w-4 h-4 text-amber-400" />}
             </button>
 
-            {/* Support Message */}
+            {/* Official Telegram Support */}
             <button
               onClick={onOpenSupport}
-              title="24/7 Live Support"
-              className="relative p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition"
+              title="24/7 Official Telegram Support"
+              className="relative p-2 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-sky-400 hover:text-sky-300 transition"
             >
-              <MessageSquare className="w-4 h-4" />
-              {unreadSupportCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-white rounded-full text-[9px] font-bold flex items-center justify-center animate-bounce">
-                  {unreadSupportCount}
-                </span>
-              )}
+              <Send className="w-4 h-4 -rotate-12" />
             </button>
           </div>
         ) : (
           <div className="flex items-center space-x-2">
+            <button
+              onClick={onOpenSupport}
+              title="24/7 Official Telegram Support"
+              className="p-2 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-sky-400 hover:text-sky-300 transition"
+            >
+              <Send className="w-4 h-4 -rotate-12" />
+            </button>
             <button
               onClick={onOpenAuth}
               className="px-4 py-2 rounded-2xl bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 text-slate-950 font-black text-xs shadow-lg shadow-amber-950/40 active:scale-95 transition"
