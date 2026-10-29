@@ -21,7 +21,9 @@ import {
   onChildAdded as rtdbOnChildAdded,
   update as rtdbUpdate,
   remove as rtdbRemove,
-  runTransaction as rtdbRunTransaction
+  runTransaction as rtdbRunTransaction,
+  query as rtdbQuery,
+  limitToLast as rtdbLimitToLast
 } from 'firebase/database';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -120,5 +122,7 @@ export {
   rtdbOnChildAdded,
   rtdbUpdate,
   rtdbRemove,
-  rtdbRunTransaction
+  rtdbRunTransaction,
+  rtdbQuery,
+  rtdbLimitToLast
 };

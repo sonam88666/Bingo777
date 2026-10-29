@@ -44,7 +44,9 @@ import {
   rtdbOnChildAdded,
   rtdbUpdate,
   rtdbRemove,
-  rtdbRunTransaction
+  rtdbRunTransaction,
+  rtdbQuery,
+  rtdbLimitToLast
 } from '../../firebase';
 import { useAdminSettings } from '../../context/AdminSettingsContext';
 
@@ -2829,8 +2831,9 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     let unsubChat: (() => void) | null = null;
     try {
       const chatNodeRef = rtdbRef(rtdb, `ludo_rooms/${room.roomId}/chat`);
+      const chatQuery = rtdbQuery(chatNodeRef, rtdbLimitToLast(30));
       unsubChat = rtdbOnChildAdded(
-        chatNodeRef,
+        chatQuery,
         (snap) => {
           if (!snap.exists()) return;
           const chatKey = snap.key || `chat_${Date.now()}`;
@@ -2841,9 +2844,10 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
           if (!raw) return;
           const senderUid = String(raw.senderUid || '');
           const senderName = String(raw.senderName || 'Player');
-          const msgText = String(raw.message || raw.text || '').trim();
+          const msgText = String(raw.text || raw.message || '').trim();
           if (!msgText) return;
-          const ts = Number(raw.timestamp) || Date.now();
+          const ts = Number(raw.createdAt || raw.timestamp) || Date.now();
+          const location = String(raw.location || raw.senderLocation || 'Mumbai, India');
 
           const currentRoom = roomRef.current;
           const seatKeys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
@@ -2880,14 +2884,14 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
             id: chatKey,
             senderUid,
             senderName,
-            senderLocation: raw.senderLocation || 'India',
+            senderLocation: location,
             senderColor,
             text: msgText,
             messageType:
-              raw.type === 'emoji'
-                ? 'emoji'
-                : raw.type === 'quick_reaction' || raw.type === 'quick'
+              raw.type === 'reaction' || raw.type === 'quick_reaction' || raw.type === 'quick'
                 ? 'quick'
+                : raw.type === 'emoji'
+                ? 'emoji'
                 : 'text',
             timestamp: ts
           };
@@ -2900,6 +2904,11 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
               chatMessages: [...(prev.chatMessages || []).slice(-39), newMsg]
             };
           });
+
+          // Auto-scroll chat window to bottom
+          setTimeout(() => {
+            chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }, 50);
         },
         () => {}
       );
@@ -4403,14 +4412,15 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     if (!room || !user || !chatEnabled) return;
     const msgText = (textOverride ?? matchChatInput).trim();
     if (!msgText) return;
-    if (!textOverride) setMatchChatInput('');
+    // Clear input box immediately
+    setMatchChatInput('');
 
     const keys: LudoPlayerKey[] = ['player1', 'player2', 'player3', 'player4'];
     const mySeat = keys.find((k) => room[k]?.uid === user.uid) || 'player1';
     const myCol: LudoColor = room[mySeat]?.color || 'red';
     const now = Date.now();
 
-    // Show immediate floating bubble over sender's avatar locally
+    // Show immediate floating bubble over sender's avatar locally for zero-latency feedback
     setFloatingBubbles((prev) => ({
       ...prev,
       [myCol]: { text: msgText, ts: now }
@@ -4418,36 +4428,22 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
 
     try {
       const chatListRef = rtdbRef(rtdb, `ludo_rooms/${room.roomId}/chat`);
-      const pushedRef = await rtdbPush(chatListRef, {
+      const newRef = rtdbPush(chatListRef);
+      const pushId = newRef.key || `chat_${now}`;
+      await rtdbSet(newRef, {
+        id: pushId,
         senderUid: user.uid,
-        senderName: user.username,
-        senderLocation: playerLocation,
+        senderName: user.username || `Player_${user.uid.slice(-4)}`,
+        location: playerLocation || 'Mumbai, India',
+        text: msgText,
+        type: type === 'text' ? 'custom' : 'reaction',
+        createdAt: now,
+        // Legacy/compatibility fields
+        senderLocation: playerLocation || 'Mumbai, India',
         senderColor: myCol,
         message: msgText,
-        type: type === 'text' ? 'chat_message' : type === 'emoji' ? 'emoji' : 'quick_reaction',
         timestamp: now
       });
-      if (pushedRef.key) {
-        seenChatIdsRef.current.add(pushedRef.key);
-        const localMsg: LudoChatMessage = {
-          id: pushedRef.key,
-          senderUid: user.uid,
-          senderName: user.username,
-          senderLocation: playerLocation,
-          senderColor: myCol,
-          text: msgText,
-          messageType: type,
-          timestamp: now
-        };
-        setRoom((prev) =>
-          prev
-            ? {
-                ...prev,
-                chatMessages: [...(prev.chatMessages || []).slice(-39), localMsg]
-              }
-            : prev
-        );
-      }
     } catch {
       // Ignore transient network errors
     }
