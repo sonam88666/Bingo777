@@ -94,6 +94,11 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   const [showBanModal, setShowBanModal] = useState<boolean>(false);
   const [banReason, setBanReason] = useState('');
 
+  // Hard Delete Confirmation Modal State
+  const [confirmDeleteUser, setConfirmDeleteUser] = useState<UserRecord | null>(null);
+  const [isHardDeleting, setIsHardDeleting] = useState<boolean>(false);
+  const [localDeletedUids, setLocalDeletedUids] = useState<Set<string>>(new Set());
+
   const copyText = (value: string, label: string) => {
     try {
       navigator.clipboard.writeText(value);
@@ -104,7 +109,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   };
 
   const usersMap = store.getUsers();
-  const users = Object.values(usersMap);
+  const users = Object.values(usersMap).filter((u) => !localDeletedUids.has(u.uid));
   const deletedBackups = Object.values(store.getDeletedUsersBackup());
   const tokenToUse = masterToken || sessionStorage.getItem('bingo777_master_admin_token') || 'BINGO_MASTER_2026_KEY';
 
@@ -235,13 +240,45 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
     }
   };
 
-  const handleSafeDeleteUser = async (u: UserRecord) => {
-    await apiClient.deleteUser(u.uid, adminId, 'Archived by Master Admin', tokenToUse).catch(() => {});
-    const res = store.deleteUser(u.uid, adminId, 'Archived by Master Admin');
-    if (res.success) {
-      showToast(`User ${u.uid} archived to backup & sessions revoked`, 'info');
+  const handleCompleteUserDelete = async (targetUser: UserRecord) => {
+    if (!targetUser || !targetUser.uid) return;
+    setIsHardDeleting(true);
+
+    const uid = targetUser.uid;
+    const phone = targetUser.phone;
+    const username = targetUser.username;
+
+    // 1. Frontend UI State Cleanup (Immediately filter out targetUser so UI updates without page refresh)
+    setLocalDeletedUids((prev) => new Set([...prev, uid]));
+    if (selectedUserUid === uid) {
       setSelectedUserUid(null);
     }
+    setConfirmDeleteUser(null);
+
+    try {
+      // 2. Local Authoritative Store Purge & Blacklist
+      store.hardDeleteUser(uid, adminId, 'Permanently deleted by Master Admin');
+
+      // 3. Backend Admin SDK Deletion (Calls firebase-admin auth().deleteUser & server cleanup)
+      await apiClient.hardDeleteUser(uid, adminId, tokenToUse, phone).catch((err) => {
+        console.warn('Backend hard-delete error:', err);
+      });
+
+      // 4. Client-side Realtime Database & Firestore multi-path purge
+      await firebaseSync.hardDeleteUserFromFirebase(uid, phone).catch((err) => {
+        console.warn('FirebaseSync purge error:', err);
+      });
+
+      showToast(`User ${username} (${uid}) permanently deleted and wiped from all databases and Auth.`, 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Error occurred during complete user deletion', 'error');
+    } finally {
+      setIsHardDeleting(false);
+    }
+  };
+
+  const handleSafeDeleteUser = (u: UserRecord) => {
+    setConfirmDeleteUser(u);
   };
 
   // ============================================================================
@@ -859,11 +896,11 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleSafeDeleteUser(selectedUser)}
-                          className="px-3 py-2 rounded-xl bg-rose-100 text-rose-700 font-bold text-xs flex items-center space-x-1"
+                          onClick={() => setConfirmDeleteUser(selectedUser)}
+                          className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs flex items-center space-x-1.5 shadow-md shadow-rose-600/30 transition"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          <span>Archive & Delete Account</span>
+                          <span>Delete User (Permanent Hard-Delete)</span>
                         </button>
                       </div>
                     )}
@@ -1240,7 +1277,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-2.5 shrink-0">
+                <div className="flex items-center space-x-2 shrink-0">
                   <div className="text-right">
                     <span
                       className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
@@ -1255,6 +1292,17 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
                       Balance: <strong className="font-mono text-slate-900">₹{u.balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong>
                     </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfirmDeleteUser(u);
+                    }}
+                    className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 transition"
+                    title="Hard Delete User (Permanent Wipe)"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                   <MoreVertical className="w-4 h-4 text-slate-400" />
                 </div>
               </div>
@@ -1388,6 +1436,74 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Hard-Delete Confirmation Modal */}
+      {confirmDeleteUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-white border-2 border-rose-500 rounded-3xl p-5 shadow-2xl space-y-4 text-slate-900 overflow-hidden">
+            <div className="flex items-center space-x-3 text-rose-600 pb-3 border-b border-rose-100">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="font-black text-base text-slate-900">Permanent Hard-Delete User</h3>
+                <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">Irreversible Action</span>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 space-y-2 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-600">UID:</span>
+                <span className="font-mono font-black text-slate-900">{confirmDeleteUser.uid}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-600">Username:</span>
+                <span className="font-bold text-slate-900">{confirmDeleteUser.username}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-600">Mobile Phone:</span>
+                <span className="font-mono font-bold text-slate-900">+91 {confirmDeleteUser.phone}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-600">Wallet Balance:</span>
+                <span className="font-mono font-black text-rose-700">₹{confirmDeleteUser.balance.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-600 space-y-1.5 leading-relaxed bg-slate-50 p-3 rounded-xl border border-slate-200">
+              <p className="font-bold text-slate-800">This action will completely wipe out:</p>
+              <ul className="list-disc pl-4 space-y-1 text-[11px]">
+                <li><strong>Firebase Authentication</strong> account (instant logout across all devices)</li>
+                <li><strong>/users/{confirmDeleteUser.uid}</strong> profile & balance</li>
+                <li><strong>/wallets/{confirmDeleteUser.uid}</strong> & ledger transactions</li>
+                <li><strong>/bets/{confirmDeleteUser.uid}</strong> & game history records</li>
+                <li><strong>/ludo_rooms</strong> (any rooms hosted or joined by user)</li>
+                <li><strong>/admin_security</strong> allowed phone & device whitelist</li>
+              </ul>
+            </div>
+
+            <div className="flex gap-2.5 pt-1">
+              <button
+                type="button"
+                disabled={isHardDeleting}
+                onClick={() => setConfirmDeleteUser(null)}
+                className="flex-1 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isHardDeleting}
+                onClick={() => handleCompleteUserDelete(confirmDeleteUser)}
+                className="flex-1 py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black text-xs shadow-lg shadow-rose-600/30 flex items-center justify-center space-x-1.5 transition disabled:opacity-50"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{isHardDeleting ? 'Deleting Permanently...' : 'Confirm Hard Delete'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

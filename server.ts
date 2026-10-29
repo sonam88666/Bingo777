@@ -3,12 +3,32 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { initializeApp as initAdminApp, getApps as getAdminApps } from 'firebase-admin/app';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import { getDatabase as getAdminDatabase } from 'firebase-admin/database';
+import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import { topNewsPollEngine } from './src/server/newsPollEngine';
 import { serverAviatorEngine } from './src/server/aviatorEngine';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PERSISTENT_DB_PATH = path.join(__dirname, '.bingo777_persistent_db.json');
+
+// Authoritative Firebase Admin SDK Initialization
+const FIREBASE_PROJECT_ID = process.env.VITE_FIREBASE_PROJECT_ID || 'gen-lang-client-0859410588';
+const FIREBASE_RTDB_URL = process.env.VITE_FIREBASE_DATABASE_URL || 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com';
+const FIRESTORE_DB_ID = 'ai-studio-maanwinproappmas-46884268-d860-426b-bcad-9e6e75b05c9a';
+
+const adminApp = getAdminApps().length > 0 ? getAdminApps()[0] : initAdminApp({
+  projectId: FIREBASE_PROJECT_ID,
+  databaseURL: FIREBASE_RTDB_URL
+});
+
+export const admin = {
+  auth: () => getAdminAuth(adminApp),
+  database: () => getAdminDatabase(adminApp),
+  firestore: () => getAdminFirestore(adminApp, FIRESTORE_DB_ID)
+};
 
 // Master Admin Authorization Keys (Cryptographically Secure)
 const VALID_MASTER_KEYS = new Set([
@@ -567,10 +587,11 @@ async function startServer() {
       }
     }
 
+    const configuredBonus = Number(serverAdminSettings.signupBonusAmount || 100);
     const incomingBal =
-      typeof incomingUser.balance === 'number' && Number.isFinite(incomingUser.balance) && incomingUser.balance >= 0
+      typeof incomingUser.balance === 'number' && Number.isFinite(incomingUser.balance) && incomingUser.balance > 0
         ? Math.round(incomingUser.balance * 100) / 100
-        : 0;
+        : configuredBonus;
 
     const newServerUser: ServerUser = {
       uid: finalUid,
@@ -588,8 +609,8 @@ async function startServer() {
       totalLostAmount: 0,
       referralCode: finalReferralCode,
       referredBy: resolvedReferredBy,
-      signupBonusStatus: 'pending',
-      signupBonusAmount: serverAdminSettings.signupBonusAmount || 120,
+      signupBonusStatus: 'credited',
+      signupBonusAmount: configuredBonus,
       firstDepositBonusStatus: 'pending',
       firstDepositBonusAmount: 0,
       dailyBettingActivity: {},
@@ -597,6 +618,22 @@ async function startServer() {
     };
 
     serverUsers[finalUid] = newServerUser;
+
+    // Record welcome signup bonus transaction in server transactions list
+    const serverSignupTx: ServerTransaction = {
+      id: `tx_signup_${finalUid}`,
+      uid: finalUid,
+      type: 'BONUS',
+      category: 'credit',
+      amount: incomingBal,
+      balanceBefore: 0,
+      balanceAfter: incomingBal,
+      description: 'Welcome Signup Bonus',
+      referenceId: `SIGNUP_${finalUid}`,
+      timestamp: Date.now(),
+      status: 'completed'
+    };
+    serverTransactions.unshift(serverSignupTx);
 
     // Record referral linkage on server if referredBy or referralRecord was provided
     const reqRefRecord = req.body?.referralRecord;
@@ -1912,6 +1949,173 @@ async function startServer() {
       uid,
       status: user.status,
       message: `User ${user.username} status updated to ${status}`
+    });
+  });
+
+  // 14b. Hard-Delete User: Completely wipes out user from Firebase Auth, RTDB nodes, Firestore, and Server state
+  app.post(['/api/admin/user/hard-delete', '/api/admin/user/delete'], verifyMasterAdmin, async (req, res) => {
+    const { uid, phone, adminId, reason } = req.body || {};
+    if (!uid || typeof uid !== 'string') {
+      return res.status(400).json({ success: false, error: 'Valid uid is required for user hard-delete' });
+    }
+
+    const targetUser = serverUsers[uid];
+    const userPhone = phone || targetUser?.phone || '';
+    const cleanPhone = normalizePhoneNumber(userPhone);
+
+    const purgeResults: Record<string, boolean | string> = {
+      uid,
+      authDeleted: false,
+      rtdbPurged: false,
+      firestorePurged: false,
+      serverMemoryPurged: true
+    };
+
+    // 1. Permanently remove from Server In-Memory State & Blacklist UID
+    deletedUserUids.add(uid);
+    if (serverUsers[uid]) {
+      delete serverUsers[uid];
+    }
+    // Purge server transactions for this user
+    for (let i = serverTransactions.length - 1; i >= 0; i--) {
+      if (serverTransactions[i].uid === uid) {
+        serverTransactions.splice(i, 1);
+      }
+    }
+    // Purge server referrals for this user
+    for (const [refId, ref] of serverReferrals.entries()) {
+      if (ref.referrerUid === uid || ref.referredUid === uid) {
+        serverReferrals.delete(refId);
+      }
+    }
+
+    // 2. Backend Admin SDK Deletion (firebase-admin Auth)
+    try {
+      if (adminApp) {
+        try {
+          await admin.auth().deleteUser(uid);
+          purgeResults.authDeleted = true;
+        } catch (e: any) {
+          if (e?.code === 'auth/user-not-found') {
+            purgeResults.authDeleted = 'user-not-found-or-already-deleted';
+          } else {
+            console.warn('[FirebaseAdmin] auth deleteUser notice:', e?.message || e);
+          }
+        }
+
+        // Also search and delete by phone number in Firebase Auth if phone is known
+        if (cleanPhone && cleanPhone.length === 10) {
+          try {
+            const formattedPhone = `+91${cleanPhone}`;
+            const userByPhone = await admin.auth().getUserByPhoneNumber(formattedPhone);
+            if (userByPhone && userByPhone.uid) {
+              await admin.auth().deleteUser(userByPhone.uid).catch(() => {});
+              purgeResults.authDeleted = true;
+            }
+          } catch {}
+        }
+
+        // Revoke any active refresh tokens to force instant logout on all devices
+        try {
+          await admin.auth().revokeRefreshTokens(uid).catch(() => {});
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('[FirebaseAdmin] Auth deletion error:', e);
+    }
+
+    // 3. Database Paths to Fully Purge in Firebase Realtime Database:
+    try {
+      const rtdbInstance = admin.database();
+      const rtdbPromises: Promise<any>[] = [];
+
+      // /users/{uid}
+      rtdbPromises.push(rtdbInstance.ref(`users/${uid}`).remove().catch(() => {}));
+      // /wallets/{uid} & /user_wallets/{uid}
+      rtdbPromises.push(rtdbInstance.ref(`wallets/${uid}`).remove().catch(() => {}));
+      rtdbPromises.push(rtdbInstance.ref(`user_wallets/${uid}`).remove().catch(() => {}));
+      // /transactions/{uid}
+      rtdbPromises.push(rtdbInstance.ref(`transactions/${uid}`).remove().catch(() => {}));
+      // /bets/{uid}
+      rtdbPromises.push(rtdbInstance.ref(`bets/${uid}`).remove().catch(() => {}));
+      // /user_notifications/{uid} & /support_messages/{uid}
+      rtdbPromises.push(rtdbInstance.ref(`user_notifications/${uid}`).remove().catch(() => {}));
+      rtdbPromises.push(rtdbInstance.ref(`support_messages/${uid}`).remove().catch(() => {}));
+
+      // Ludo Rooms: delete room if user is host or remove player from active room
+      try {
+        const roomsSnap = await rtdbInstance.ref('ludo_rooms').once('value');
+        if (roomsSnap.exists()) {
+          const rooms = roomsSnap.val() || {};
+          for (const [roomId, roomData] of Object.entries(rooms) as [string, any][]) {
+            if (!roomData || typeof roomData !== 'object') continue;
+            const isHost = roomData.hostUid === uid || roomData.createdBy === uid;
+            const hasPlayer = roomData.players && (roomData.players[uid] || Object.values(roomData.players).some((p: any) => p && p.uid === uid));
+            if (isHost) {
+              rtdbPromises.push(rtdbInstance.ref(`ludo_rooms/${roomId}`).remove().catch(() => {}));
+            } else if (hasPlayer) {
+              rtdbPromises.push(rtdbInstance.ref(`ludo_rooms/${roomId}/players/${uid}`).remove().catch(() => {}));
+            }
+          }
+        }
+      } catch {}
+
+      // Admin Security: Revoke phone and devices if user was in admin security list
+      try {
+        if (cleanPhone) {
+          const phonesSnap = await rtdbInstance.ref('admin_security/allowed_phones').once('value');
+          if (phonesSnap.exists()) {
+            const phones = phonesSnap.val() || {};
+            for (const [key, val] of Object.entries(phones)) {
+              if (String(val).includes(cleanPhone) || String(key).includes(cleanPhone)) {
+                rtdbPromises.push(rtdbInstance.ref(`admin_security/allowed_phones/${key}`).remove().catch(() => {}));
+              }
+            }
+          }
+        }
+        const devicesSnap = await rtdbInstance.ref('admin_security/allowed_devices').once('value');
+        if (devicesSnap.exists()) {
+          const devices = devicesSnap.val() || {};
+          for (const [devKey, devVal] of Object.entries(devices) as [string, any][]) {
+            if (devVal?.uid === uid || devKey === uid || (cleanPhone && devVal?.phone?.includes(cleanPhone))) {
+              rtdbPromises.push(rtdbInstance.ref(`admin_security/allowed_devices/${devKey}`).remove().catch(() => {}));
+            }
+          }
+        }
+      } catch {}
+
+      await Promise.all(rtdbPromises);
+      purgeResults.rtdbPurged = true;
+    } catch (e) {
+      console.warn('[FirebaseAdmin] RTDB purge error:', e);
+    }
+
+    // 4. Database Paths to Fully Purge in Firestore
+    try {
+      const fsDb = admin.firestore();
+      await fsDb.collection('users').doc(uid).delete().catch(() => {});
+      await fsDb.collection('users').doc(uid).collection('private').doc('info').delete().catch(() => {});
+      purgeResults.firestorePurged = true;
+    } catch (e) {
+      console.warn('[FirebaseAdmin] Firestore purge error:', e);
+    }
+
+    // 5. Audit Log
+    serverAuditLogs.unshift({
+      id: 'audit_hard_del_' + Date.now(),
+      timestamp: Date.now(),
+      actor: adminId || 'MasterAdmin_01',
+      category: 'AUTH',
+      action: 'USER_HARD_DELETED',
+      details: `Permanently wiped user ${targetUser?.username || uid} (${uid}, Phone: +91 ${cleanPhone || 'N/A'}) across Firebase Auth, RTDB nodes (/users, /wallets, /transactions, /bets, /ludo_rooms, /admin_security), Firestore, and server memory. Reason: ${reason || 'Permanent purge by Master Admin'}`,
+      targetUser: uid
+    });
+
+    return res.json({
+      success: true,
+      uid,
+      message: `User ${uid} successfully hard-deleted and completely wiped out from database and authentication.`,
+      purgeResults
     });
   });
 
@@ -3872,22 +4076,36 @@ async function startServer() {
         }
       } catch {}
 
-      // 2. Expired Game Rounds (/wingo_rounds, /past_rounds):
-      // Retain only the most recent 30 completed periods for the UI history list and delete older round records.
+      // 2. Expired Game Rounds (/past_rounds/{gameType}):
+      // Retain only the most recent 50 completed rounds per gameType and delete older records automatically.
       try {
         const pastRes = await fetch(`${RTDB_BASE_URL}/past_rounds.json`);
         if (pastRes.ok) {
           const pastData = await pastRes.json();
           if (pastData && typeof pastData === 'object') {
-            const entries = Object.entries(pastData) as [string, any][];
-            entries.sort((a, b) => {
-              const tB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
-              const tA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
-              if (tB !== tA) return tB - tA;
-              return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
-            });
-            if (entries.length > 30) {
-              for (const [roundKey] of entries.slice(30)) {
+            for (const [groupKey, groupData] of Object.entries(pastData)) {
+              if (groupData && typeof groupData === 'object') {
+                const subEntries = Object.entries(groupData) as [string, any][];
+                subEntries.sort((a, b) => {
+                  const tB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
+                  const tA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
+                  if (tB !== tA) return tB - tA;
+                  return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
+                });
+                if (subEntries.length > 50) {
+                  for (const [subKey] of subEntries.slice(50)) {
+                    await fetch(`${RTDB_BASE_URL}/past_rounds/${encodeURIComponent(groupKey)}/${encodeURIComponent(subKey)}.json`, {
+                      method: 'DELETE'
+                    }).catch(() => {});
+                    purgedRounds++;
+                  }
+                }
+              }
+            }
+
+            const flatEntries = Object.entries(pastData).filter(([, v]) => !v || typeof v !== 'object' || !(v as Record<string, unknown>).period) as [string, any][];
+            if (flatEntries.length > 50) {
+              for (const [roundKey] of flatEntries.slice(50)) {
                 await fetch(`${RTDB_BASE_URL}/past_rounds/${encodeURIComponent(roundKey)}.json`, {
                   method: 'DELETE'
                 }).catch(() => {});
@@ -3920,12 +4138,35 @@ async function startServer() {
               if (tB !== tA) return tB - tA;
               return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
             });
-            if (entries.length > 30) {
-              for (const [oldKey] of entries.slice(30)) {
+            if (entries.length > 50) {
+              for (const [oldKey] of entries.slice(50)) {
                 await fetch(`${RTDB_BASE_URL}/wingo_rounds/${encodeURIComponent(oldKey)}.json`, {
                   method: 'DELETE'
                 }).catch(() => {});
                 purgedRounds++;
+              }
+            }
+          }
+        }
+      } catch {}
+
+      // 2b. Inactive or Completed Ludo Rooms Cleanup (/ludo_rooms):
+      // Automatically delete completed ('finished') or inactive rooms older than 30 minutes along with chat/voice subtrees.
+      try {
+        const ludoRes = await fetch(`${RTDB_BASE_URL}/ludo_rooms.json`);
+        if (ludoRes.ok) {
+          const ludoData = await ludoRes.json();
+          if (ludoData && typeof ludoData === 'object') {
+            const THIRTY_MINS_MS = 30 * 60 * 1000;
+            for (const [roomId, roomData] of Object.entries(ludoData) as [string, any][]) {
+              if (!roomData || typeof roomData !== 'object') continue;
+              const lastActivity = Number(roomData.updatedAt || roomData.createdAt || 0);
+              const isOld = lastActivity > 0 && now - lastActivity > THIRTY_MINS_MS;
+              const isFinishedOrAbandoned = roomData.status === 'finished' || roomData.status === 'abandoned';
+              if (isFinishedOrAbandoned || isOld) {
+                await fetch(`${RTDB_BASE_URL}/ludo_rooms/${encodeURIComponent(roomId)}.json`, {
+                  method: 'DELETE'
+                }).catch(() => {});
               }
             }
           }

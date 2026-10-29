@@ -80,59 +80,64 @@ jobs:
           java-version: '21'
           cache: 'gradle'
 
-      - name: Configure Release Keystore from GitHub Secrets
+      - name: Configure Persistent Release Keystore
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.KEYSTORE_PASSWORD || 'bingo777release' }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.KEY_ALIAS || 'bingo777' }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.KEY_PASSWORD || 'bingo777release' }}
         run: |
           mkdir -p android/app
-          KEYSTORE_PATH="android/app/release-key.jks"
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "Decoding release keystore from KEYSTORE_BASE64 secret..."
-            echo "$KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > "$KEYSTORE_PATH"
-          elif [ ! -f "$KEYSTORE_PATH" ]; then
-            echo "KEYSTORE_BASE64 secret not set; generating fallback release keystore..."
-            KS_PASS="${KEYSTORE_PASSWORD:-bingo777release}"
-            K_ALIAS="${KEY_ALIAS:-bingo777}"
-            K_PASS="${KEY_PASSWORD:-$KS_PASS}"
-            keytool -genkeypair -v \
-              -keystore "$KEYSTORE_PATH" \
-              -alias "$K_ALIAS" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass "$KS_PASS" \
-              -keypass "$K_PASS" \
-              -dname "CN=Bingo777 Pro, OU=Mobile, O=Bingo777, L=Mumbai, S=MH, C=IN"
+          KEYSTORE_PATH="android/app/release.jks"
+          KEYSTORE_FALLBACK="android/app/release-key.jks"
+
+          if [ -n "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "Decoding persistent release keystore from GitHub Secrets..."
+            echo "$SIGNING_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 --decode > "$KEYSTORE_PATH"
+            cp "$KEYSTORE_PATH" "$KEYSTORE_FALLBACK"
+          elif [ -f "$KEYSTORE_PATH" ]; then
+            echo "Using committed persistent release keystore from repository at $KEYSTORE_PATH"
+            cp -n "$KEYSTORE_PATH" "$KEYSTORE_FALLBACK" || true
+          elif [ -f "$KEYSTORE_FALLBACK" ]; then
+            echo "Using committed persistent fallback keystore at $KEYSTORE_FALLBACK"
+            cp "$KEYSTORE_FALLBACK" "$KEYSTORE_PATH"
           else
-            echo "Using persistent release keystore at $KEYSTORE_PATH"
+            echo "ERROR: Release keystore file not found! Never generate random ephemeral keys."
+            exit 1
           fi
           ls -lh "$KEYSTORE_PATH"
 
       - name: Build Signed Release APK with Gradle
         env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          SIGNING_STORE_FILE: "release.jks"
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.KEYSTORE_PASSWORD || 'bingo777release' }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.KEY_ALIAS || 'bingo777' }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.KEY_PASSWORD || 'bingo777release' }}
+          KEYSTORE_FILE: "release.jks"
+          KEYSTORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.KEYSTORE_PASSWORD || 'bingo777release' }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.KEY_ALIAS || 'bingo777' }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.KEY_PASSWORD || 'bingo777release' }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
         run: |
           cd android
           chmod +x gradlew
-          VERSION_CODE=$((200 + ${GITHUB_RUN_NUMBER:-2}))
+          VERSION_CODE=$((300 + ${GITHUB_RUN_NUMBER:-3}))
           VERSION_NAME="2.0.${VERSION_CODE}"
-          KS_PASS="${KEYSTORE_PASSWORD:-bingo777release}"
-          K_ALIAS="${KEY_ALIAS:-bingo777}"
-          K_PASS="${KEY_PASSWORD:-$KS_PASS}"
-          echo "Building signed release APK (versionCode=${VERSION_CODE}, versionName=${VERSION_NAME})..."
+          KS_PASS="${SIGNING_STORE_PASSWORD}"
+          K_ALIAS="${SIGNING_KEY_ALIAS}"
+          K_PASS="${SIGNING_KEY_PASSWORD}"
+          echo "Building signed release APK with persistent keystore (versionCode=${VERSION_CODE}, versionName=${VERSION_NAME})..."
           ./gradlew clean assembleRelease \
             -PversionCode="${VERSION_CODE}" \
             -PversionName="${VERSION_NAME}" \
-            -PKEYSTORE_FILE="release-key.jks" \
+            -PKEYSTORE_FILE="release.jks" \
             -PKEYSTORE_PASSWORD="${KS_PASS}" \
             -PKEY_ALIAS="${K_ALIAS}" \
             -PKEY_PASSWORD="${K_PASS}" \
+            -PSIGNING_STORE_FILE="release.jks" \
+            -PSIGNING_STORE_PASSWORD="${KS_PASS}" \
+            -PSIGNING_KEY_ALIAS="${K_ALIAS}" \
+            -PSIGNING_KEY_PASSWORD="${K_PASS}" \
             --no-daemon --stacktrace
 
       - name: Verify Built APK Output

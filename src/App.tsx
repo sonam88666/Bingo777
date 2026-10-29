@@ -28,6 +28,7 @@ import { BottomNav, TabId } from './components/navigation/BottomNav';
 import { MasterAdminSuite } from './components/admin/MasterAdminSuite';
 import { AdminLoginModal } from './components/admin/AdminLoginModal';
 import { MaintenanceOverlay } from './components/common/MaintenanceOverlay';
+import { AppPopupModal } from './components/common/AppPopupModal';
 import { GameErrorBoundary } from './components/common/ErrorBoundary';
 import { store } from './services/store';
 import { firebaseSync } from './services/firebaseSync';
@@ -641,11 +642,22 @@ function MainApp() {
         />
       )}
 
-      {/* Admin Login Modal */}
+      {/* Live Admin Ads & App Update Popup Banner */}
+      <AppPopupModal onOpenDeposit={() => {
+        setWalletInitialTab('deposit');
+        setActiveNavTab('wallet');
+      }} />
+
+      {/* High-Security Hidden Admin Login Modal */}
       {showAdminLogin && (
         <AdminLoginModal
+          currentUser={currentUser}
           onSuccess={handleAdminLoginSuccess}
           onCancel={() => setShowAdminLogin(false)}
+          onUserBlocked={() => {
+            setCurrentUser(null);
+            setShowAdminLogin(false);
+          }}
         />
       )}
 

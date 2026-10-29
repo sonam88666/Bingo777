@@ -269,20 +269,12 @@ export class FinancialApiClient {
   // 9. Server-Side User Deletion (Master Admin Only)
   public async deleteUser(
     uid: string,
-    adminId: string,
-    reason: string,
-    masterToken?: string
+    adminId: string = 'MasterAdmin_01',
+    reason: string = 'User hard-deleted by Master Admin',
+    masterToken?: string,
+    phone?: string
   ): Promise<ApiResponse> {
-    try {
-      const res = await fetch(`${this.baseUrl}/api/admin/user/delete`, {
-        method: 'POST',
-        headers: this.getAuthHeaders(masterToken),
-        body: JSON.stringify({ uid, adminId, reason, masterAdminToken: masterToken })
-      });
-      return await this.safeJson(res);
-    } catch (err: unknown) {
-      return { success: false, error: err instanceof Error ? err.message : 'Network failure deleting user' };
-    }
+    return this.hardDeleteUser(uid, adminId, masterToken, phone, reason);
   }
 
   // 10. Server-Side Balance Adjustment (Master Admin Only)
@@ -399,10 +391,10 @@ export class FinancialApiClient {
     }
   }
 
-  // 15. Master Admin User Status Control (Activate, Suspend, Ban, Deactivate)
+  // 15. Master Admin User Status Control (Activate, Suspend, Ban, Deactivate, Block)
   public async updateUserStatus(
     uid: string,
-    status: 'active' | 'suspended' | 'banned' | 'deactivated',
+    status: 'active' | 'suspended' | 'banned' | 'deactivated' | 'blocked',
     reason: string,
     adminId: string,
     masterToken?: string
@@ -525,6 +517,26 @@ export class FinancialApiClient {
       return await this.safeJson(res);
     } catch (err: unknown) {
       return { success: false, error: err instanceof Error ? err.message : 'Network failure claiming gift code' };
+    }
+  }
+
+  // 18. Master Admin Complete User Hard-Delete
+  public async hardDeleteUser(
+    uid: string,
+    adminId: string = 'MasterAdmin_01',
+    masterToken?: string,
+    phone?: string,
+    reason: string = 'User completely hard-deleted by Master Admin'
+  ): Promise<ApiResponse> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/admin/user/hard-delete`, {
+        method: 'POST',
+        headers: this.getAuthHeaders(masterToken),
+        body: JSON.stringify({ uid, phone, adminId, reason, masterAdminToken: masterToken })
+      });
+      return await this.safeJson(res);
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : 'Network failure during user hard-delete' };
     }
   }
 }

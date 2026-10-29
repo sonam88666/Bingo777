@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Save,
   DollarSign,
@@ -15,12 +15,28 @@ import {
   Plus,
   Trash2,
   ExternalLink,
-  Radio
+  Radio,
+  Flame,
+  ShieldAlert,
+  Key,
+  Lock,
+  Eye,
+  EyeOff,
+  UserX
 } from 'lucide-react';
-import { AdminSettings, UpiChannel } from '../../types';
+import { AdminSettings, UpiChannel, AppPopupConfig, UserRecord } from '../../types';
 import { store } from '../../services/store';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
+import {
+  rtdb,
+  rtdbRef,
+  rtdbGet,
+  rtdbSet,
+  rtdbUpdate,
+  rtdbOnValue,
+  rtdbRemove
+} from '../../firebase';
 
 interface AdminSettingsProps {
   adminId: string;
@@ -39,8 +55,27 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
   const [newUpiLabel, setNewUpiLabel] = useState('');
   const [newUpiSetAsActive, setNewUpiSetAsActive] = useState(false);
 
-  React.useEffect(() => {
-    return store.subscribe(() => {
+  // 📢 Live Admin Ads & App Update Popup System State (/admin_settings/app_popup)
+  const [appPopup, setAppPopup] = useState<AppPopupConfig>({
+    enabled: false,
+    title: 'Special 100% Deposit Bonus!',
+    message: 'Deposit now and get an instant 100% bonus added to your wallet! Limited time offer.',
+    imageUrl: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?auto=format&fit=crop&w=600&q=80',
+    buttonText: 'Claim Bonus Now',
+    actionUrl: 'deposit'
+  });
+  const [isSavingPopup, setIsSavingPopup] = useState(false);
+
+  // 🔐 High-Security Admin Access & Device Lock State (/admin_security)
+  const [allowedPhones, setAllowedPhones] = useState<Record<string, { phone: string; name?: string; addedAt?: number }>>({});
+  const [allowedDevices, setAllowedDevices] = useState<Record<string, { deviceId: string; phone?: string; pairedAt?: number; status?: string; deviceName?: string }>>({});
+  const [newAdminPhone, setNewAdminPhone] = useState('');
+  const [newAdminPhoneName, setNewAdminPhoneName] = useState('');
+  const [masterAdminPassInput, setMasterAdminPassInput] = useState('Anchal@8877@@!');
+  const [showAdminPass, setShowAdminPass] = useState(false);
+
+  useEffect(() => {
+    const unsubStore = store.subscribe(() => {
       setTick((t) => t + 1);
       const liveSettings = store.getAdminSettings();
       setFormState((prev) => {
@@ -55,6 +90,45 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
         return prev;
       });
     });
+
+    let unsubPopup: (() => void) | null = null;
+    let unsubPhones: (() => void) | null = null;
+    let unsubDevices: (() => void) | null = null;
+
+    try {
+      unsubPopup = rtdbOnValue(rtdbRef(rtdb, 'admin_settings/app_popup'), (snap) => {
+        if (snap.exists()) {
+          const val = snap.val() as AppPopupConfig;
+          if (val) setAppPopup(val);
+        }
+      });
+
+      unsubPhones = rtdbOnValue(rtdbRef(rtdb, 'admin_security/allowed_phones'), (snap) => {
+        if (snap.exists()) {
+          setAllowedPhones(snap.val() || {});
+        } else {
+          // Initialize with default admin phone
+          setAllowedPhones({
+            '9876543210': { phone: '9876543210', name: 'Master Admin Default', addedAt: Date.now() }
+          });
+        }
+      });
+
+      unsubDevices = rtdbOnValue(rtdbRef(rtdb, 'admin_security/allowed_devices'), (snap) => {
+        if (snap.exists()) {
+          setAllowedDevices(snap.val() || {});
+        }
+      });
+    } catch (e) {
+      console.warn('RTDB admin subscriptions error:', e);
+    }
+
+    return () => {
+      unsubStore();
+      if (unsubPopup) unsubPopup();
+      if (unsubPhones) unsubPhones();
+      if (unsubDevices) unsubDevices();
+    };
   }, []);
 
   const allUsers = Object.values(store.getUsers());
@@ -187,6 +261,95 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
       officialUpiName: updatedSettings.officialUpiName
     });
     showToast('UPI channel removed.', 'info');
+  };
+
+  // 📢 Live Ads & App Update Popup broadcast handler
+  const handleSaveAppPopup = async (customConfig?: Partial<AppPopupConfig>) => {
+    setIsSavingPopup(true);
+    try {
+      const payload: AppPopupConfig = {
+        ...appPopup,
+        ...customConfig,
+        updatedAt: Date.now(),
+        updatedBy: adminId
+      };
+      setAppPopup(payload);
+      await rtdbSet(rtdbRef(rtdb, 'admin_settings/app_popup'), payload);
+      showToast(
+        payload.enabled
+          ? '📢 Live Ads & Update Popup turned ON! Broadcasted to all active user devices.'
+          : 'Live Ads & Update Popup turned OFF.',
+        'success'
+      );
+    } catch {
+      showToast('Error syncing popup to Firebase RTDB', 'error');
+    } finally {
+      setIsSavingPopup(false);
+    }
+  };
+
+  // 🔐 Security Handlers: Allowed Phone Numbers
+  const handleAddAllowedPhone = async () => {
+    const clean = newAdminPhone.trim().replace(/\D/g, '').slice(-10);
+    if (clean.length !== 10) {
+      showToast('Please enter a valid 10-digit mobile number', 'error');
+      return;
+    }
+    const name = newAdminPhoneName.trim() || 'Admin Member';
+    await rtdbSet(rtdbRef(rtdb, `admin_security/allowed_phones/${clean}`), {
+      phone: clean,
+      name,
+      addedAt: Date.now()
+    });
+    setNewAdminPhone('');
+    setNewAdminPhoneName('');
+    showToast(`Added +91 ${clean} to Admin Allowed Numbers!`, 'success');
+  };
+
+  const handleRemoveAllowedPhone = async (phoneKey: string) => {
+    if (Object.keys(allowedPhones).length <= 1) {
+      showToast('Cannot remove the only allowed phone number.', 'error');
+      return;
+    }
+    await rtdbRemove(rtdbRef(rtdb, `admin_security/allowed_phones/${phoneKey}`));
+    showToast(`Removed +91 ${phoneKey} from Admin Allowed Numbers.`, 'info');
+  };
+
+  // 🔐 Security Handlers: Allowed Devices
+  const handlePairCurrentDevice = async () => {
+    const dev = store.getOrCreateClientDevice();
+    await rtdbSet(rtdbRef(rtdb, `admin_security/allowed_devices/${dev.deviceId}`), {
+      deviceId: dev.deviceId,
+      deviceName: dev.deviceName || 'Admin Hardware Device',
+      browser: dev.browser || 'Browser',
+      os: dev.os || 'OS',
+      pairedAt: Date.now(),
+      pairedBy: adminId,
+      status: 'approved'
+    });
+    showToast(`Approved & Locked Current Device (${dev.deviceId}) for Admin Login!`, 'success');
+  };
+
+  const handleRemoveAllowedDevice = async (devId: string) => {
+    await rtdbRemove(rtdbRef(rtdb, `admin_security/allowed_devices/${devId}`));
+    showToast(`Device ${devId} unlinked from Admin approval.`, 'info');
+  };
+
+  const handleSaveAdminPassword = async () => {
+    if (!masterAdminPassInput.trim()) {
+      showToast('Password cannot be empty', 'error');
+      return;
+    }
+    await rtdbSet(rtdbRef(rtdb, 'admin_security/password'), masterAdminPassInput.trim());
+    store.updateAdminSettings({ masterAdminPassword: masterAdminPassInput.trim() } as any, adminId);
+    showToast('Master Admin Password updated in Firebase RTDB!', 'success');
+  };
+
+  const handleUnblockUser = async (u: UserRecord) => {
+    store.setUserBlocked(u.uid, false, 'Unblocked by Master Admin', adminId);
+    await rtdbSet(rtdbRef(rtdb, `users/${u.uid}/isBlocked`), false).catch(() => {});
+    await rtdbSet(rtdbRef(rtdb, `users/${u.uid}/status`), 'active').catch(() => {});
+    showToast(`Unblocked user ${u.username} (+91 ${u.phone}). Access restored.`, 'success');
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -1015,6 +1178,425 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
                   placeholder="Naye features aur update details likhein..."
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
                 />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 5. 📢 LIVE ADMIN ADS & APP UPDATE POPUP SYSTEM (/admin_settings/app_popup) */}
+        <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 border-2 border-amber-500/40 shadow-2xl space-y-4 md:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center">
+                <Flame className="w-5 h-5 fill-amber-400" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-100 flex items-center gap-2">
+                  <span>Live Ads & App Update Popup System</span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-amber-400">
+                    /admin_settings/app_popup
+                  </span>
+                </h3>
+                <p className="text-[10px] text-slate-400">
+                  Broadcast promotions, bonus offers, or app updates directly to all active players in real time
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${
+                appPopup.enabled
+                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 animate-pulse'
+                  : 'bg-slate-800 border-slate-700 text-slate-400'
+              }`}>
+                {appPopup.enabled ? '● POPUP LIVE ON APP' : '● POPUP OFF'}
+              </span>
+              <button
+                type="button"
+                onClick={() => handleSaveAppPopup({ enabled: !appPopup.enabled })}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                  appPopup.enabled
+                    ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black'
+                }`}
+              >
+                {appPopup.enabled ? 'Turn OFF' : 'Turn ON Live'}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
+            <div className="space-y-3">
+              <div>
+                <label className="text-slate-300 font-semibold block mb-1">
+                  Announcement / Offer Title *
+                </label>
+                <input
+                  type="text"
+                  value={appPopup.title}
+                  onChange={(e) => setAppPopup({ ...appPopup, title: e.target.value })}
+                  placeholder="e.g. Mega Welcome Bonus 100%!"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-300 font-semibold block mb-1">
+                  Message Description *
+                </label>
+                <textarea
+                  rows={3}
+                  value={appPopup.message}
+                  onChange={(e) => setAppPopup({ ...appPopup, message: e.target.value })}
+                  placeholder="Offer details, update notes, promo code, etc."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-300 font-semibold block mb-1">
+                  Banner / Offer Image URL
+                </label>
+                <input
+                  type="url"
+                  value={appPopup.imageUrl || ''}
+                  onChange={(e) => setAppPopup({ ...appPopup, imageUrl: e.target.value.trim() })}
+                  placeholder="https://... (PNG/JPG image link)"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-sky-400 font-mono focus:outline-none focus:border-sky-400"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="text-slate-300 font-semibold block mb-1">
+                    Button Text
+                  </label>
+                  <input
+                    type="text"
+                    value={appPopup.buttonText}
+                    onChange={(e) => setAppPopup({ ...appPopup, buttonText: e.target.value })}
+                    placeholder="Claim Now / Update App"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-300 font-semibold block mb-1">
+                    Action / Update Link
+                  </label>
+                  <input
+                    type="text"
+                    value={appPopup.actionUrl || ''}
+                    onChange={(e) => setAppPopup({ ...appPopup, actionUrl: e.target.value.trim() })}
+                    placeholder="deposit / https://..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-sky-400 font-mono focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+              </div>
+
+              {/* Quick Template Fill Buttons */}
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAppPopup({
+                      ...appPopup,
+                      title: `New App Update Available (${formState.apkVersionName || 'v2.6.0'})`,
+                      message: formState.apkReleaseNotes || 'A new update is available with enhanced graphics, fast payouts and bug fixes. Download and update now!',
+                      buttonText: 'Update App Now',
+                      actionUrl: formState.apkDownloadUrl || '',
+                    });
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 font-bold text-[10px] transition flex items-center gap-1"
+                >
+                  <span>⚡ Use APK Link (App Update Template)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAppPopup({
+                      ...appPopup,
+                      title: `Special ₹${formState.signupBonusAmount || 100} Bonus Offer!`,
+                      message: 'Deposit now and unlock mega rewards, VIP cashback, and instant withdrawals on all games.',
+                      buttonText: 'Deposit & Play',
+                      actionUrl: 'deposit',
+                    });
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-[10px] transition flex items-center gap-1"
+                >
+                  <span>🎁 Bonus Promo Template</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                disabled={isSavingPopup}
+                onClick={() => handleSaveAppPopup()}
+                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:brightness-105 active:scale-[0.99] text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition"
+              >
+                <Flame className="w-4 h-4 fill-slate-950 text-slate-950" />
+                <span>{isSavingPopup ? 'Broadcasting...' : '📢 Save & Broadcast Live to All Users'}</span>
+              </button>
+            </div>
+
+            {/* Live Visual Preview */}
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col items-center justify-center space-y-3">
+              <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">
+                Live Player Popup Preview
+              </span>
+
+              <div className="w-full max-w-xs rounded-2xl bg-gradient-to-b from-slate-900 to-slate-950 border border-amber-400/60 p-4 shadow-xl text-center space-y-2.5 overflow-hidden">
+                {appPopup.imageUrl && (
+                  <div className="w-full h-24 rounded-xl overflow-hidden bg-slate-900 border border-slate-800">
+                    <img
+                      src={appPopup.imageUrl}
+                      alt="Banner Preview"
+                      className="w-full h-full object-cover"
+                      onError={(e) => ((e.target as HTMLElement).style.display = 'none')}
+                    />
+                  </div>
+                )}
+                <h4 className="font-black text-white text-sm">{appPopup.title || 'Special Notice'}</h4>
+                <p className="text-[11px] text-slate-300 line-clamp-2">{appPopup.message || 'Announcement description here...'}</p>
+                <button
+                  type="button"
+                  className="w-full py-2 rounded-xl bg-amber-400 text-slate-950 font-black text-xs"
+                >
+                  {appPopup.buttonText || 'Claim Now'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 6. 🔐 HIGH-SECURITY ADMIN ACCESS & DEVICE LOCK SYSTEM (/admin_security) */}
+        <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 border-2 border-rose-500/40 shadow-2xl space-y-5 md:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center">
+                <ShieldCheck className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-100 flex items-center gap-2">
+                  <span>High-Security Admin Login & Device Lock</span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-rose-400">
+                    /admin_security
+                  </span>
+                </h3>
+                <p className="text-[10px] text-slate-400">
+                  Strict 3-Tier Security: Mobile Number + Approved Device ID + Admin Password with Instant Auto-Block
+                </p>
+              </div>
+            </div>
+
+            <div className="px-3 py-1 rounded-full bg-rose-500/15 border border-rose-500/40 text-rose-300 text-[10px] font-black uppercase">
+              🛡️ AUTO-BLOCK INTRUDERS ACTIVE
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 text-xs">
+            {/* 1. Allowed Mobile Numbers */}
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-bold text-slate-200">
+                  <Smartphone className="w-4 h-4 text-amber-400" />
+                  <span>1. Allowed Admin Mobile Numbers</span>
+                </div>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  {Object.keys(allowedPhones).length} Registered
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Only users registered with these phone numbers can attempt Admin Login. All other numbers will be instantly blocked!
+              </p>
+
+              <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                {Object.entries(allowedPhones).map(([phoneKey, data]: [string, any]) => (
+                  <div
+                    key={phoneKey}
+                    className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="font-mono font-black text-amber-300">+91 {phoneKey}</div>
+                      <div className="text-[10px] text-slate-400">{data?.name || 'Administrator'}</div>
+                    </div>
+                    {Object.keys(allowedPhones).length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveAllowedPhone(phoneKey)}
+                        className="p-1 text-slate-500 hover:text-rose-400 transition"
+                        title="Remove allowed number"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Add Allowed Phone Form */}
+              <div className="pt-2 border-t border-slate-800/80 flex gap-2">
+                <input
+                  type="text"
+                  maxLength={10}
+                  value={newAdminPhone}
+                  onChange={(e) => setNewAdminPhone(e.target.value.replace(/\D/g, ''))}
+                  placeholder="10-digit Phone"
+                  className="w-32 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-amber-400"
+                />
+                <input
+                  type="text"
+                  value={newAdminPhoneName}
+                  onChange={(e) => setNewAdminPhoneName(e.target.value)}
+                  placeholder="Admin Name / Role"
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddAllowedPhone}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 transition"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+
+            {/* 2. Approved Admin Hardware Devices */}
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-bold text-slate-200">
+                  <Lock className="w-4 h-4 text-emerald-400" />
+                  <span>2. Approved Admin Hardware Devices</span>
+                </div>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  {Object.keys(allowedDevices).length} Devices
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Admin Panel is hardware-locked to approved device IDs. Any unapproved device attempting login is auto-blocked.
+              </p>
+
+              <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                {Object.keys(allowedDevices).length === 0 ? (
+                  <div className="text-center py-4 text-slate-500 italic text-[11px]">
+                    No hardware devices locked yet. Click below to pair your current device.
+                  </div>
+                ) : (
+                  Object.entries(allowedDevices).map(([devId, data]: [string, any]) => (
+                    <div
+                      key={devId}
+                      className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="font-mono text-[11px] font-bold text-emerald-400 truncate" title={devId}>
+                          {devId}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {data?.deviceName || 'Device'} • {data?.browser || 'Browser'}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveAllowedDevice(devId)}
+                        className="p-1 text-slate-500 hover:text-rose-400 transition shrink-0 ml-2"
+                        title="Unlink device"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handlePairCurrentDevice}
+                className="w-full py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 font-bold text-xs flex items-center justify-center gap-1.5 transition"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Pair & Approve My Current Device Now</span>
+              </button>
+            </div>
+
+            {/* 3. Master Admin Password Configuration */}
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+              <div className="flex items-center gap-2 font-bold text-slate-200">
+                <Key className="w-4 h-4 text-amber-400" />
+                <span>3. Master Admin Secret Password</span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                This password is required at Tier 3 of the Admin Gate. Default: <code className="text-amber-400">Anchal@8877@@!</code>
+              </p>
+
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type={showAdminPass ? 'text' : 'password'}
+                    value={masterAdminPassInput}
+                    onChange={(e) => setMasterAdminPassInput(e.target.value)}
+                    placeholder="Master Admin Password"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPass(!showAdminPass)}
+                    className="absolute right-3 top-2.5 text-slate-500 hover:text-slate-300"
+                  >
+                    {showAdminPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveAdminPassword}
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 transition"
+                >
+                  Update
+                </button>
+              </div>
+            </div>
+
+            {/* 4. Blocked Intruders Manager */}
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-bold text-rose-300">
+                  <UserX className="w-4 h-4 text-rose-400" />
+                  <span>4. Blocked Intruders & Accounts</span>
+                </div>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  {allUsers.filter((u) => u.isBlocked || u.status === 'blocked').length} Blocked
+                </span>
+              </div>
+
+              <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+                {allUsers.filter((u) => u.isBlocked || u.status === 'blocked').length === 0 ? (
+                  <div className="text-center py-4 text-slate-500 italic text-[11px]">
+                    No users currently blocked. Intruders will be isolated here automatically.
+                  </div>
+                ) : (
+                  allUsers
+                    .filter((u) => u.isBlocked || u.status === 'blocked')
+                    .map((blockedUser) => (
+                      <div
+                        key={blockedUser.uid}
+                        className="p-2.5 rounded-xl bg-rose-950/30 border border-rose-500/30 flex items-center justify-between"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="font-bold text-xs text-rose-200">
+                            {blockedUser.username} (+91 {blockedUser.phone})
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {blockedUser.blockedReason || 'Security auto-block'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleUnblockUser(blockedUser)}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-400/30 font-bold text-[10px] transition shrink-0 ml-2"
+                        >
+                          Unblock
+                        </button>
+                      </div>
+                    ))
+                )}
               </div>
             </div>
           </div>

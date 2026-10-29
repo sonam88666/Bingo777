@@ -5,26 +5,34 @@ def resolvedVersionCode = (project.hasProperty('versionCode')
     ? project.property('versionCode').toInteger()
     : (System.getenv('VERSION_CODE')
         ? System.getenv('VERSION_CODE').toInteger()
-        : (runNumber > 0 ? (200 + runNumber) : 2)))
+        : (runNumber > 0 ? (300 + runNumber) : 3)))
 
 def resolvedVersionName = (project.hasProperty('versionName')
     ? project.property('versionName').toString()
     : (System.getenv('VERSION_NAME') ?: "2.0.${resolvedVersionCode}"))
 
-def keystorePath = project.hasProperty('KEYSTORE_FILE')
-    ? project.property('KEYSTORE_FILE').toString()
-    : (System.getenv('KEYSTORE_FILE') ?: 'release-key.jks')
+def keystorePath = System.getenv("SIGNING_STORE_FILE")
+    ?: (System.getenv("KEYSTORE_FILE")
+        ?: (project.hasProperty('KEYSTORE_FILE')
+            ? project.property('KEYSTORE_FILE').toString()
+            : (file("release.jks").exists() ? "release.jks" : "release-key.jks")))
 
 def keystoreFile = file(keystorePath)
-def ksPassword = project.hasProperty('KEYSTORE_PASSWORD')
-    ? project.property('KEYSTORE_PASSWORD').toString()
-    : (System.getenv('KEYSTORE_PASSWORD') ?: 'bingo777release')
-def kAlias = project.hasProperty('KEY_ALIAS')
-    ? project.property('KEY_ALIAS').toString()
-    : (System.getenv('KEY_ALIAS') ?: 'bingo777')
-def kPassword = project.hasProperty('KEY_PASSWORD')
-    ? project.property('KEY_PASSWORD').toString()
-    : (System.getenv('KEY_PASSWORD') ?: ksPassword)
+def ksPassword = System.getenv("SIGNING_STORE_PASSWORD")
+    ?: (System.getenv("KEYSTORE_PASSWORD")
+        ?: (project.hasProperty('KEYSTORE_PASSWORD')
+            ? project.property('KEYSTORE_PASSWORD').toString()
+            : "bingo777release"))
+def kAlias = System.getenv("SIGNING_KEY_ALIAS")
+    ?: (System.getenv("KEY_ALIAS")
+        ?: (project.hasProperty('KEY_ALIAS')
+            ? project.property('KEY_ALIAS').toString()
+            : "bingo777"))
+def kPassword = System.getenv("SIGNING_KEY_PASSWORD")
+    ?: (System.getenv("KEY_PASSWORD")
+        ?: (project.hasProperty('KEY_PASSWORD')
+            ? project.property('KEY_PASSWORD').toString()
+            : ksPassword))
 
 android {
     namespace = "com.bingo777.pro.game"
@@ -50,6 +58,8 @@ android {
                 storePassword ksPassword
                 keyAlias kAlias
                 keyPassword kPassword
+                v1SigningEnabled true
+                v2SigningEnabled true
                 enableV1Signing true
                 enableV2Signing true
                 enableV3Signing true

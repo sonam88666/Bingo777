@@ -2601,57 +2601,108 @@ class AuthoritativeStore {
     return { success: true, transaction };
   }
 
-  // --- SAFE & PERMANENT USER DELETION ENGINE (WITH BACKUP & AUDIT PRESERVATION) ---
-  public deleteUser(uid: string, adminId: string, reason: string = 'Admin deletion'): { success: boolean; error?: string } {
+  // --- USER BLOCKING & INTRUDER ISOLATION ENGINE ---
+  public setUserBlocked(uid: string, blocked: boolean, reason: string = 'Security violation', actor: string = 'SecurityEngine'): { success: boolean; user?: UserRecord; error?: string } {
     const user = this.users[uid];
     if (!user) {
-      return { success: false, error: 'User not found or already deleted' };
+      return { success: false, error: 'User not found' };
     }
 
-    const username = user.username;
-    const finalBalance = user.balance;
+    user.isBlocked = blocked;
+    user.status = blocked ? 'blocked' : 'active';
+    user.blockedReason = blocked ? reason : undefined;
+    user.blockedAt = blocked ? Date.now() : undefined;
+    if (blocked) {
+      user.isOnline = false;
+    }
 
-    // Back up user snapshot before destructive removal (Financial transactions in this.transactions are ALWAYS preserved)
-    this.deletedUsersBackup[uid] = { ...user };
+    this.savePermanentUsersRegistry();
+    if (this.onUserSaved) {
+      try { this.onUserSaved(user); } catch (e) { console.warn('onUserSaved block error:', e); }
+    }
 
-    // Add to deleted registry to permanently blacklist unauthorized recreation
+    this.logAudit({
+      actor,
+      category: 'AUTH',
+      action: blocked ? 'USER_BLOCKED' : 'USER_UNBLOCKED',
+      details: `${blocked ? 'Blocked' : 'Unblocked'} user ${user.username} (+91 ${user.phone}). Reason: ${reason}`,
+      targetUser: uid,
+      outcome: blocked ? 'DENIED' : 'SUCCESS'
+    });
+
+    this.saveToStorage();
+    this.notify();
+    return { success: true, user };
+  }
+
+  public hardDeleteUser(uid: string, adminId: string, reason: string = 'Permanent user hard-delete by Master Admin'): { success: boolean; error?: string } {
+    if (!uid) {
+      return { success: false, error: 'UID is required' };
+    }
+    const user = this.users[uid];
+    const username = user?.username || uid;
+    const finalBalance = user?.balance || 0;
+
+    // 1. Blacklist UID permanently so it can never be resurrected or re-ingested
     this.deletedUserUids.add(uid);
     try {
       safeStorage.setItem('bingo777_deleted_uids', JSON.stringify(Array.from(this.deletedUserUids)));
-    } catch (e) {
-      console.warn('Failed saving deleted UIDs:', e);
-    }
+    } catch {}
 
-    // Remove user record from active map (audit logs, deposits, withdrawals, and transactions remain intact)
+    // 2. Remove user from active map and backup map
     delete this.users[uid];
+    delete this.deletedUsersBackup[uid];
 
-    // Clean up active sessions
+    // 3. Purge all financial ledger transactions for this user
+    this.transactions = this.transactions.filter((t) => t.uid !== uid);
+
+    // 4. Purge all deposits and withdrawals
+    this.deposits = this.deposits.filter((d) => d.uid !== uid);
+    this.withdrawals = this.withdrawals.filter((w) => w.uid !== uid);
+
+    // 5. Purge all live bets
+    this.liveBets = this.liveBets.filter((b) => b.uid !== uid);
+
+    // 6. Purge all referrals where user is referrer or referee
+    this.referrals = this.referrals.filter((r) => r.referredUid !== uid && r.referrerUid !== uid);
+
+    // 7. Purge notifications and support messages
+    this.userNotifications = this.userNotifications.filter((n) => n.uid !== uid);
+    this.supportMessages = this.supportMessages.filter((m) => m.uid !== uid);
+
+    // 8. Clean up active sessions
     delete this.activeMinesSessions[uid];
-
-    // If deleted user had active session in current tab, clear it
     const activeStored = safeStorage.getItem('bingo777_active_uid');
     if (activeStored === uid) {
       safeStorage.removeItem('bingo777_active_uid');
     }
 
+    // 9. Audit Log
     this.logAudit({
       actor: adminId,
       category: 'AUTH',
-      action: 'USER_DELETED',
-      details: `User ${username} (${uid}) safely removed by Admin ${adminId} after backup snapshot. Closing balance: ₹${finalBalance.toFixed(2)}. Financial ledger preserved. Reason: ${reason}`,
+      action: 'USER_HARD_DELETED_PERMANENT',
+      details: `User ${username} (${uid}) was permanently wiped out from the database. Closing balance: ₹${finalBalance.toFixed(2)}. Ledger, bets, referrals, and sessions completely purged. Reason: ${reason}`,
       targetUser: uid,
       affectedRecordId: uid,
       reason,
-      outcome: 'BACKUP_CREATED'
+      outcome: 'SUCCESS'
     });
 
-    // Broadcast user deletion so all open tabs log them out instantly
+    // 10. Broadcast user deletion so all open tabs log them out instantly
     if (this.broadcastChannel) {
-      this.broadcastChannel.postMessage({ type: 'user_deleted', uid });
+      try {
+        this.broadcastChannel.postMessage({ type: 'user_deleted', uid });
+      } catch {}
     }
 
+    this.saveToStorage();
     this.notify();
     return { success: true };
+  }
+
+  public deleteUser(uid: string, adminId: string, reason: string = 'Admin deletion'): { success: boolean; error?: string } {
+    return this.hardDeleteUser(uid, adminId, reason);
   }
 
   public restoreDeletedUser(uid: string, adminId: string): { success: boolean; error?: string } {
@@ -5148,11 +5199,16 @@ class AuthoritativeStore {
       }
     }
 
+    // Automatically credit Signup Bonus from admin settings (/admin_settings/signup_bonus) or default ₹100
+    const rawBonus = (this.adminSettings as any).signup_bonus ?? (this.adminSettings as any).signupBonus ?? this.adminSettings.signupBonusAmount;
+    const signupBonus = typeof rawBonus === 'number' && rawBonus >= 0 ? rawBonus : 100;
+    const initialBalance = signupBonus;
+
     const newUser: UserRecord = {
       uid,
       phone: cleanPhone,
       username,
-      balance: 0,
+      balance: initialBalance,
       vipLevel: 1,
       status: 'active',
       createdAt: Date.now(),
@@ -5165,8 +5221,8 @@ class AuthoritativeStore {
       referredBy: referredByUid,
       referredByCode: cleanRefCode,
       referralCount: 0,
-      signupBonusStatus: 'pending', // Pending 1st approved deposit
-      signupBonusAmount: this.adminSettings.signupBonusAmount || 120,
+      signupBonusStatus: 'credited',
+      signupBonusAmount: signupBonus,
       firstDepositBonusStatus: 'pending', // Pending 1st approved deposit
       firstDepositBonusAmount: 0,
       dailyBettingActivity: {},
@@ -5175,6 +5231,27 @@ class AuthoritativeStore {
     };
     this.users[uid] = newUser;
     this.savePermanentUsersRegistry();
+
+    // Automatically log Welcome Signup Bonus in transaction history
+    if (signupBonus > 0) {
+      const signupTx: WalletTransaction = {
+        id: `tx_signup_${uid}`,
+        uid,
+        type: 'signup_bonus',
+        category: 'credit',
+        amount: signupBonus,
+        balanceBefore: 0,
+        balanceAfter: signupBonus,
+        description: 'Welcome Signup Bonus',
+        referenceId: `SIGNUP_${uid}`,
+        timestamp: Date.now(),
+        status: 'completed'
+      };
+      this.transactions.unshift(signupTx);
+      if (this.onTransactionSaved) {
+        try { this.onTransactionSaved(signupTx); } catch (e) { console.warn('onTransactionSaved signup error:', e); }
+      }
+    }
 
     // If referred by a valid user, create referral record in /referrals and increment referrer's referralCount + totalReferrals
     let createdRefRecord: ReferralRecord | undefined;
@@ -7587,7 +7664,8 @@ class AuthoritativeStore {
       active: 'USER_ACTIVATED',
       suspended: 'USER_SUSPENDED',
       banned: 'USER_BANNED',
-      deactivated: 'USER_DEACTIVATED'
+      deactivated: 'USER_DEACTIVATED',
+      blocked: 'USER_BLOCKED'
     };
 
     this.savePermanentUsersRegistry();

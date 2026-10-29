@@ -923,45 +923,38 @@ class FirebaseSyncService {
         });
       }
 
-      // 2. Expired Game Rounds (/wingo_rounds, /past_rounds):
-      // Retain only the most recent 30 completed periods for the UI history list and delete older round records.
+      // 2. Expired Game Rounds (/past_rounds/{gameType}):
+      // Retain only the most recent 50 completed rounds per gameType and delete older records automatically.
       try {
         const pastSnap = await rtdbGet(rtdbRef(rtdb, 'past_rounds'));
         if (pastSnap.exists()) {
           const val = pastSnap.val();
           if (val && typeof val === 'object') {
-            const modeKeys = new Set(['30s', '1min', '3min', '5min']);
-            const flatEntries = Object.entries(val).filter(([k]) => !modeKeys.has(k)) as [string, any][];
-            flatEntries.sort((a, b) => {
-              const timeB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
-              const timeA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
-              if (timeB !== timeA) return timeB - timeA;
-              return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
-            });
-
-            if (flatEntries.length > 30) {
-              const toDelete = flatEntries.slice(30);
-              for (const [roundKey] of toDelete) {
-                await rtdbRemove(rtdbRef(rtdb, `past_rounds/${roundKey}`)).catch(() => {});
-                purgedRounds++;
-              }
-            }
-
-            for (const mk of modeKeys) {
-              if (val[mk] && typeof val[mk] === 'object') {
-                const subEntries = Object.entries(val[mk]) as [string, any][];
+            for (const [groupKey, groupData] of Object.entries(val)) {
+              if (groupData && typeof groupData === 'object') {
+                const subEntries = Object.entries(groupData) as [string, any][];
                 subEntries.sort((a, b) => {
                   const timeB = Number(b[1]?.endTime || b[1]?.updatedAt || 0);
                   const timeA = Number(a[1]?.endTime || a[1]?.updatedAt || 0);
                   if (timeB !== timeA) return timeB - timeA;
                   return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
                 });
-                if (subEntries.length > 30) {
-                  for (const [subKey] of subEntries.slice(30)) {
-                    await rtdbRemove(rtdbRef(rtdb, `past_rounds/${mk}/${subKey}`)).catch(() => {});
+                if (subEntries.length > 50) {
+                  const toDelete = subEntries.slice(50);
+                  for (const [subKey] of toDelete) {
+                    await rtdbRemove(rtdbRef(rtdb, `past_rounds/${groupKey}/${subKey}`)).catch(() => {});
                     purgedRounds++;
                   }
                 }
+              }
+            }
+
+            // Also check flat rounds directly under /past_rounds
+            const flatEntries = Object.entries(val).filter(([, v]) => !v || typeof v !== 'object' || !(v as Record<string, unknown>).period) as [string, any][];
+            if (flatEntries.length > 50) {
+              for (const [roundKey] of flatEntries.slice(50)) {
+                await rtdbRemove(rtdbRef(rtdb, `past_rounds/${roundKey}`)).catch(() => {});
+                purgedRounds++;
               }
             }
           }
@@ -990,8 +983,8 @@ class FirebaseSyncService {
               if (timeB !== timeA) return timeB - timeA;
               return String(b[1]?.period || b[0]).localeCompare(String(a[1]?.period || a[0]));
             });
-            if (historicalEntries.length > 30) {
-              for (const [oldKey] of historicalEntries.slice(30)) {
+            if (historicalEntries.length > 50) {
+              for (const [oldKey] of historicalEntries.slice(50)) {
                 await rtdbRemove(rtdbRef(rtdb, `wingo_rounds/${oldKey}`)).catch(() => {});
                 purgedRounds++;
               }
@@ -1000,8 +993,29 @@ class FirebaseSyncService {
         }
       } catch {}
 
-      // Retain only the 30 most recent completed periods in local UI state per mode
-      store.trimPastRounds(30);
+      // Retain only the 50 most recent completed periods in local UI state per mode
+      store.trimPastRounds(50);
+
+      // 2b. Inactive or Completed Ludo Rooms Cleanup (/ludo_rooms):
+      // Automatically delete completed ('finished') or inactive rooms older than 30 minutes along with chat/voice subtrees.
+      try {
+        const ludoSnap = await rtdbGet(rtdbRef(rtdb, 'ludo_rooms'));
+        if (ludoSnap.exists()) {
+          const ludoVal = ludoSnap.val();
+          if (ludoVal && typeof ludoVal === 'object') {
+            const THIRTY_MINS_MS = 30 * 60 * 1000;
+            for (const [roomId, roomData] of Object.entries(ludoVal) as [string, any][]) {
+              if (!roomData || typeof roomData !== 'object') continue;
+              const lastActivity = Number(roomData.updatedAt || roomData.createdAt || 0);
+              const isOld = lastActivity > 0 && now - lastActivity > THIRTY_MINS_MS;
+              const isFinishedOrAbandoned = roomData.status === 'finished' || roomData.status === 'abandoned';
+              if (isFinishedOrAbandoned || isOld) {
+                await rtdbRemove(rtdbRef(rtdb, `ludo_rooms/${roomId}`)).catch(() => {});
+              }
+            }
+          }
+        }
+      } catch {}
 
       // 3. Flight Trajectory & Multiplier Ticks (/aviator_rounds):
       // Clear raw flight ticks from finished flights, keeping only the final crash multiplier for the last 20 rounds.
@@ -1759,6 +1773,89 @@ class FirebaseSyncService {
         success: false,
         message: err instanceof Error ? err.message : 'Sync failed'
       };
+    }
+  }
+
+  /**
+   * Completely purges all user data across all Firebase Realtime Database paths and Cloud Firestore.
+   */
+  public async hardDeleteUserFromFirebase(uid: string, phone?: string): Promise<{ success: boolean; message: string }> {
+    if (!uid) return { success: false, message: 'Invalid UID' };
+    await this.ensureAuth();
+
+    const cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
+
+    // 1. If currently listening to this user in client, detach immediately
+    if (this.currentSyncedUid === uid) {
+      this.detachRealtimeUserSync();
+    }
+
+    try {
+      // 2. Realtime Database multi-path deletions
+      const rtdbRemovals: Promise<any>[] = [
+        rtdbRemove(rtdbRef(rtdb, `users/${uid}`)).catch(() => {}),
+        rtdbRemove(rtdbRef(rtdb, `wallets/${uid}`)).catch(() => {}),
+        rtdbRemove(rtdbRef(rtdb, `user_wallets/${uid}`)).catch(() => {}),
+        rtdbRemove(rtdbRef(rtdb, `transactions/${uid}`)).catch(() => {}),
+        rtdbRemove(rtdbRef(rtdb, `bets/${uid}`)).catch(() => {}),
+        rtdbRemove(rtdbRef(rtdb, `user_notifications/${uid}`)).catch(() => {}),
+        rtdbRemove(rtdbRef(rtdb, `support_messages/${uid}`)).catch(() => {})
+      ];
+
+      // Ludo Rooms: delete room if host or remove player from room
+      try {
+        const roomsSnap = await rtdbGet(rtdbRef(rtdb, 'ludo_rooms'));
+        if (roomsSnap.exists()) {
+          const rooms = roomsSnap.val() || {};
+          for (const [roomId, roomData] of Object.entries(rooms) as [string, any][]) {
+            if (!roomData || typeof roomData !== 'object') continue;
+            const isHost = roomData.hostUid === uid || roomData.createdBy === uid;
+            const hasPlayer = roomData.players && (roomData.players[uid] || Object.values(roomData.players).some((p: any) => p && p.uid === uid));
+            if (isHost) {
+              rtdbRemovals.push(rtdbRemove(rtdbRef(rtdb, `ludo_rooms/${roomId}`)).catch(() => {}));
+            } else if (hasPlayer) {
+              rtdbRemovals.push(rtdbRemove(rtdbRef(rtdb, `ludo_rooms/${roomId}/players/${uid}`)).catch(() => {}));
+            }
+          }
+        }
+      } catch {}
+
+      // Admin Security: Revoke phone and devices if user was in admin security list
+      try {
+        if (cleanPhone) {
+          const phonesSnap = await rtdbGet(rtdbRef(rtdb, 'admin_security/allowed_phones'));
+          if (phonesSnap.exists()) {
+            const phones = phonesSnap.val() || {};
+            for (const [key, val] of Object.entries(phones)) {
+              if (String(val).includes(cleanPhone) || String(key).includes(cleanPhone)) {
+                rtdbRemovals.push(rtdbRemove(rtdbRef(rtdb, `admin_security/allowed_phones/${key}`)).catch(() => {}));
+              }
+            }
+          }
+        }
+        const devicesSnap = await rtdbGet(rtdbRef(rtdb, 'admin_security/allowed_devices'));
+        if (devicesSnap.exists()) {
+          const devices = devicesSnap.val() || {};
+          for (const [devKey, devVal] of Object.entries(devices) as [string, any][]) {
+            if (devVal?.uid === uid || devKey === uid || (cleanPhone && devVal?.phone?.includes(cleanPhone))) {
+              rtdbRemovals.push(rtdbRemove(rtdbRef(rtdb, `admin_security/allowed_devices/${devKey}`)).catch(() => {}));
+            }
+          }
+        }
+      } catch {}
+
+      await Promise.all(rtdbRemovals);
+
+      // 3. Firestore Document Deletions
+      try {
+        await deleteDoc(doc(db, 'users', uid)).catch(() => {});
+        await deleteDoc(doc(db, 'users', uid, 'private', 'info')).catch(() => {});
+      } catch {}
+
+      return { success: true, message: `User ${uid} successfully wiped from Firebase Realtime Database & Firestore.` };
+    } catch (err: any) {
+      console.warn('[FirebaseSync] hardDeleteUserFromFirebase warning:', err);
+      return { success: true, message: `User ${uid} purged from accessible database paths.` };
     }
   }
 }

@@ -306,7 +306,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
       }
       firebaseSync.attachRealtimeUserSync(newUser.uid, cleanPhone);
 
-      showToast(`Account created & saved permanently! Welcome to Bingo777.`, 'success');
+      showToast(`Account created! Welcome ₹${newUser.balance} Signup Bonus credited to your wallet.`, 'success');
       onSuccess(newUser);
       onClose();
     } finally {

@@ -9,7 +9,10 @@ export interface UserRecord {
   username: string;
   balance: number;
   vipLevel: number;
-  status: 'active' | 'suspended' | 'banned' | 'deactivated';
+  status: 'active' | 'suspended' | 'banned' | 'deactivated' | 'blocked';
+  isBlocked?: boolean;
+  blockedReason?: string;
+  blockedAt?: number;
   createdAt: number;
   lastActive: number;
   isOnline: boolean;
@@ -562,7 +565,20 @@ export interface AdminSettings {
   apkFileSize?: string;
   apkReleaseNotes?: string;
   apkForceUpdatePrompt?: boolean;
+  // Live Admin Ads & App Update Popup System (/admin_settings/app_popup)
+  app_popup?: AppPopupConfig;
   updatedAt?: number;
+}
+
+export interface AppPopupConfig {
+  enabled: boolean;
+  title: string;
+  message: string;
+  imageUrl?: string;
+  buttonText: string;
+  actionUrl?: string;
+  updatedAt?: number;
+  updatedBy?: string;
 }
 
 export interface UpiChannel {

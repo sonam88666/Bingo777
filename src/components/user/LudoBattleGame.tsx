@@ -2686,11 +2686,17 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       nextRoom.updatedAt = now;
 
       // Sync centralized tokens map (/ludo_rooms/{roomId}/tokens)
-      const redPawns = [...(nextRoom.player1?.pawns || [0, 0, 0, 0])];
-      const greenPawns = [
-        ...(nextRoom.player2?.color === 'green'
-          ? nextRoom.player2.pawns
-          : nextRoom.player2?.pawns || [0, 0, 0, 0])
+      const redPawns: [number, number, number, number] = [
+        nextRoom.player1?.pawns?.[0] ?? 0,
+        nextRoom.player1?.pawns?.[1] ?? 0,
+        nextRoom.player1?.pawns?.[2] ?? 0,
+        nextRoom.player1?.pawns?.[3] ?? 0
+      ];
+      const greenPawns: [number, number, number, number] = [
+        nextRoom.player2?.pawns?.[0] ?? 0,
+        nextRoom.player2?.pawns?.[1] ?? 0,
+        nextRoom.player2?.pawns?.[2] ?? 0,
+        nextRoom.player2?.pawns?.[3] ?? 0
       ];
       nextRoom.tokens = {
         red: redPawns,

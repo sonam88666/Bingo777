@@ -25,4 +25,3 @@ yarn-error.log*
 # Android build outputs & local caches
 android/.gradle/
 android/app/build/
-android/app/release-key.jks
