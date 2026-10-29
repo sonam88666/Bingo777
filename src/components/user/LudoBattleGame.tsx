@@ -1095,6 +1095,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
   const [showChatDrawer, setShowChatDrawer] = useState<boolean>(false);
   const [matchChatInput, setMatchChatInput] = useState<string>('');
   const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
+  const [chatMessages, setChatMessages] = useState<LudoChatMessage[]>([]);
   const [floatingBubbles, setFloatingBubbles] = useState<Record<string, { text: string; ts: number }>>({});
 
   // Synchronous Refs for deduplicating payouts, refunds, roll events, chat notifications, and animation locks
@@ -1447,11 +1448,12 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
       : [];
 
     const rawChat = raw?.chatMessages;
-    const safeChat: LudoChatMessage[] = Array.isArray(rawChat)
-      ? rawChat.filter(Boolean)
-      : rawChat && typeof rawChat === 'object'
-      ? (Object.values(rawChat).filter(Boolean) as LudoChatMessage[])
-      : [];
+    const safeChat: LudoChatMessage[] =
+      Array.isArray(rawChat) && rawChat.length > 0
+        ? rawChat.filter(Boolean)
+        : rawChat && typeof rawChat === 'object' && Object.keys(rawChat).length > 0
+        ? (Object.values(rawChat).filter(Boolean) as LudoChatMessage[])
+        : roomRef.current?.chatMessages || [];
 
     const defaultSeatOrder: LudoPlayerKey[] =
       maxP === 2
@@ -2831,7 +2833,7 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     let unsubChat: (() => void) | null = null;
     try {
       const chatNodeRef = rtdbRef(rtdb, `ludo_rooms/${room.roomId}/chat`);
-      const chatQuery = rtdbQuery(chatNodeRef, rtdbLimitToLast(30));
+      const chatQuery = rtdbQuery(chatNodeRef, rtdbLimitToLast(50));
       unsubChat = rtdbOnChildAdded(
         chatQuery,
         (snap) => {
@@ -2896,16 +2898,23 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
             timestamp: ts
           };
 
+          // 1. Unified persistent Chat List State (displayed inside chat modal)
+          setChatMessages((prev) => {
+            if (prev.some((m) => m.id === chatKey)) return prev;
+            return [...prev, newMsg];
+          });
+
+          // 2. Also keep room.chatMessages synced
           setRoom((prev) => {
             if (!prev || prev.roomId !== room.roomId) return prev;
             if ((prev.chatMessages || []).some((m) => m.id === chatKey)) return prev;
             return {
               ...prev,
-              chatMessages: [...(prev.chatMessages || []).slice(-39), newMsg]
+              chatMessages: [...(prev.chatMessages || []).slice(-49), newMsg]
             };
           });
 
-          // Auto-scroll chat window to bottom
+          // 3. Auto-scroll chat window to bottom
           setTimeout(() => {
             chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
           }, 50);
@@ -3504,13 +3513,19 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     startOrContinueTokenWalk
   ]);
 
-  // Scroll chat to bottom when drawer is opened
+  // Reset chat messages when entering a new room
+  useEffect(() => {
+    setChatMessages([]);
+    seenChatIdsRef.current.clear();
+  }, [room?.roomId]);
+
+  // Scroll chat to bottom when drawer is opened or new message arrives
   useEffect(() => {
     if (showChatDrawer) {
       setUnreadChatCount(0);
       chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [showChatDrawer, room?.chatMessages?.length]);
+  }, [showChatDrawer, chatMessages.length, room?.chatMessages?.length]);
 
   const handleToggleChatEnabled = () => {
     const next = !chatEnabled;
@@ -6432,32 +6447,38 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
                 </div>
 
                 <div className="max-h-44 overflow-y-auto px-4 py-2 space-y-2">
-                  {(room.chatMessages || []).map((msg) => {
-                    if (msg.messageType === 'system') {
+                  {(chatMessages.length > 0 ? chatMessages : room.chatMessages || []).length === 0 ? (
+                    <div className="text-center py-6 text-xs text-slate-500 italic">
+                      No messages yet. Say hi or send a reaction! 👋
+                    </div>
+                  ) : (
+                    (chatMessages.length > 0 ? chatMessages : room.chatMessages || []).map((msg) => {
+                      if (msg.messageType === 'system') {
+                        return (
+                          <div key={msg.id} className="text-center text-[10px] text-amber-300/80 py-0.5">
+                            {msg.text}
+                          </div>
+                        );
+                      }
+                      const isMe = msg.senderUid === user?.uid;
                       return (
-                        <div key={msg.id} className="text-center text-[10px] text-amber-300/80 py-0.5">
-                          {msg.text}
+                        <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                          <span className="text-[10px] text-slate-400">
+                            {msg.senderName} {msg.senderLocation ? `(${msg.senderLocation})` : ''}
+                          </span>
+                          <div
+                            className={`px-3 py-1.5 rounded-2xl text-xs max-w-[85%] ${
+                              isMe
+                                ? 'bg-amber-400 text-slate-950 font-bold rounded-br-none shadow'
+                                : 'bg-slate-800 text-white border border-slate-700 rounded-bl-none shadow'
+                            }`}
+                          >
+                            {msg.text}
+                          </div>
                         </div>
                       );
-                    }
-                    const isMe = msg.senderUid === user?.uid;
-                    return (
-                      <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                        <span className="text-[10px] text-slate-400">
-                          {msg.senderName} ({msg.senderLocation})
-                        </span>
-                        <div
-                          className={`px-3 py-1.5 rounded-2xl text-xs max-w-[85%] ${
-                            isMe
-                              ? 'bg-amber-400 text-slate-950 font-bold rounded-br-none'
-                              : 'bg-slate-800 text-white border border-slate-700 rounded-bl-none'
-                          }`}
-                        >
-                          {msg.text}
-                        </div>
-                      </div>
-                    );
-                  })}
+                    })
+                  )}
                   <div ref={chatEndRef} />
                 </div>
 
