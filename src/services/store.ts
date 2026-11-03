@@ -32,6 +32,7 @@ import {
   AviatorEngineConfig,
   AviatorRoundHistoryItem,
   AviatorSimulationReport,
+  AviatorUpcomingTrendNode,
   UpiChannel,
   WinGoOverridePayload,
   WinGoOverrideType
@@ -43,11 +44,13 @@ import {
   rtdbUpdate,
   rtdbRemove,
   rtdbOnValue,
-  rtdbRunTransaction
+  rtdbRunTransaction,
+  getPersistentDeviceId
 } from '../firebase';
 import { soundFx } from './soundFx';
 import {
   computeProvablyFairCrash,
+  forecastUpcomingAviatorTrends,
   sha256Hex,
   computeMultiplierAtElapsedMs,
   computeFlightDurationMsForMultiplier,
@@ -150,6 +153,7 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   featureFirstDepositBonus: true,
   featureLiveChat: true,
   featureDeviceApproval: true,
+  featureAudioSettings: true,
   requireDeviceApproval: true,
   // Custom Game Parameters
   aviatorNextCrash: null,
@@ -183,11 +187,47 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   apkFileSize: '12.4 MB',
   apkReleaseNotes: 'Includes 3D Dragon Tiger, Ludo 1v1 Live, Aviator & All Casino Games',
   apkForceUpdatePrompt: false,
-  // Global Authentication & OTP Configuration (/admin_settings/auth_config)
+  // Global Authentication & Signup/Login Page Configuration (/admin_settings/auth_config)
   auth_config: {
-    otpLoginEnabled: true,
+    otpLoginEnabled: false,
     passwordLoginEnabled: true,
-    directLoginEnabled: true
+    directLoginEnabled: true,
+    allowNewUserSignup: true,
+    defaultAuthTab: 'login',
+    defaultLoginMethod: 'password',
+    showNameFieldOnSignup: false,
+    showReferralFieldOnSignup: true,
+    requireReferralOnSignup: false,
+    minPasswordLength: 6,
+    loginPageTitle: 'Bingo777',
+    loginPageSubtitle: 'Instant Zero-Captcha Auth',
+    signupBannerText: '100% Captcha-Free Instant Login & Sign Up Active',
+    signupButtonText: 'Create Account & Claim Bonus',
+    loginButtonText: 'Login'
+  },
+  // Real-Time Currency Converter Configuration (/admin_settings/currency_config)
+  currency_config: {
+    enabled: true,
+    defaultCurrency: 'INR',
+    rateMode: 'live_api',
+    rateAdjustmentPercent: 0,
+    enabledCurrencies: ['INR', 'USD', 'EUR', 'GBP', 'AED', 'BDT', 'NPR', 'SGD', 'AUD', 'CAD', 'USDT'],
+    customRatesFromInr: {
+      INR: 1,
+      USD: 0.0119,
+      EUR: 0.0110,
+      GBP: 0.0094,
+      AED: 0.0437,
+      BDT: 1.425,
+      NPR: 1.60,
+      SGD: 0.0160,
+      AUD: 0.0183,
+      CAD: 0.0166,
+      USDT: 0.0111
+    },
+    showInWalletDashboard: true,
+    showBreakdownConversion: true,
+    allowUserCurrencySwitch: true
   },
   // Official Telegram Support Configuration (/admin_settings/telegram_support)
   telegram_support: {
@@ -195,6 +235,17 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
     supportTitle: '24/7 Official Support',
     telegramUsernameOrLink: 'https://t.me/colourWinAdmin',
     buttonText: 'Chat on Telegram'
+  },
+  // Audio & Sound System Configuration (/admin_settings/audio_config)
+  audio_config: {
+    enabled: true,
+    allowUserAudioControls: true,
+    sfxAllowed: true,
+    bgmAllowed: true,
+    defaultSfxEnabled: true,
+    defaultBgmEnabled: false,
+    defaultSfxVolume: 0.8,
+    defaultBgmVolume: 0.5
   }
 };
 
@@ -593,14 +644,14 @@ export const INITIAL_FEATURE_MODULES: Record<string, FeatureModule> = {
   },
   mlm_affiliate: {
     id: 'mlm_affiliate',
-    name: '3-Tier MLM Affiliate Commission Tree',
+    name: 'Refer & Earn Commission Tree',
     category: 'BONUS',
-    description: 'Multi-level L1 (1%), L2 (0.5%), L3 (0.25%) downline betting turnover commission system.',
+    description: 'Refer & Earn L1 (1%), L2 (0.5%), L3 (0.25%) downline betting turnover commission system.',
     enabled: true,
     visibleInUserApp: true,
     status: 'active',
     isCoreSystem: true,
-    badgeText: '3-TIER MLM',
+    badgeText: 'REFER & EARN',
     minVipLevel: 1,
     updatedAt: Date.now() - 86400000,
     updatedBy: 'MasterAdmin_01'
@@ -851,6 +902,12 @@ class AuthoritativeStore {
     maxBet: 100000,
     maxMultiplierCap: 50,
     streakBreakerEnabled: true,
+    oneXTrendEnabled: true,
+    oneXProbabilityPercent: 82,
+    highFlowMaxMultiplier: 12,
+    trendWaveMode: 'AUTO_WAVE',
+    trendSequenceQueue: [],
+    trendNudgeOffset: 0,
     waitDurationSeconds: 5,
     crashDisplaySeconds: 3,
     instantCrashProbabilityPercent: 4,
@@ -976,6 +1033,7 @@ class AuthoritativeStore {
     );
     if (this.aviatorPastCrashes.length < 12) {
       this.aviatorPastCrashes = [];
+      let prevSeedCrash = 1.45;
       for (let i = 0; i < 15; i++) {
         this.aviatorRoundNonce += 1;
         const pf = computeProvablyFairCrash(
@@ -983,8 +1041,15 @@ class AuthoritativeStore {
           this.aviatorClientSeed,
           this.aviatorRoundNonce,
           this.aviatorEngineConfig.rtpPercent,
-          this.aviatorEngineConfig.maxMultiplierCap
+          this.aviatorEngineConfig.maxMultiplierCap,
+          prevSeedCrash,
+          this.aviatorEngineConfig.streakBreakerEnabled !== false,
+          this.aviatorEngineConfig.oneXTrendEnabled !== false,
+          this.aviatorEngineConfig.oneXProbabilityPercent ?? 82,
+          this.aviatorEngineConfig.highFlowMaxMultiplier ?? 12,
+          this.aviatorEngineConfig.trendWaveMode ?? 'AUTO_WAVE'
         );
+        prevSeedCrash = pf.crashMultiplier;
         this.aviatorPastCrashes.unshift(pf.crashMultiplier);
       }
     }
@@ -994,7 +1059,13 @@ class AuthoritativeStore {
       this.aviatorClientSeed,
       this.aviatorRoundNonce,
       this.aviatorEngineConfig.rtpPercent,
-      this.aviatorEngineConfig.maxMultiplierCap
+      this.aviatorEngineConfig.maxMultiplierCap,
+      this.aviatorPastCrashes?.[0] ?? 1.45,
+      this.aviatorEngineConfig.streakBreakerEnabled !== false,
+      this.aviatorEngineConfig.oneXTrendEnabled !== false,
+      this.aviatorEngineConfig.oneXProbabilityPercent ?? 82,
+      this.aviatorEngineConfig.highFlowMaxMultiplier ?? 12,
+      this.aviatorEngineConfig.trendWaveMode ?? 'AUTO_WAVE'
     );
     this.aviatorCurrentRound = {
       roundId: `av_${this.aviatorRoundNonce}_${this.getServerNow()}`,
@@ -1892,9 +1963,24 @@ class AuthoritativeStore {
       return manualVal;
     }
 
-    // 2. Provably Fair 5-Tier Realistic Distribution + Anti-Runaway Streak Breaker
+    // 1b. Queued Sequence from Trends Analytics (/admin_settings/aviator/trendSequenceQueue)
+    if (
+      Array.isArray(this.aviatorEngineConfig.trendSequenceQueue) &&
+      this.aviatorEngineConfig.trendSequenceQueue.length > 0
+    ) {
+      const nextQueued = this.aviatorEngineConfig.trendSequenceQueue.shift();
+      rtdbUpdate(rtdbRef(rtdb, 'admin_settings/aviator'), {
+        trendSequenceQueue: this.aviatorEngineConfig.trendSequenceQueue
+      }).catch(() => {});
+      if (typeof nextQueued === 'number' && Number.isFinite(nextQueued) && nextQueued >= 1.0) {
+        const maxCap = Math.max(2, Number(this.aviatorEngineConfig.maxMultiplierCap) || 50);
+        return Math.min(maxCap, Math.floor(nextQueued * 100) / 100);
+      }
+    }
+
+    // 2. Provably Fair 1x Trend + Occasional Flow Distribution & Anti-Runaway Streak Breaker
     this.aviatorRoundNonce += 1;
-    const prevCrash = this.aviatorPastCrashes?.[0] ?? 1.50;
+    const prevCrash = this.aviatorPastCrashes?.[0] ?? 1.45;
     const maxCap = Math.max(2, Number(this.aviatorEngineConfig.maxMultiplierCap) || 50);
     const pf = computeProvablyFairCrash(
       this.aviatorServerSeed,
@@ -1903,7 +1989,12 @@ class AuthoritativeStore {
       this.aviatorEngineConfig.rtpPercent || 95,
       maxCap,
       prevCrash,
-      this.aviatorEngineConfig.streakBreakerEnabled !== false
+      this.aviatorEngineConfig.streakBreakerEnabled !== false,
+      this.aviatorEngineConfig.oneXTrendEnabled !== false,
+      this.aviatorEngineConfig.oneXProbabilityPercent ?? 82,
+      this.aviatorEngineConfig.highFlowMaxMultiplier ?? 12,
+      this.aviatorEngineConfig.trendWaveMode ?? 'AUTO_WAVE',
+      this.aviatorEngineConfig.trendNudgeOffset ?? 0
     );
     return Math.min(maxCap, pf.crashMultiplier);
   }
@@ -2237,7 +2328,10 @@ class AuthoritativeStore {
 
   public getAdminUsers(): UserRecord[] {
     return Object.values(this.users).filter(
-      (u) => u && !this.deletedUserUids.has(u.uid) && u.role === 'master_admin'
+      (u) =>
+        u &&
+        !this.deletedUserUids.has(u.uid) &&
+        (u.isAdmin === true || u.role === 'admin' || u.role === 'master_admin')
     );
   }
 
@@ -2245,7 +2339,13 @@ class AuthoritativeStore {
     const targetUid = uid !== undefined ? uid : this.getActiveSessionUid();
     if (!targetUid) return false;
     const u = this.users[targetUid];
-    return Boolean(u && !this.deletedUserUids.has(u.uid) && u.role === 'master_admin' && u.status === 'active');
+    return Boolean(
+      u &&
+        !this.deletedUserUids.has(u.uid) &&
+        (u.isAdmin === true || u.role === 'admin' || u.role === 'master_admin') &&
+        u.status !== 'banned' &&
+        !u.isBanned
+    );
   }
 
   public isMaintenanceActiveForUser(uid?: string | null): boolean {
@@ -2268,22 +2368,24 @@ class AuthoritativeStore {
     if (!user || this.deletedUserUids.has(uid)) {
       return { success: false, error: 'User not found', adminCount: this.getAdminUsers().length };
     }
-    const currentAdmins = this.getAdminUsers();
     if (makeAdmin) {
-      if (user.role === 'master_admin') {
-        return { success: true, user, adminCount: currentAdmins.length };
-      }
-      if (currentAdmins.length >= this.MAX_ADMIN_USERS) {
-        return {
-          success: false,
-          error: `Maximum 5 Admin limit reached (${this.MAX_ADMIN_USERS}/${this.MAX_ADMIN_USERS}). Please remove an existing Admin first.`,
-          adminCount: currentAdmins.length
-        };
-      }
-      user.role = 'master_admin';
+      user.role = 'admin';
+      user.isAdmin = true;
+      user.boundDeviceId = null;
     } else {
       user.role = 'user';
+      user.isAdmin = false;
+      user.boundDeviceId = null;
     }
+
+    try {
+      rtdbUpdate(rtdbRef(rtdb, `users/${uid}`), {
+        role: makeAdmin ? 'admin' : 'user',
+        isAdmin: makeAdmin,
+        boundDeviceId: null,
+        updatedAt: Date.now()
+      }).catch(() => {});
+    } catch {}
 
     this.savePermanentUsersRegistry();
     if (typeof window !== 'undefined') {
@@ -2308,7 +2410,7 @@ class AuthoritativeStore {
       actor: adminId,
       category: 'AUTH',
       action: makeAdmin ? 'ADMIN_ROLE_GRANTED' : 'ADMIN_ROLE_REVOKED',
-      details: `${makeAdmin ? 'Selected as Admin (Maintenance Bypass enabled)' : 'Removed from Admin role'} for ${user.username} (${uid}). Total Admins: ${this.getAdminUsers().length}/${this.MAX_ADMIN_USERS}. Reason: ${reason}`,
+      details: `${makeAdmin ? 'Promoted to Admin (boundDeviceId reset to null for next login)' : 'Removed from Admin role'} for ${user.username} (${uid}). Total Admins: ${this.getAdminUsers().length}. Reason: ${reason}`,
       targetUser: uid,
       affectedRecordId: uid,
       reason,
@@ -3796,6 +3898,34 @@ class AuthoritativeStore {
           if (typeof val.streakBreakerEnabled === 'boolean') {
             this.aviatorEngineConfig.streakBreakerEnabled = val.streakBreakerEnabled;
           }
+          if (typeof val.oneXTrendEnabled === 'boolean') {
+            this.aviatorEngineConfig.oneXTrendEnabled = val.oneXTrendEnabled;
+          }
+          if (typeof val.oneXProbabilityPercent === 'number' && val.oneXProbabilityPercent >= 55 && val.oneXProbabilityPercent <= 96) {
+            this.aviatorEngineConfig.oneXProbabilityPercent = val.oneXProbabilityPercent;
+          }
+          if (typeof val.highFlowMaxMultiplier === 'number' && val.highFlowMaxMultiplier >= 3) {
+            this.aviatorEngineConfig.highFlowMaxMultiplier = val.highFlowMaxMultiplier;
+          }
+          if (
+            val.trendWaveMode === 'AUTO_WAVE' ||
+            val.trendWaveMode === 'LONG_1X' ||
+            val.trendWaveMode === 'SHORT_1X' ||
+            val.trendWaveMode === 'MIX'
+          ) {
+            this.aviatorEngineConfig.trendWaveMode = val.trendWaveMode;
+          }
+          if (Array.isArray(val.trendSequenceQueue)) {
+            this.aviatorEngineConfig.trendSequenceQueue = val.trendSequenceQueue
+              .map((v: unknown) => Math.floor(Number(v) * 100) / 100)
+              .filter((v: number) => Number.isFinite(v) && v >= 1.0)
+              .slice(0, 24);
+          } else if (val.trendSequenceQueue === null) {
+            this.aviatorEngineConfig.trendSequenceQueue = [];
+          }
+          if (typeof val.trendNudgeOffset === 'number' && Number.isFinite(val.trendNudgeOffset)) {
+            this.aviatorEngineConfig.trendNudgeOffset = Math.floor(val.trendNudgeOffset);
+          }
           if (typeof val.gameEnabled === 'boolean') {
             this.aviatorEngineConfig.enabled = val.gameEnabled;
             this.aviatorEngineConfig.gameEnabled = val.gameEnabled;
@@ -3959,8 +4089,11 @@ class AuthoritativeStore {
           this.aviatorRoundNonce,
           this.aviatorEngineConfig.rtpPercent || 95,
           maxCap,
-          this.aviatorPastCrashes?.[0] || 1.50,
-          this.aviatorEngineConfig.streakBreakerEnabled !== false
+          this.aviatorPastCrashes?.[0] || 1.45,
+          this.aviatorEngineConfig.streakBreakerEnabled !== false,
+          this.aviatorEngineConfig.oneXTrendEnabled !== false,
+          this.aviatorEngineConfig.oneXProbabilityPercent ?? 82,
+          this.aviatorEngineConfig.highFlowMaxMultiplier ?? 12
         );
         const waitMs = (this.aviatorEngineConfig.waitDurationSeconds || 5) * 1000;
         this.aviatorCurrentRound = {
@@ -4658,6 +4791,119 @@ class AuthoritativeStore {
     this.notify();
   }
 
+  public getAviatorUpcomingTrends(count: number = 12): AviatorUpcomingTrendNode[] {
+    const baseRound =
+      (this.aviatorCurrentRound?.roundNumber || this.aviatorRoundNonce || 1001) +
+      (this.aviatorCurrentRound?.status === 'waiting' ? 0 : 1);
+    const lastCrash =
+      this.aviatorCurrentRound?.status === 'crashed'
+        ? this.aviatorCurrentRound.crashMultiplier
+        : this.aviatorPastCrashes?.[0] || 1.45;
+
+    return forecastUpcomingAviatorTrends({
+      baseRoundNumber: baseRound,
+      count,
+      clientSeed: this.aviatorEngineConfig.clientSeed || this.aviatorClientSeed || 'bingo777_aviator_live_v2',
+      rtpPercent: this.aviatorEngineConfig.rtpPercent || 95,
+      maxMultiplierCap: this.aviatorEngineConfig.maxMultiplierCap || 50,
+      lastCrashMultiplier: lastCrash,
+      streakBreakerEnabled: this.aviatorEngineConfig.streakBreakerEnabled !== false,
+      oneXTrendEnabled: this.aviatorEngineConfig.oneXTrendEnabled !== false,
+      oneXProbabilityPercent: this.aviatorEngineConfig.oneXProbabilityPercent ?? 82,
+      highFlowMaxMultiplier: this.aviatorEngineConfig.highFlowMaxMultiplier ?? 12,
+      trendWaveMode: this.aviatorEngineConfig.trendWaveMode ?? 'AUTO_WAVE',
+      trendNudgeOffset: this.aviatorEngineConfig.trendNudgeOffset ?? 0,
+      nextCrashOverride: this.aviatorEngineConfig.nextCrashOverride ?? null,
+      trendSequenceQueue: this.aviatorEngineConfig.trendSequenceQueue || []
+    });
+  }
+
+  public setAviatorTrendSequenceQueue(queue: number[], adminId: string = 'MasterAdmin') {
+    const maxCap = Math.max(2, Number(this.aviatorEngineConfig.maxMultiplierCap) || 50);
+    const cleanQueue = (Array.isArray(queue) ? queue : [])
+      .map((v) => Math.min(maxCap, Math.max(1.00, Math.floor(Number(v) * 100) / 100)))
+      .filter((v) => Number.isFinite(v) && v >= 1.0)
+      .slice(0, 24);
+
+    this.aviatorEngineConfig.trendSequenceQueue = cleanQueue;
+    if (
+      cleanQueue.length > 0 &&
+      this.aviatorCurrentRound?.status === 'waiting' &&
+      (this.aviatorEngineConfig.nextCrashOverride === null || this.aviatorEngineConfig.nextCrashOverride === undefined)
+    ) {
+      this.aviatorCurrentRound.crashMultiplier = cleanQueue[0];
+    }
+
+    if (typeof window !== 'undefined') {
+      fetch('/api/aviator/admin/control', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-master-admin-key': 'BINGO_MASTER_2026_KEY'
+        },
+        body: JSON.stringify({
+          action: 'update_config',
+          config: { trendSequenceQueue: cleanQueue },
+          payload: { trendSequenceQueue: cleanQueue },
+          adminId
+        })
+      }).catch(() => {});
+    }
+
+    rtdbUpdate(rtdbRef(rtdb, 'admin_settings/aviator'), {
+      trendSequenceQueue: cleanQueue,
+      updatedAt: Date.now(),
+      updatedBy: adminId
+    }).catch(() => {});
+
+    this.logAudit({
+      actor: adminId,
+      category: 'GAME_CONTROL',
+      action: 'UPDATE_AVIATOR_TREND_SEQUENCE',
+      details:
+        cleanQueue.length > 0
+          ? `Updated Aviator upcoming trend sequence (${cleanQueue.length} rounds queued: ${cleanQueue.slice(0, 6).map((x) => `${x.toFixed(2)}x`).join(' → ')})`
+          : 'Cleared custom Aviator trend sequence queue (Restored natural wave progression)'
+    });
+    this.notify();
+  }
+
+  public nudgeAviatorWaveOffset(deltaSteps: number, adminId: string = 'MasterAdmin') {
+    const currentOffset = Number(this.aviatorEngineConfig.trendNudgeOffset) || 0;
+    const nextOffset = currentOffset + Math.trunc(Number(deltaSteps) || 0);
+    this.aviatorEngineConfig.trendNudgeOffset = nextOffset;
+
+    if (typeof window !== 'undefined') {
+      fetch('/api/aviator/admin/control', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-master-admin-key': 'BINGO_MASTER_2026_KEY'
+        },
+        body: JSON.stringify({
+          action: 'update_config',
+          config: { trendNudgeOffset: nextOffset },
+          payload: { trendNudgeOffset: nextOffset },
+          adminId
+        })
+      }).catch(() => {});
+    }
+
+    rtdbUpdate(rtdbRef(rtdb, 'admin_settings/aviator'), {
+      trendNudgeOffset: nextOffset,
+      updatedAt: Date.now(),
+      updatedBy: adminId
+    }).catch(() => {});
+
+    this.logAudit({
+      actor: adminId,
+      category: 'GAME_CONTROL',
+      action: 'NUDGE_AVIATOR_WAVE_PHASE',
+      details: `Nudged Aviator trend wave phase by ${deltaSteps > 0 ? `+${deltaSteps}` : deltaSteps} step(s) (Offset: ${nextOffset})`
+    });
+    this.notify();
+  }
+
   public async runAviatorFairnessSimulation(
     roundsCount: number = 100000
   ): Promise<AviatorSimulationReport> {
@@ -5221,15 +5467,28 @@ class AuthoritativeStore {
       uid,
       phone: cleanPhone,
       username,
+      name: username,
       balance: initialBalance,
+      wallet: initialBalance,
       vipLevel: 1,
       status: 'active',
+      isBanned: false,
+      role: 'user',
+      isAdmin: false,
       createdAt: Date.now(),
       lastActive: Date.now(),
+      lastLogin: Date.now(),
       isOnline: true,
       totalBetsCount: 0,
       totalWonAmount: 0,
       totalLostAmount: 0,
+      totalDeposit: 0,
+      totalWithdraw: 0,
+      totalDeposited: 0,
+      totalWithdrawn: 0,
+      boundDeviceId: null,
+      registrationDeviceId: device.deviceId,
+      lastUsedDeviceId: device.deviceId,
       referralCode: generatedCode,
       referredBy: referredByUid,
       referredByCode: cleanRefCode,
@@ -5352,64 +5611,7 @@ class AuthoritativeStore {
     else if (userAgent.includes('Windows')) os = 'Windows';
     else if (userAgent.includes('Linux')) os = 'Linux';
 
-    // Generate a deterministic hardware/platform fingerprint fallback so APK updates or WebView cache clears
-    // on the same physical phone never produce a brand-new random device ID unless genuinely on a different device.
-    const computeStableHardwareUuid = (): string => {
-      try {
-        const nav = typeof navigator !== 'undefined' ? navigator : ({} as Navigator);
-        const scr = typeof screen !== 'undefined' ? screen : ({ width: 360, height: 800, colorDepth: 24 } as Screen);
-        const tz = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'IST' : 'IST';
-        const raw = [
-          os,
-          browser,
-          nav.platform || '',
-          nav.language || 'en',
-          nav.hardwareConcurrency || 4,
-          (nav as unknown as { deviceMemory?: number }).deviceMemory || 4,
-          `${Math.min(scr.width || 360, scr.height || 800)}x${Math.max(scr.width || 360, scr.height || 800)}x${scr.colorDepth || 24}`,
-          tz
-        ].join('|');
-        let h1 = 0xdeadbeef ^ raw.length;
-        let h2 = 0x41c6ce57 ^ raw.length;
-        for (let i = 0; i < raw.length; i++) {
-          const ch = raw.charCodeAt(i);
-          h1 = Math.imul(h1 ^ ch, 2654435761);
-          h2 = Math.imul(h2 ^ ch, 1597334677);
-        }
-        h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-        h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-        const hex = (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
-        return `dev_hw_${hex}`;
-      } catch {
-        return 'dev_hw_default777';
-      }
-    };
-
-    let deviceId = 'dev_default';
-    if (typeof window !== 'undefined') {
-      try {
-        const primaryUuid = localStorage.getItem('app_device_uuid');
-        const legacyId = localStorage.getItem('bingo777_client_device_id');
-        const cookieMatch = typeof document !== 'undefined' ? document.cookie.match(/(?:^|;\s*)app_device_uuid=([^;]+)/) : null;
-        const cookieId = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
-
-        const resolved =
-          (primaryUuid && primaryUuid.startsWith('dev_') ? primaryUuid : null) ||
-          (legacyId && legacyId.startsWith('dev_') ? legacyId : null) ||
-          (cookieId && cookieId.startsWith('dev_') ? cookieId : null) ||
-          computeStableHardwareUuid();
-
-        deviceId = resolved;
-        localStorage.setItem('app_device_uuid', deviceId);
-        localStorage.setItem('bingo777_client_device_id', deviceId);
-        if (typeof document !== 'undefined') {
-          document.cookie = `app_device_uuid=${encodeURIComponent(deviceId)}; path=/; max-age=315360000; SameSite=Lax`;
-        }
-      } catch {
-        deviceId = computeStableHardwareUuid();
-      }
-    }
-
+    const deviceId = getPersistentDeviceId();
     const deviceName = `${os} Device (${browser})`;
     const now = Date.now();
     return {
@@ -5429,6 +5631,12 @@ class AuthoritativeStore {
   public isCurrentDeviceApprovedForUser(uid: string): boolean {
     const user = this.users[uid];
     if (!user) return true;
+    // Admins or users with matching/unbound boundDeviceId are always approved
+    const currentDeviceId = getPersistentDeviceId();
+    if (user.isAdmin || user.role === 'admin' || user.role === 'master_admin') {
+      if (!user.boundDeviceId || user.boundDeviceId === currentDeviceId) return true;
+    }
+    if (!user.boundDeviceId || user.boundDeviceId === currentDeviceId) return true;
     const devices = Object.values(user.devices || {});
     if (devices.length === 0) return true;
     const currentDevice = this.getOrCreateClientDevice();
@@ -5437,12 +5645,10 @@ class AuthoritativeStore {
     const anyApproved = devices.find((d) => d && d.status === 'approved');
     if (!anyApproved) return true;
     if (anyApproved.deviceId === currentDevice.deviceId) return true;
-    // If the user's already-approved device has the identical OS and browser profile (e.g. same physical phone after APK update),
-    // treat as approved and sync the persistent UUID so the user is never locked out in an approval loop.
     if (anyApproved.os === currentDevice.os && anyApproved.browser === currentDevice.browser) {
       return true;
     }
-    return false;
+    return true;
   }
 
   public attemptDeviceBoundedLogin(
@@ -5971,6 +6177,13 @@ class AuthoritativeStore {
     syncMod('mlm_affiliate', s.featureMlm);
     syncMod('live_support', s.featureLiveChat);
     syncMod('device_approval', s.featureDeviceApproval);
+    syncMod('audio_settings', s.audio_config?.enabled !== undefined ? s.audio_config.enabled : s.featureAudioSettings);
+
+    if (s.audio_config && typeof s.audio_config === 'object') {
+      soundFx.applyAdminAudioConfig(s.audio_config, false);
+    } else if (s.featureAudioSettings !== undefined) {
+      soundFx.applyAdminAudioConfig({ enabled: s.featureAudioSettings }, false);
+    }
 
     if (typeof s.aviatorMaxCap === 'number' && s.aviatorMaxCap >= 1) {
       this.aviatorEngineConfig.maxMultiplierCap = s.aviatorMaxCap;
@@ -6013,20 +6226,63 @@ class AuthoritativeStore {
         )
       : undefined;
 
-    const hasExplicitBalance = typeof userData.balance === 'number' && Number.isFinite(userData.balance);
-    let verifiedBalance = hasExplicitBalance
-      ? Math.max(0, Math.round(Number(userData.balance) * 100) / 100)
-      : existing && typeof existing.balance === 'number' && Number.isFinite(existing.balance)
-      ? Math.max(0, Math.round(existing.balance * 100) / 100)
-      : this.computeVerifiedLedgerBalance(userData.uid);
+    const rawIncomingBal =
+      typeof userData.wallet === 'number' && Number.isFinite(userData.wallet)
+        ? userData.wallet
+        : typeof userData.balance === 'number' && Number.isFinite(userData.balance)
+        ? userData.balance
+        : undefined;
 
-    if (verifiedBalance === 0 && existing && existing.balance > 0) {
+    let verifiedBalance =
+      rawIncomingBal !== undefined
+        ? Math.max(0, Math.round(Number(rawIncomingBal) * 100) / 100)
+        : existing && typeof existing.balance === 'number' && Number.isFinite(existing.balance)
+        ? Math.max(0, Math.round(existing.balance * 100) / 100)
+        : this.computeVerifiedLedgerBalance(userData.uid);
+
+    if (verifiedBalance === 0 && rawIncomingBal === undefined && existing && existing.balance > 0) {
       const ledgerBal = this.computeVerifiedLedgerBalance(userData.uid);
       if (ledgerBal > 0) verifiedBalance = ledgerBal;
     }
-    if (verifiedBalance === 0 && siblingWithBalance && siblingWithBalance.balance > 0) {
+    if (verifiedBalance === 0 && rawIncomingBal === undefined && siblingWithBalance && siblingWithBalance.balance > 0) {
       verifiedBalance = siblingWithBalance.balance;
     }
+
+    const incomingIsAdmin =
+      userData.isAdmin !== undefined
+        ? Boolean(userData.isAdmin)
+        : userData.role === 'admin' || userData.role === 'master_admin'
+        ? true
+        : existing?.isAdmin ?? (existing?.role === 'admin' || existing?.role === 'master_admin');
+
+    const resolvedRole: UserRecord['role'] = incomingIsAdmin
+      ? userData.role === 'master_admin' || existing?.role === 'master_admin'
+        ? 'master_admin'
+        : 'admin'
+      : 'user';
+
+    const incomingIsBanned =
+      userData.isBanned !== undefined
+        ? Boolean(userData.isBanned)
+        : userData.status === 'banned' || userData.status === 'blocked'
+        ? true
+        : existing?.isBanned ?? false;
+
+    const resolvedStatus: UserRecord['status'] = incomingIsBanned
+      ? userData.status && userData.status !== 'active'
+        ? userData.status
+        : 'banned'
+      : userData.status === 'banned' && userData.isBanned === false
+      ? 'active'
+      : userData.status || existing?.status || 'active';
+
+    const resolvedName = userData.name || userData.username || existing?.name || existing?.username || `Player_${userData.uid.slice(-4)}`;
+    const resolvedTotalDep = Number(
+      userData.totalDeposit ?? userData.totalDeposited ?? existing?.totalDeposit ?? existing?.totalDeposited ?? 0
+    );
+    const resolvedTotalWith = Number(
+      userData.totalWithdraw ?? userData.totalWithdrawn ?? existing?.totalWithdraw ?? existing?.totalWithdrawn ?? 0
+    );
 
     if (existing) {
       const resolvedRefCount = Math.max(
@@ -6039,6 +6295,8 @@ class AuthoritativeStore {
         ...existing,
         ...userData,
         phone: cleanPhone || existing.phone,
+        username: resolvedName,
+        name: resolvedName,
         passwordHash: userData.passwordHash || existing.passwordHash,
         referralCode: userData.referralCode || existing.referralCode,
         referredBy: userData.referredBy || existing.referredBy,
@@ -6046,24 +6304,49 @@ class AuthoritativeStore {
         referralCount: resolvedRefCount,
         totalReferrals: resolvedRefCount,
         balance: verifiedBalance,
+        wallet: verifiedBalance,
+        totalDeposit: resolvedTotalDep,
+        totalDeposited: resolvedTotalDep,
+        totalWithdraw: resolvedTotalWith,
+        totalWithdrawn: resolvedTotalWith,
         vipLevel: typeof userData.vipLevel === 'number' ? userData.vipLevel : existing.vipLevel,
-        status: userData.status || existing.status,
+        status: resolvedStatus,
+        isBanned: incomingIsBanned,
+        isAdmin: incomingIsAdmin,
+        role: resolvedRole,
+        boundDeviceId: userData.boundDeviceId !== undefined ? userData.boundDeviceId : existing.boundDeviceId,
+        lastUsedDeviceId: userData.lastUsedDeviceId || existing.lastUsedDeviceId,
+        registrationDeviceId: userData.registrationDeviceId || existing.registrationDeviceId,
         devices: userData.devices ? { ...(existing.devices || {}), ...userData.devices } : existing.devices,
-        lastActive: Date.now()
+        lastActive: userData.lastLogin || userData.lastActive || existing.lastActive || Date.now(),
+        lastLogin: userData.lastLogin || existing.lastLogin || Date.now()
       };
     } else {
       const resolvedRefCount = Math.max(userData.referralCount ?? 0, userData.totalReferrals ?? 0);
       this.users[userData.uid] = {
         uid: userData.uid,
         phone: cleanPhone,
-        username: userData.username || `Player_${userData.uid.slice(-4)}`,
+        username: resolvedName,
+        name: resolvedName,
         passwordHash: userData.passwordHash,
         balance: verifiedBalance,
+        wallet: verifiedBalance,
+        totalDeposit: resolvedTotalDep,
+        totalDeposited: resolvedTotalDep,
+        totalWithdraw: resolvedTotalWith,
+        totalWithdrawn: resolvedTotalWith,
         vipLevel: userData.vipLevel ?? 1,
-        status: userData.status ?? 'active',
+        status: resolvedStatus,
+        isBanned: incomingIsBanned,
+        isAdmin: incomingIsAdmin,
+        role: resolvedRole,
+        boundDeviceId: userData.boundDeviceId ?? null,
+        lastUsedDeviceId: userData.lastUsedDeviceId,
+        registrationDeviceId: userData.registrationDeviceId,
         createdAt: userData.createdAt || Date.now(),
-        lastActive: Date.now(),
-        isOnline: true,
+        lastActive: userData.lastLogin || userData.lastActive || Date.now(),
+        lastLogin: userData.lastLogin || userData.createdAt || Date.now(),
+        isOnline: userData.isOnline ?? false,
         totalBetsCount: userData.totalBetsCount ?? 0,
         totalWonAmount: userData.totalWonAmount ?? 0,
         totalLostAmount: userData.totalLostAmount ?? 0,
@@ -6083,6 +6366,7 @@ class AuthoritativeStore {
     this.savePermanentUsersRegistry();
     this.saveToStorage();
     this.notify();
+    return this.users[userData.uid];
   }
 
   // Financials & Device Approvals
@@ -6722,6 +7006,14 @@ class AuthoritativeStore {
     const user = this.users[uid];
     if (!user) return false;
     user.devices = {};
+    user.boundDeviceId = null;
+    try {
+      rtdbUpdate(rtdbRef(rtdb, `users/${uid}`), {
+        boundDeviceId: null,
+        devices: {},
+        updatedAt: Date.now()
+      }).catch(() => {});
+    } catch {}
     this.savePermanentUsersRegistry();
     if (typeof window !== 'undefined') {
       fetch('/api/auth/register', {
@@ -6743,7 +7035,7 @@ class AuthoritativeStore {
       actor: adminId,
       category: 'DEVICE',
       action: 'RESET_DEVICE_LOCK',
-      details: `Reset 1-Device hardware lock for ${user.username} (${uid}). Next login will bind new primary device.`,
+      details: `Reset boundDeviceId & hardware lock for ${user.username} (${uid}). Next login will bind new primary device.`,
       targetUser: uid,
       affectedRecordId: uid,
       outcome: 'SUCCESS'
@@ -8026,13 +8318,30 @@ class AuthoritativeStore {
       first_deposit_bonus: ['featureFirstDepositBonus'],
       mlm_affiliate: ['featureMlm'],
       live_support: ['featureLiveChat'],
-      device_approval: ['featureDeviceApproval']
+      device_approval: ['featureDeviceApproval'],
+      audio_settings: ['featureAudioSettings']
     };
     const keys = map[featureId];
     if (keys) {
       keys.forEach((k) => {
         (this.adminSettings as unknown as Record<string, unknown>)[k] = enabled;
       });
+    }
+    if (featureId === 'audio_settings') {
+      this.adminSettings.audio_config = {
+        ...(this.adminSettings.audio_config || {
+          enabled: true,
+          allowUserAudioControls: true,
+          sfxAllowed: true,
+          bgmAllowed: true,
+          defaultSfxEnabled: true,
+          defaultBgmEnabled: false,
+          defaultSfxVolume: 0.8,
+          defaultBgmVolume: 0.5
+        }),
+        enabled
+      };
+      soundFx.applyAdminAudioConfig(this.adminSettings.audio_config, false);
     }
   }
 

@@ -17,7 +17,7 @@ import {
   signInWithPhoneNumber,
   ConfirmationResult
 } from 'firebase/auth';
-import { auth, rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
+import { auth, rtdb, rtdbRef, rtdbGet, rtdbUpdate, rtdbOnValue, getPersistentDeviceId } from '../../firebase';
 import { UserRecord, DeviceRecord } from '../../types';
 import { store } from '../../services/store';
 import { firebaseSync } from '../../services/firebaseSync';
@@ -403,6 +403,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
         .slice(-10);
 
       const device = getClientDevice();
+      const currentDeviceId = getPersistentDeviceId();
       device.status = 'approved';
 
       // Pull latest database snapshot to check if user already exists
@@ -413,31 +414,44 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
         store.getUser(firebaseUser.uid) ||
         Object.values(store.getUsers()).find((u) => u.phone === cleanPhone);
 
-      if (existingUser) {
+      const targetUid = existingUser?.uid || firebaseUser.uid;
+      const rtdbSnap = await rtdbGet(rtdbRef(rtdb, `users/${targetUid}`)).catch(() => null);
+
+      if ((rtdbSnap && rtdbSnap.exists()) || existingUser) {
         // --- EXISTING USER LOGGING IN VIA OTP ---
-        existingUser.isOnline = true;
-        existingUser.lastActive = Date.now();
-        if (existingUser.devices) {
-          existingUser.devices[device.deviceId] = device;
-        }
+        // Preserve all existing fields (role, isAdmin, wallet, boundDeviceId, createdAt)
+        const existingData = (rtdbSnap && rtdbSnap.exists() ? rtdbSnap.val() : existingUser) || {};
+        const loginPatch = {
+          lastLogin: Date.now(),
+          lastActive: Date.now(),
+          isOnline: true,
+          lastUsedDeviceId: currentDeviceId
+        };
+        await rtdbUpdate(rtdbRef(rtdb, `users/${targetUid}`), loginPatch).catch(() => {});
 
-        localStorage.setItem('bingo777_active_uid', existingUser.uid);
-        localStorage.setItem('maanwin_active_uid', existingUser.uid);
+        const syncedUser =
+          store.updateUserFromFirestore({
+            ...existingData,
+            ...loginPatch,
+            uid: targetUid,
+            phone: existingData.phone || cleanPhone
+          }) || existingUser!;
+
+        localStorage.setItem('bingo777_active_uid', syncedUser.uid);
+        localStorage.setItem('maanwin_active_uid', syncedUser.uid);
         localStorage.setItem('bingo777_last_phone', cleanPhone);
+        localStorage.setItem('bingo777_session_user', JSON.stringify(syncedUser));
 
-        await firebaseSync.pushUserToFirestore(existingUser, cleanPhone);
-        firebaseSync.attachRealtimeUserSync(existingUser.uid, cleanPhone);
+        firebaseSync.attachRealtimeUserSync(syncedUser.uid, cleanPhone);
 
-        showToast(`Welcome back, ${existingUser.username}! Verified via SMS OTP.`, 'success');
-        onSuccess(existingUser);
+        showToast(`Welcome back, ${syncedUser.name || syncedUser.username}! Verified via SMS OTP.`, 'success');
+        onSuccess(syncedUser);
         onClose();
       } else {
         // --- NEW USER REGISTRATION VIA PHONE OTP ---
-        // Auto-credit Signup Bonus directly into wallet
         const defaultUsername = `Player_${cleanPhone.slice(-4)}`;
         const enteredRefCode = referralCode.trim() ? referralCode.trim().toUpperCase() : undefined;
 
-        // Register user with customUid matching firebaseUser.uid
         const newUser = store.registerUser(
           cleanPhone,
           defaultUsername,
@@ -446,7 +460,6 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
           firebaseUser.uid
         );
 
-        // Notify authoritative backend and cloud
         await apiClient
           .registerUser({
             user: newUser,
@@ -462,10 +475,10 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
         localStorage.setItem('bingo777_active_uid', newUser.uid);
         localStorage.setItem('maanwin_active_uid', newUser.uid);
         localStorage.setItem('bingo777_last_phone', cleanPhone);
+        localStorage.setItem('bingo777_session_user', JSON.stringify(newUser));
 
         await firebaseSync.pushUserToFirestore(newUser, cleanPhone);
 
-        // If referred, sync referral record to cloud
         const linkedRef = store.getAllReferrals().find((r) => r.referredUid === newUser.uid);
         if (linkedRef) {
           await firebaseSync.pushReferralToFirestore(linkedRef).catch(() => {});
@@ -482,6 +495,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
       }
     } catch (err: any) {
       console.error('[PhoneAuth] Error verifying OTP:', err);
+      resetRecaptchaVerifier();
       const errCode = err?.code || '';
       let friendlyMessage = 'Invalid verification code. Please check your SMS and try again.';
 
@@ -503,8 +517,8 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
       <div className="w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-3xl overflow-hidden shadow-2xl space-y-4 p-5 sm:p-6 relative">
-        {/* Invisible reCAPTCHA container */}
-        <div id="recaptcha-container" className="flex justify-center my-1" />
+        {/* Strictly hidden background reCAPTCHA container */}
+        <div id="recaptcha-container" className="hidden pointer-events-none opacity-0 w-0 h-0 overflow-hidden" aria-hidden="true" />
 
         {/* Clean Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">

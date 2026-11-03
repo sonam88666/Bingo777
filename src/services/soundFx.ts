@@ -12,6 +12,9 @@ export interface AudioSettingsState {
   sfxVolume: number;
   bgmVolume: number;
   pushNotificationsEnabled?: boolean;
+  adminAudioEnabled?: boolean;
+  adminSfxAllowed?: boolean;
+  adminBgmAllowed?: boolean;
 }
 
 class SoundFxService {
@@ -22,6 +25,10 @@ class SoundFxService {
   private sfxVolume: number = 0.8;
   private bgmVolume: number = 0.3;
   private pushNotificationsEnabled: boolean = true;
+
+  private adminAudioEnabled: boolean = true;
+  private adminSfxAllowed: boolean = true;
+  private adminBgmAllowed: boolean = true;
 
   private listeners: Set<() => void> = new Set();
   private bgmIntervalId: NodeJS.Timeout | null = null;
@@ -38,7 +45,7 @@ class SoundFxService {
         if (this.ctx && this.ctx.state === 'suspended') {
           this.ctx.resume().catch(() => {});
         }
-        if (this.bgmEnabled && !this.isMuted && !this.bgmIntervalId) {
+        if (this.bgmEnabled && !this.isMuted && this.adminAudioEnabled && this.adminBgmAllowed && !this.bgmIntervalId) {
           this.startBgmLoop();
         }
       };
@@ -136,24 +143,81 @@ class SoundFxService {
   public getAudioSettings(): AudioSettingsState {
     return {
       isMuted: this.isMuted,
-      sfxEnabled: this.sfxEnabled,
-      bgmEnabled: this.bgmEnabled,
+      sfxEnabled: this.sfxEnabled && this.adminAudioEnabled && this.adminSfxAllowed,
+      bgmEnabled: this.bgmEnabled && this.adminAudioEnabled && this.adminBgmAllowed,
       sfxVolume: this.sfxVolume,
       bgmVolume: this.bgmVolume,
-      pushNotificationsEnabled: this.pushNotificationsEnabled
+      pushNotificationsEnabled: this.pushNotificationsEnabled,
+      adminAudioEnabled: this.adminAudioEnabled,
+      adminSfxAllowed: this.adminSfxAllowed,
+      adminBgmAllowed: this.adminBgmAllowed
     };
   }
 
+  public applyAdminAudioConfig(
+    config: {
+      enabled?: boolean;
+      sfxAllowed?: boolean;
+      bgmAllowed?: boolean;
+      defaultSfxEnabled?: boolean;
+      defaultBgmEnabled?: boolean;
+      defaultSfxVolume?: number;
+      defaultBgmVolume?: number;
+    },
+    forceApplyDefaults: boolean = false
+  ) {
+    if (!config || typeof config !== 'object') return;
+    if (typeof config.enabled === 'boolean') {
+      this.adminAudioEnabled = config.enabled;
+    }
+    if (typeof config.sfxAllowed === 'boolean') {
+      this.adminSfxAllowed = config.sfxAllowed;
+    }
+    if (typeof config.bgmAllowed === 'boolean') {
+      this.adminBgmAllowed = config.bgmAllowed;
+    }
+
+    const hasUserSavedPrefs =
+      typeof window !== 'undefined' &&
+      window.localStorage &&
+      localStorage.getItem('maanwin_sfx_enabled') !== null;
+
+    if (forceApplyDefaults || !hasUserSavedPrefs) {
+      if (typeof config.defaultSfxEnabled === 'boolean') {
+        this.sfxEnabled = config.defaultSfxEnabled;
+      }
+      if (typeof config.defaultBgmEnabled === 'boolean') {
+        this.bgmEnabled = config.defaultBgmEnabled;
+      }
+      if (typeof config.defaultSfxVolume === 'number' && !isNaN(config.defaultSfxVolume)) {
+        this.sfxVolume = Math.min(1, Math.max(0.05, config.defaultSfxVolume));
+      }
+      if (typeof config.defaultBgmVolume === 'number' && !isNaN(config.defaultBgmVolume)) {
+        this.bgmVolume = Math.min(1, Math.max(0.05, config.defaultBgmVolume));
+      }
+      if (forceApplyDefaults) {
+        this.saveToStorage();
+      }
+    }
+
+    if (!this.adminAudioEnabled || !this.adminBgmAllowed || !this.bgmEnabled || this.isMuted) {
+      this.stopBgmLoop();
+    } else if (this.bgmEnabled && !this.isMuted && !this.bgmIntervalId) {
+      this.startBgmLoop();
+    }
+    this.notify();
+  }
+
   public getMuted(): boolean {
-    return this.isMuted;
+    return this.isMuted || !this.adminAudioEnabled;
   }
 
   public isSfxActive(): boolean {
-    return !this.isMuted && this.sfxEnabled;
+    return this.adminAudioEnabled && this.adminSfxAllowed && !this.isMuted && this.sfxEnabled;
   }
 
   public isBgmActive(): boolean {
-    return !this.isMuted && this.bgmEnabled;
+    return this.adminAudioEnabled && this.adminBgmAllowed && !this.isMuted && this.bgmEnabled;
   }
 
   public isPushActive(): boolean {
@@ -163,7 +227,7 @@ class SoundFxService {
   public toggleMute(): boolean {
     this.isMuted = !this.isMuted;
     this.saveToStorage();
-    if (this.isMuted) {
+    if (this.isMuted || !this.adminAudioEnabled || !this.adminBgmAllowed) {
       this.stopBgmLoop();
     } else if (this.bgmEnabled) {
       this.startBgmLoop();
@@ -176,7 +240,7 @@ class SoundFxService {
     if (this.isMuted === muted) return;
     this.isMuted = muted;
     this.saveToStorage();
-    if (this.isMuted) {
+    if (this.isMuted || !this.adminAudioEnabled || !this.adminBgmAllowed) {
       this.stopBgmLoop();
     } else if (this.bgmEnabled) {
       this.startBgmLoop();
@@ -185,6 +249,11 @@ class SoundFxService {
   }
 
   public setSfxEnabled(enabled: boolean) {
+    if (!this.adminAudioEnabled || !this.adminSfxAllowed) {
+      this.sfxEnabled = false;
+      this.notify();
+      return;
+    }
     this.sfxEnabled = enabled;
     this.saveToStorage();
     if (enabled && !this.isMuted) {
@@ -194,6 +263,12 @@ class SoundFxService {
   }
 
   public setBgmEnabled(enabled: boolean) {
+    if (!this.adminAudioEnabled || !this.adminBgmAllowed) {
+      this.bgmEnabled = false;
+      this.stopBgmLoop();
+      this.notify();
+      return;
+    }
     this.bgmEnabled = enabled;
     this.saveToStorage();
     if (enabled && !this.isMuted) {
@@ -223,6 +298,7 @@ class SoundFxService {
 
   private startBgmLoop() {
     if (typeof window === 'undefined') return;
+    if (!this.adminAudioEnabled || !this.adminBgmAllowed) return;
     const ctx = this.initContext();
     if (!ctx) return;
 
@@ -234,7 +310,7 @@ class SoundFxService {
     // Play immediately, then loop every 2.4s
     this.playNextBgmChord();
     this.bgmIntervalId = setInterval(() => {
-      if (!this.bgmEnabled || this.isMuted) {
+      if (!this.bgmEnabled || this.isMuted || !this.adminAudioEnabled || !this.adminBgmAllowed) {
         this.stopBgmLoop();
         return;
       }
@@ -258,7 +334,7 @@ class SoundFxService {
 
   private playNextBgmChord() {
     const ctx = this.initContext();
-    if (!ctx || this.isMuted || !this.bgmEnabled) return;
+    if (!ctx || this.isMuted || !this.bgmEnabled || !this.adminAudioEnabled || !this.adminBgmAllowed) return;
 
     // 4-chord gentle casino lounge progression: Am9 -> Fmaj7 -> Cmaj7 -> G6
     const chordProgression = [
@@ -316,7 +392,7 @@ class SoundFxService {
 
   // Countdown second tick (plays in final 5 seconds of round)
   public playCountdownTick(urgent: boolean = false) {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;
@@ -342,7 +418,7 @@ class SoundFxService {
 
   // Bet Placed Chip Sound
   public playChipSound() {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;
@@ -377,7 +453,7 @@ class SoundFxService {
 
   // Bell Notification (for support chat or alert)
   public playNotification() {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;
@@ -403,7 +479,7 @@ class SoundFxService {
 
   // Card Flip Sound (for Dragon Tiger)
   public playCardFlip() {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;
@@ -427,7 +503,7 @@ class SoundFxService {
 
   // Dice Roll Shaker Sound
   public playDiceRoll() {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;
@@ -450,7 +526,7 @@ class SoundFxService {
 
   // Wheel Tick (for Lucky Wheel spin)
   public playWheelTick() {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;
@@ -540,7 +616,7 @@ class SoundFxService {
 
   // Crystal two-note spatial push notification chime
   public playPushNotificationChime() {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;
@@ -695,7 +771,7 @@ class SoundFxService {
 
   // Cash Register Coin Clink when MLM Affiliate Commission is Earned or Claimed
   public playCommissionEarnedChime() {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;
@@ -719,7 +795,7 @@ class SoundFxService {
 
   // Subtle ascending pitch cue played as the Aviator multiplier climbs
   public playAviatorClimbTick(multiplier: number) {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;
@@ -767,7 +843,7 @@ class SoundFxService {
 
   // Distinct crash / fly-away sound when the Aviator plane disappears
   public playAviatorCrash() {
-    if (this.isMuted || !this.sfxEnabled) return;
+    if (!this.isSfxActive()) return;
     try {
       const ctx = this.initContext();
       if (!ctx) return;

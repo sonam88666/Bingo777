@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, Lock, Key, AlertCircle, Loader2, Fingerprint, Smartphone, ShieldAlert, X } from 'lucide-react';
+import { ShieldCheck, Lock, Key, AlertCircle, Loader2, Fingerprint } from 'lucide-react';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
 import { Bingo777Logo } from '../common/Bingo777Logo';
 import { apiClient } from '../../services/apiClient';
-import { auth, rtdb, rtdbRef, rtdbSet, rtdbGet } from '../../firebase';
+import { rtdb, rtdbRef, rtdbSet, rtdbGet, rtdbUpdate, getPersistentDeviceId } from '../../firebase';
 import { UserRecord } from '../../types';
 
 interface AdminLoginModalProps {
@@ -17,87 +17,108 @@ interface AdminLoginModalProps {
 export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
   currentUser,
   onSuccess,
-  onCancel,
-  onUserBlocked
+  onCancel
 }) => {
   const { showToast } = useToast();
-  const [adminUsername, setAdminUsername] = useState('MasterAdmin_01');
+  const [adminUsername, setAdminUsername] = useState(
+    currentUser?.name || currentUser?.username || 'MasterAdmin_01'
+  );
   const [masterKey, setMasterKey] = useState('');
   const [securityPin, setSecurityPin] = useState('7777');
   const [errorMsg, setErrorMsg] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
-  const [isBlockedIntruder, setIsBlockedIntruder] = useState(false);
-  const [blockedReasonText, setBlockedReasonText] = useState('');
 
-  const currentDevice = store.getOrCreateClientDevice();
-  const currentDeviceId = currentDevice.deviceId;
+  const currentDeviceId = getPersistentDeviceId();
 
-  // Auto-Block intruder helper function
-  const triggerAutoBlock = async (reason: string) => {
-    setIsBlockedIntruder(true);
-    setBlockedReasonText(reason);
+  // Automatically check if the logged-in user already has isAdmin === true or role === 'admin' / 'master_admin' in Firebase
+  useEffect(() => {
+    let mounted = true;
+    const verifyExistingAdminRole = async () => {
+      const activeUid = currentUser?.uid || localStorage.getItem('bingo777_active_uid');
+      if (!activeUid) return;
 
-    const activeUid = localStorage.getItem('bingo777_active_uid');
-    const activeUser = currentUser || (activeUid ? store.getUser(activeUid) : null);
-    if (activeUser && activeUser.uid) {
-      // 1. Mark blocked in store
-      store.setUserBlocked(activeUser.uid, true, reason, 'AdminSecurityGate');
-
-      // 2. Write isBlocked and status=blocked to RTDB
       try {
-        await rtdbSet(rtdbRef(rtdb, `users/${activeUser.uid}/isBlocked`), true);
-        await rtdbSet(rtdbRef(rtdb, `users/${activeUser.uid}/status`), 'blocked');
-        await rtdbSet(rtdbRef(rtdb, `users/${activeUser.uid}/blockedReason`), reason);
-        await rtdbSet(rtdbRef(rtdb, `users/${activeUser.uid}/blockedAt`), Date.now());
-      } catch (e) {
-        console.warn('Failed writing block to RTDB:', e);
+        const snap = await rtdbGet(rtdbRef(rtdb, `users/${activeUid}`));
+        const rtdbUser = snap.exists() ? snap.val() : null;
+        const localUser = currentUser || store.getUser(activeUid);
+
+        const isUserAdmin = Boolean(
+          rtdbUser?.isAdmin === true ||
+            rtdbUser?.role === 'admin' ||
+            rtdbUser?.role === 'master_admin' ||
+            localUser?.isAdmin === true ||
+            localUser?.role === 'admin' ||
+            localUser?.role === 'master_admin'
+        );
+
+        if (!isUserAdmin || !mounted) return;
+
+        const existingBoundDevice = rtdbUser?.boundDeviceId ?? localUser?.boundDeviceId ?? null;
+
+        // If boundDeviceId is null/empty (first login after promotion or after Reset Device Lock), bind current BINGO_PERSISTENT_DEVICE_ID
+        if (!existingBoundDevice) {
+          await rtdbUpdate(rtdbRef(rtdb, `users/${activeUid}`), {
+            boundDeviceId: currentDeviceId,
+            lastUsedDeviceId: currentDeviceId,
+            isAdmin: true,
+            role: rtdbUser?.role === 'master_admin' ? 'master_admin' : 'admin',
+            lastLogin: Date.now(),
+            isOnline: true
+          }).catch(() => {});
+
+          store.updateUserFromFirestore({
+            uid: activeUid,
+            boundDeviceId: currentDeviceId,
+            lastUsedDeviceId: currentDeviceId,
+            isAdmin: true,
+            role: rtdbUser?.role === 'master_admin' ? 'master_admin' : 'admin'
+          });
+        } else if (existingBoundDevice !== currentDeviceId && rtdbUser?.role !== 'master_admin') {
+          if (mounted) {
+            setErrorMsg(
+              `Admin Device Lock Active: Your account is bound to device (${existingBoundDevice}). Ask Super Admin to click "Reset Device Lock 🔓" or enter Master Admin credentials below to re-bind this device.`
+            );
+          }
+          return;
+        }
+
+        // Immediately grant full access to Admin Panel without blocking or logging out
+        const token = 'BINGO_MASTER_2026_KEY';
+        sessionStorage.setItem('bingo777_master_admin_token', token);
+        localStorage.setItem('bingo777_master_admin_token', token);
+        if (mounted) {
+          showToast(
+            `Welcome Admin ${rtdbUser?.name || rtdbUser?.username || localUser?.username || 'Master'}!`,
+            'success'
+          );
+          onSuccess(
+            rtdbUser?.name || rtdbUser?.username || localUser?.username || activeUid,
+            token
+          );
+        }
+      } catch (err) {
+        console.warn('[AdminLoginModal] Auto-admin check warning:', err);
       }
+    };
 
-      // 3. Log security alert in audit logs
-      store.logAudit({
-        actor: activeUser.username || activeUser.phone || 'Unknown',
-        category: 'AUTH',
-        action: 'INTRUDER_AUTO_BLOCKED',
-        details: `🚨 INTRUDER BLOCKED: ${reason} (UID: ${activeUser.uid}, Phone: +91 ${activeUser.phone}, Device: ${currentDeviceId})`,
-        targetUser: activeUser.uid,
-        outcome: 'DENIED'
-      });
-    }
-
-    // 4. Blacklist the current device token in localStorage
-    localStorage.setItem('bingo777_device_blocked', 'true');
-    localStorage.removeItem('bingo777_active_uid');
-    localStorage.removeItem('bingo777_master_admin_token');
-    sessionStorage.removeItem('bingo777_master_admin_token');
-
-    if (onUserBlocked) {
-      setTimeout(() => onUserBlocked(), 4000);
-    }
-  };
+    verifyExistingAdminRole();
+    return () => {
+      mounted = false;
+    };
+  }, [currentUser, currentDeviceId, onSuccess, showToast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isVerifying || isBlockedIntruder) return;
+    if (isVerifying) return;
     setErrorMsg('');
 
-    const activeUid = localStorage.getItem('bingo777_active_uid');
+    const activeUid = currentUser?.uid || localStorage.getItem('bingo777_active_uid');
     const activeUser = currentUser || (activeUid ? store.getUser(activeUid) : null);
 
-    // 1. Check if user is logged in
-    if (!activeUser || !activeUser.phone) {
-      setErrorMsg('Access Denied: You must be logged into an authorized user account before accessing this portal.');
-      return;
-    }
-
-    const cleanUserPhone = activeUser.phone.trim().replace(/\D/g, '').slice(-10);
     const cleanKey = masterKey.trim();
-    const cleanUser = adminUsername.trim();
+    const cleanUser = adminUsername.trim() || activeUser?.username || 'MasterAdmin_01';
     const cleanPin = securityPin.trim();
 
-    if (!cleanUser) {
-      setErrorMsg('Please enter your Master Admin ID.');
-      return;
-    }
     if (!cleanKey) {
       setErrorMsg('Please enter your Admin Password.');
       return;
@@ -110,91 +131,6 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
     setIsVerifying(true);
 
     try {
-      // 2. Fetch /admin_security from Firebase Realtime Database
-      let allowedPhones: Record<string, any> = {};
-      let allowedDevices: Record<string, any> = {};
-
-      try {
-        const secSnap = await rtdbGet(rtdbRef(rtdb, 'admin_security'));
-        if (secSnap.exists()) {
-          const secVal = secSnap.val() || {};
-          allowedPhones = secVal.allowed_phones || {};
-          allowedDevices = secVal.allowed_devices || {};
-        }
-      } catch (err) {
-        console.warn('Could not read admin_security from RTDB:', err);
-      }
-
-      // Default seeds: if no allowed phones yet in RTDB, seed with default admin phones
-      const isMasterAdminRole = activeUser.role === 'master_admin';
-      const hasConfiguredPhones = Object.keys(allowedPhones).length > 0;
-
-      if (!hasConfiguredPhones) {
-        // Initialize RTDB with default authorized admin phones
-        allowedPhones = {
-          '9876543210': { phone: '9876543210', name: 'Master Admin', addedAt: Date.now() },
-          '9999999999': { phone: '9999999999', name: 'Super Admin', addedAt: Date.now() }
-        };
-        if (isMasterAdminRole) {
-          allowedPhones[cleanUserPhone] = { phone: cleanUserPhone, name: activeUser.username, addedAt: Date.now() };
-        }
-        await rtdbSet(rtdbRef(rtdb, 'admin_security/allowed_phones'), allowedPhones).catch(() => {});
-      }
-
-      const hasConfiguredDevices = Object.keys(allowedDevices).length > 0;
-      if (!hasConfiguredDevices) {
-        // Auto-pair current device if user is master admin or matches default phone
-        if (isMasterAdminRole || Boolean(allowedPhones[cleanUserPhone])) {
-          allowedDevices = {
-            [currentDeviceId]: {
-              deviceId: currentDeviceId,
-              phone: cleanUserPhone,
-              pairedAt: Date.now(),
-              status: 'approved'
-            }
-          };
-          await rtdbSet(rtdbRef(rtdb, 'admin_security/allowed_devices'), allowedDevices).catch(() => {});
-        }
-      }
-
-      // ==================== TIER 1 SECURITY CHECK: MOBILE NUMBER ====================
-      const isPhoneAllowed = Boolean(
-        allowedPhones[cleanUserPhone] ||
-        (allowedPhones && typeof allowedPhones === 'object' && Object.values(allowedPhones).some((item: any) => {
-          if (typeof item === 'string') return item.replace(/\D/g, '').slice(-10) === cleanUserPhone;
-          if (item?.phone) return String(item.phone).replace(/\D/g, '').slice(-10) === cleanUserPhone;
-          return false;
-        })) ||
-        isMasterAdminRole
-      );
-
-      if (!isPhoneAllowed) {
-        await triggerAutoBlock(
-          `Unauthorized mobile number (+91 ${cleanUserPhone}) attempted to access the Master Admin Panel.`
-        );
-        return;
-      }
-
-      // ==================== TIER 2 SECURITY CHECK: DEVICE LOCK ====================
-      const isDeviceAllowed = Boolean(
-        allowedDevices[currentDeviceId] ||
-        (allowedDevices && typeof allowedDevices === 'object' && Object.values(allowedDevices).some((item: any) => {
-          if (typeof item === 'string') return item === currentDeviceId;
-          if (item?.deviceId) return item.deviceId === currentDeviceId;
-          return false;
-        })) ||
-        // Auto-pair if first time for verified admin phone
-        (!hasConfiguredDevices && isPhoneAllowed)
-      );
-
-      if (!isDeviceAllowed) {
-        await triggerAutoBlock(
-          `Unapproved device ID (${currentDeviceId}) attempted to access the Master Admin Panel with mobile (+91 ${cleanUserPhone}).`
-        );
-        return;
-      }
-
-      // ==================== TIER 3 SECURITY CHECK: ADMIN PASSWORD + 2FA PIN ====================
       const VALID_PASSWORDS = [
         'Anchal@8877@@!',
         'BINGO_MASTER_2026_KEY',
@@ -209,7 +145,6 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
       const isPasswordValid = VALID_PASSWORDS.includes(cleanKey);
       const isPinValid = VALID_PINS.includes(cleanPin);
 
-      // Verify backend token if direct key mismatch
       let isVerified = isPasswordValid && isPinValid;
       if (!isVerified && isPinValid) {
         try {
@@ -220,22 +155,37 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         } catch {}
       }
 
-      // If wrong password / PIN, AUTO-BLOCK INTRUDER IMMEDIATELY
       if (!isVerified) {
-        await triggerAutoBlock(
-          `Wrong Admin Password or 2FA PIN entered by mobile (+91 ${cleanUserPhone}) on device (${currentDeviceId}).`
-        );
+        setErrorMsg('Invalid Master Admin Password or 2FA PIN. Please verify and try again.');
         return;
       }
 
-      // ==================== ALL 3 TIERS PASSED: GRANT ACCESS ====================
+      // Grant access and bind current BINGO_PERSISTENT_DEVICE_ID safely without overwriting wallet
       sessionStorage.setItem('bingo777_master_admin_token', cleanKey);
       localStorage.setItem('bingo777_master_admin_token', cleanKey);
 
-      // Register master_admin in RTDB
+      if (activeUser && activeUser.uid) {
+        await rtdbUpdate(rtdbRef(rtdb, `users/${activeUser.uid}`), {
+          isAdmin: true,
+          role: 'admin',
+          boundDeviceId: currentDeviceId,
+          lastUsedDeviceId: currentDeviceId,
+          lastLogin: Date.now(),
+          isOnline: true
+        }).catch(() => {});
+
+        store.updateUserFromFirestore({
+          uid: activeUser.uid,
+          isAdmin: true,
+          role: 'admin',
+          boundDeviceId: currentDeviceId,
+          lastUsedDeviceId: currentDeviceId
+        });
+      }
+
       try {
         await rtdbSet(rtdbRef(rtdb, `master_admins/${cleanUser}`), true);
-        if (activeUser.uid) {
+        if (activeUser?.uid) {
           await rtdbSet(rtdbRef(rtdb, `master_admins/${activeUser.uid}`), true);
         }
       } catch {}
@@ -244,64 +194,18 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         actor: cleanUser,
         category: 'AUTH',
         action: 'MASTER_ADMIN_LOGIN',
-        details: `Master Admin authenticated successfully. Mobile: +91 ${cleanUserPhone}, Device: ${currentDeviceId}.`,
+        details: `Admin authenticated and bound to Device: ${currentDeviceId}.`,
         outcome: 'SUCCESS'
       });
 
-      showToast(`Welcome Master Admin! Access Granted.`, 'success');
+      showToast('Welcome Admin! Access Granted & Device Bound.', 'success');
       onSuccess(cleanUser, cleanKey);
-    } catch (err) {
-      setErrorMsg('Internal security verification error. Please retry.');
+    } catch {
+      setErrorMsg('Verification error. Please retry.');
     } finally {
       setIsVerifying(false);
     }
   };
-
-  // Red Intruder Lockout Screen
-  if (isBlockedIntruder) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-rose-950/95 backdrop-blur-xl animate-in zoom-in-95 duration-200">
-        <div className="w-full max-w-md bg-slate-950 border-2 border-rose-500 rounded-3xl p-6 text-center space-y-4 shadow-[0_0_60px_rgba(244,63,94,0.5)]">
-          <div className="w-16 h-16 rounded-full bg-rose-500/20 border-2 border-rose-500 text-rose-500 flex items-center justify-center mx-auto animate-bounce">
-            <ShieldAlert className="w-8 h-8" />
-          </div>
-
-          <div className="space-y-1">
-            <h3 className="text-xl font-black text-rose-400 uppercase tracking-wider">
-              🚨 Access Permanently Blocked
-            </h3>
-            <p className="text-xs font-bold text-rose-200">
-              Security Violation Detected by Bingo777 Firewall
-            </p>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-rose-950/50 border border-rose-500/40 text-left text-xs space-y-2">
-            <div className="text-slate-300">
-              <strong className="text-rose-400">Reason:</strong> {blockedReasonText}
-            </div>
-            <div className="text-[11px] text-slate-400 font-mono">
-              <strong>Device ID:</strong> {currentDeviceId}
-            </div>
-            <div className="text-[11px] text-rose-300 font-bold">
-              Status: <span className="underline">/users/{currentUser?.uid || 'guest'}/isBlocked = true</span>
-            </div>
-          </div>
-
-          <p className="text-[11px] text-slate-400">
-            This account and hardware signature have been blacklisted and reported in audit logs. Logging out...
-          </p>
-
-          <button
-            type="button"
-            onClick={onCancel}
-            className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-200">
@@ -312,24 +216,24 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             <Bingo777Logo size="xl" variant="badge" />
           </div>
           <h2 className="font-brand font-black text-xl text-slate-100 tracking-wider">
-            ADMIN SECURITY ACCESS
+            ADMIN PANEL ACCESS
           </h2>
           <p className="text-xs text-slate-400">
-            High-Security 3-Tier Verification (Mobile + Device Lock + Password)
+            Role & Persistent Device Binding Verification
           </p>
         </div>
 
         {/* Current Identity & Hardware Signature Pills */}
         <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
           <div className="flex items-center justify-between text-slate-400">
-            <span>Logged-in Mobile:</span>
+            <span>Logged-in Account:</span>
             <span className="font-bold font-mono text-amber-400">
-              {currentUser?.phone ? `+91 ${currentUser.phone}` : 'Not Logged In'}
+              {currentUser?.phone ? `+91 ${currentUser.phone}` : currentUser?.username || 'Master Session'}
             </span>
           </div>
           <div className="flex items-center justify-between text-slate-400">
-            <span>Hardware Device ID:</span>
-            <span className="font-mono text-[10px] text-slate-300 max-w-[180px] truncate" title={currentDeviceId}>
+            <span>Persistent Device ID:</span>
+            <span className="font-mono text-[10px] text-emerald-400 max-w-[180px] truncate" title={currentDeviceId}>
               {currentDeviceId}
             </span>
           </div>
@@ -345,7 +249,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-300 block">
-              Master Admin ID
+              Admin Username / ID
             </label>
             <div className="relative">
               <input
@@ -395,10 +299,6 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             </div>
           </div>
 
-          <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300/90 leading-tight">
-            ⚠️ <strong>Auto-Block Protection:</strong> Entering wrong credentials, unapproved mobile numbers, or unauthorized hardware devices will immediately block your account permanently.
-          </div>
-
           <div className="flex items-center space-x-3 pt-2">
             <button
               type="button"
@@ -416,7 +316,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
               {isVerifying ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-                  <span>Verifying Hardware & Key...</span>
+                  <span>Verifying...</span>
                 </>
               ) : (
                 <>

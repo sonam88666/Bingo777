@@ -51,11 +51,16 @@ class FirebaseSyncService {
   }
 
   /**
-   * Ensures the client has a valid Firebase Auth session (Anonymous or Phone)
-   * so Firestore & RTDB security rules always succeed on every device/APK.
+   * Ensures the client has a valid Firebase Auth session (Email/Password, Phone, or Anonymous fallback)
+   * without clobbering persisted user sessions during boot.
    */
   private async ensureAuth(): Promise<boolean> {
     if (typeof window === 'undefined') return false;
+    try {
+      if (typeof (auth as any).authStateReady === 'function') {
+        await (auth as any).authStateReady();
+      }
+    } catch {}
     if (auth.currentUser) return true;
     if (this.authPromise) return this.authPromise;
 
@@ -1345,49 +1350,99 @@ class FirebaseSyncService {
 
   /**
    * Writes player document directly to RTDB (/users/{uid}) and Firestore (/users/{uid})
+   * while strictly preserving existing role, isAdmin, boundDeviceId, and createdAt.
    */
   public async pushUserToFirestore(user: UserRecord, phoneOverride?: string): Promise<boolean> {
     if (!user || !user.uid || user.uid.startsWith('usr_demo_')) return false;
     const cleanPhone = phoneOverride || user.phone || '';
+    const cleanBalance = Math.max(0, Number(user.balance ?? user.wallet ?? 0));
+    const currentDeviceId = store.getOrCreateClientDevice().deviceId;
+
+    // 1. Fetch existing record in RTDB first so we NEVER overwrite role, isAdmin, boundDeviceId, or createdAt
+    let existing: Record<string, any> | null = null;
+    try {
+      const snap = await rtdbGet(rtdbRef(rtdb, `users/${user.uid}`));
+      if (snap.exists()) {
+        existing = snap.val();
+      }
+    } catch {}
+
+    const preservedIsAdmin =
+      existing && (existing.isAdmin === true || existing.role === 'admin' || existing.role === 'master_admin')
+        ? true
+        : Boolean(user.isAdmin || user.role === 'admin' || user.role === 'master_admin');
+
+    const preservedRole =
+      existing && (existing.role === 'admin' || existing.role === 'master_admin' || existing.isAdmin === true)
+        ? existing.role === 'master_admin'
+          ? 'master_admin'
+          : 'admin'
+        : user.role || (preservedIsAdmin ? 'admin' : 'user');
+
+    const preservedBoundDeviceId =
+      existing && existing.boundDeviceId !== undefined
+        ? existing.boundDeviceId
+        : user.boundDeviceId ?? null;
+
+    const totalDepositVal = Math.max(
+      Number(existing?.totalDeposit ?? existing?.totalDeposited ?? 0),
+      Number(user.totalDeposit ?? user.totalDeposited ?? 0)
+    );
+    const totalWithdrawVal = Math.max(
+      Number(existing?.totalWithdraw ?? existing?.totalWithdrawn ?? 0),
+      Number(user.totalWithdraw ?? user.totalWithdrawn ?? 0)
+    );
 
     const userPayload: Record<string, any> = {
       uid: user.uid,
-      username: user.username || `Player_${user.uid.slice(-4)}`,
-      phone: cleanPhone,
-      balance: Math.max(0, Number(user.balance) || 0),
-      vipLevel: Math.min(10, Math.max(0, Number(user.vipLevel) || 1)),
-      status: user.status || 'active',
-      role: user.role || 'user',
-      referralCode: user.referralCode || '',
-      referralCount: Number(user.referralCount || user.totalReferrals || 0),
-      totalReferrals: Number(user.totalReferrals || user.referralCount || 0),
-      totalBetsCount: user.totalBetsCount || 0,
-      totalWonAmount: user.totalWonAmount || 0,
-      totalLostAmount: user.totalLostAmount || 0,
-      createdAt: user.createdAt || Date.now(),
+      name: user.name || user.username || existing?.name || existing?.username || `Player_${user.uid.slice(-4)}`,
+      username: user.username || user.name || existing?.username || `Player_${user.uid.slice(-4)}`,
+      phone: cleanPhone || existing?.phone || '',
+      wallet: cleanBalance,
+      balance: cleanBalance,
+      totalDeposit: totalDepositVal,
+      totalDeposited: totalDepositVal,
+      totalWithdraw: totalWithdrawVal,
+      totalWithdrawn: totalWithdrawVal,
+      vipLevel: Math.min(10, Math.max(0, Number(user.vipLevel ?? existing?.vipLevel) || 1)),
+      status: user.status || existing?.status || 'active',
+      isBanned: typeof user.isBanned === 'boolean' ? user.isBanned : (user.status === 'blocked' || Boolean(existing?.isBanned)),
+      role: preservedRole,
+      isAdmin: preservedIsAdmin,
+      boundDeviceId: preservedBoundDeviceId,
+      registrationDeviceId: existing?.registrationDeviceId || user.registrationDeviceId || currentDeviceId,
+      lastUsedDeviceId: user.lastUsedDeviceId || currentDeviceId,
+      referralCode: user.referralCode || existing?.referralCode || '',
+      referralCount: Number(user.referralCount || user.totalReferrals || existing?.referralCount || 0),
+      totalReferrals: Number(user.totalReferrals || user.referralCount || existing?.totalReferrals || 0),
+      totalBetsCount: Math.max(Number(existing?.totalBetsCount || 0), Number(user.totalBetsCount || 0)),
+      totalWonAmount: Math.max(Number(existing?.totalWonAmount || 0), Number(user.totalWonAmount || 0)),
+      totalLostAmount: Math.max(Number(existing?.totalLostAmount || 0), Number(user.totalLostAmount || 0)),
+      createdAt: existing?.createdAt || user.createdAt || Date.now(),
       lastLogin: user.lastLogin || Date.now(),
-      devices: user.devices || {},
+      isOnline: true,
+      devices: user.devices || existing?.devices || {},
       updatedAt: Date.now()
     };
 
-    if (user.passwordHash) {
-      userPayload.passwordHash = user.passwordHash;
+    if (user.passwordHash || existing?.passwordHash) {
+      userPayload.passwordHash = user.passwordHash || existing?.passwordHash;
     }
-    if (user.referredBy) {
-      userPayload.referredBy = user.referredBy;
+    if (user.referredBy || existing?.referredBy) {
+      userPayload.referredBy = user.referredBy || existing?.referredBy;
     }
-    if (user.referredByCode) {
-      userPayload.referredByCode = user.referredByCode;
+    if (user.referredByCode || existing?.referredByCode) {
+      userPayload.referredByCode = user.referredByCode || existing?.referredByCode;
     }
 
-    // 1. Write immediately to Firebase Realtime Database (/users/{uid})
+    // 1. Update safely in Firebase Realtime Database (/users/{uid}) using rtdbUpdate
     try {
-      await rtdbSet(rtdbRef(rtdb, `users/${user.uid}`), userPayload);
+      await rtdbUpdate(rtdbRef(rtdb, `users/${user.uid}`), userPayload);
     } catch (e) {
       console.warn('[FirebaseSync] RTDB pushUser notice:', e);
     }
 
-    // 2. Write to Firestore (/users/{uid})
+    // 2. Write to Firestore (/users/{uid}) with merge: true
     await this.ensureAuth();
     try {
       const userRef = doc(db, 'users', user.uid);
@@ -1638,14 +1693,13 @@ class FirebaseSyncService {
    */
   public async forceSyncFromFirebase(): Promise<{ success: boolean; message: string; balance?: number; period?: string }> {
     await this.ensureAuth();
-    await this.pushLocalStateToCloud();
 
     const activeUid = store.getActiveSessionUid();
     let newBalance = activeUid ? store.getUser(activeUid)?.balance : undefined;
     let latestPeriod = store.getCurrentRound()?.period;
 
     try {
-      // Pull from RTDB first
+      // Pull from RTDB first so cloud changes are never overwritten by stale local cache
       try {
         const rtdbUsersSnap = await rtdbGet(rtdbRef(rtdb, 'users'));
         if (rtdbUsersSnap.exists()) {
@@ -1655,8 +1709,18 @@ class FirebaseSyncService {
               const uid = raw?.uid || key;
               if (uid && !String(uid).startsWith('usr_demo_')) {
                 store.updateUserFromFirestore({ ...raw, uid });
+                if (uid === activeUid && typeof (raw.wallet ?? raw.balance) === 'number') {
+                  newBalance = Number(raw.wallet ?? raw.balance);
+                }
               }
             });
+          }
+        }
+        const rtdbSettingsSnap = await rtdbGet(rtdbRef(rtdb, 'admin_settings'));
+        if (rtdbSettingsSnap.exists()) {
+          const sVal = rtdbSettingsSnap.val();
+          if (sVal && typeof sVal === 'object') {
+            store.ingestCloudAdminSettings(sVal as Partial<AdminSettings>);
           }
         }
       } catch {}

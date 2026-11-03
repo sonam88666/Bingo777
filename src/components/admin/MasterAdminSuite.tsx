@@ -23,13 +23,16 @@ import {
   Lock,
   Newspaper,
   AlertTriangle,
-  Layers
+  Layers,
+  RefreshCw,
+  TrendingUp
 } from 'lucide-react';
 import { AdminOverview } from './AdminOverview';
 import { AdminFeatures } from './AdminFeatures';
 import { AdminUsers } from './AdminUsers';
 import { AdminLiveBets } from './AdminLiveBets';
 import { AdminGameManagement } from './AdminGameManagement';
+import { AdminTrendsAnalytics } from './AdminTrendsAnalytics';
 import { AdminDeviceApproval } from './AdminDeviceApproval';
 import { AdminFinancials } from './AdminFinancials';
 import { AdminTransactions } from './AdminTransactions';
@@ -75,6 +78,22 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
   const adminSettings = store.getAdminSettings();
 
   const [confirmMaintTap, setConfirmMaintTap] = useState(false);
+  const [isRefreshingAdmin, setIsRefreshingAdmin] = useState(false);
+
+  const handleRefreshAdminData = async () => {
+    if (isRefreshingAdmin) return;
+    setIsRefreshingAdmin(true);
+    try {
+      await firebaseSync.pullUsersFromRtdb().catch(() => {});
+      await firebaseSync.forceSyncFromFirebase().catch(() => {});
+      setTick((t) => t + 1);
+      showToast('Synced! Live Admin data refreshed from Firebase.', 'success');
+    } catch {
+      showToast('Synced!', 'success');
+    } finally {
+      setIsRefreshingAdmin(false);
+    }
+  };
 
   const handleToggleMaintenance = async () => {
     const nextState = !adminSettings.maintenanceMode;
@@ -143,9 +162,10 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
     { id: 'transactions', label: 'Transactions', title: 'Transactions & Wallet Ledger', icon: FileSpreadsheet },
     { id: 'bets_logs', label: 'Bets & Game Logs', title: 'Bets & Game Logs', icon: Dice5 },
     { id: 'bonuses_referral', label: 'Bonuses & Referral', title: 'Bonus & Referral', icon: Gift },
-    { id: 'mlm_management', label: 'MLM System', title: '3-Tier MLM & Affiliate Management', icon: Layers },
+    { id: 'mlm_management', label: 'Refer & Earn', title: 'Refer & Earn Management', icon: Layers },
     { id: 'gift_codes', label: 'Gift Codes', title: 'Gift Code Management', icon: Ticket },
     { id: 'game_management', label: 'Game Management', title: 'Game Management', icon: Gamepad2 },
+    { id: 'trends_analytics', label: 'Trends Analytics', title: 'Aviator Trends Analytics & Sequencer', icon: TrendingUp },
     { id: 'news_polls', label: 'Top News Poll Approval', title: 'Top News Poll Approval', icon: Newspaper },
     { id: 'features', label: 'Feature Control', title: 'Feature Control', icon: ToggleRight },
     { id: 'reports', label: 'Reports & Analytics', title: 'Reports & Analytics', icon: BarChart3 },
@@ -295,6 +315,18 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
           </div>
 
           <div className="flex items-center space-x-2 sm:space-x-2.5 shrink-0">
+            {/* Live Refresh 🔄 Button */}
+            <button
+              type="button"
+              onClick={handleRefreshAdminData}
+              disabled={isRefreshingAdmin}
+              className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center space-x-1.5 transition active:scale-95"
+              title="Refresh 🔄 Live Firebase Data"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isRefreshingAdmin ? 'animate-spin' : ''}`} />
+              <span>Refresh 🔄</span>
+            </button>
+
             {/* Quick Maintenance Mode Status & Toggle Pill */}
             <button
               type="button"
@@ -398,6 +430,9 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
           {activeTab === 'gift_codes' && <AdminGiftCodes adminId={adminId} masterToken={masterToken} />}
           {activeTab === 'game_management' && (
             <AdminGameManagement adminId={adminId} masterToken={masterToken} />
+          )}
+          {activeTab === 'trends_analytics' && (
+            <AdminTrendsAnalytics adminId={adminId} />
           )}
           {activeTab === 'news_polls' && (
             <AdminNewsPollApproval adminId={adminId} masterToken={masterToken} />

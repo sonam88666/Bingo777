@@ -124,6 +124,24 @@ export const AviatorGame: React.FC<AviatorGameProps> = ({
           if (typeof cfg.maxMultiplierCap === 'number' && cfg.maxMultiplierCap >= 2) {
             maxCapRef.current = cfg.maxMultiplierCap;
           }
+          if (
+            typeof cfg.oneXTrendEnabled === 'boolean' ||
+            typeof cfg.oneXProbabilityPercent === 'number' ||
+            typeof cfg.highFlowMaxMultiplier === 'number'
+          ) {
+            store.updateAviatorEngineConfig(
+              {
+                ...(typeof cfg.oneXTrendEnabled === 'boolean' ? { oneXTrendEnabled: cfg.oneXTrendEnabled } : {}),
+                ...(typeof cfg.oneXProbabilityPercent === 'number'
+                  ? { oneXProbabilityPercent: cfg.oneXProbabilityPercent }
+                  : {}),
+                ...(typeof cfg.highFlowMaxMultiplier === 'number'
+                  ? { highFlowMaxMultiplier: cfg.highFlowMaxMultiplier }
+                  : {})
+              },
+              'RTDB_Sync'
+            );
+          }
           if (cfg.forceCrashNow === true) {
             rtdbUpdate(avAdminRef, { forceCrashNow: false }).catch(() => {});
             store.forceAviatorCrashNow('RTDB_Admin');

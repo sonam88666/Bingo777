@@ -60,7 +60,7 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
     };
     store.updateAdminSettings(updated, adminId);
     await apiClient.updateSettings(updated, adminId, tokenToUse).catch(() => {});
-    showToast('MLM Affiliate & Referral Master Settings successfully saved!', 'success');
+    showToast('Refer & Earn Master Settings successfully saved!', 'success');
   };
 
   const handleSimulateGlobalMlmTurnover = () => {
@@ -72,7 +72,7 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
     const targetUid = realReferral.referredUid;
     const turnover = Math.floor(1000 + Math.random() * 2000);
     store.distributeMlmCommission(targetUid, turnover, 'Admin Live Test');
-    showToast(`⚡ Distributed ₹${turnover} turnover through real MLM 3-Tier chain!`, 'success');
+    showToast(`⚡ Distributed ₹${turnover} turnover through real Refer & Earn 3-Tier chain!`, 'success');
   };
 
   const allUsers = Object.values(store.getUsers());
@@ -89,10 +89,10 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
             <span className="text-xs text-emerald-400 font-mono font-bold">● Fully Managed</span>
           </div>
           <h3 className="font-brand font-black text-xl text-white">
-            3-Tier Multi-Level Marketing (MLM) & Referral Management
+            Refer & Earn Program & Team Commission Management
           </h3>
           <p className="text-xs text-slate-300">
-            Configure L1 (1%), L2 (0.5%), L3 (0.25%) commission rates, monitor downline trees, and audit affiliate settlements.
+            Configure L1 (1%), L2 (0.5%), L3 (0.25%) commission rates, monitor referral trees, and audit Refer & Earn settlements.
           </p>
         </div>
 
@@ -102,7 +102,7 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
           className="px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center space-x-1.5 shadow-lg active:scale-95 transition shrink-0"
         >
           <Zap className="w-4 h-4 fill-slate-950" />
-          <span>Simulate Global Network Turnover</span>
+          <span>Simulate Refer & Earn Turnover</span>
         </button>
       </div>
 
@@ -153,10 +153,10 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
           <div className="p-5 rounded-3xl bg-slate-900 border border-slate-800 space-y-3">
             <h4 className="text-sm font-bold text-white uppercase tracking-wider flex items-center space-x-2">
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>MLM Affiliate Engine Status</span>
+              <span>Refer & Earn Engine Status</span>
             </h4>
             <p className="text-xs text-slate-300 leading-relaxed">
-              The 3-Tier Multi-Level Marketing engine automatically intercepts every settled bet across Win Go, Aviator, Ludo, and K3 Dice. It calculates fractional commissions in real time and distributes them up the referrer tree to Level 1, Level 2, and Level 3 uplines instantly.
+              The Refer & Earn engine automatically intercepts every settled bet across Win Go, Aviator, Ludo, and K3 Dice. It calculates fractional commissions in real time and distributes them up the referrer tree to Level 1, Level 2, and Level 3 uplines instantly.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
@@ -165,7 +165,7 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
               </div>
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
                 <span className="text-purple-400 font-bold block">Wallet Integration</span>
-                <span className="text-slate-400 text-[11px]">Users withdraw accumulated MLM commissions directly into their main wallet balance.</span>
+                <span className="text-slate-400 text-[11px]">Users withdraw accumulated Refer & Earn commissions directly into their main wallet balance.</span>
               </div>
               <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
                 <span className="text-sky-400 font-bold block">Audit Trail</span>
@@ -369,7 +369,7 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
       {activeSubTab === 'settings' && (
         <form onSubmit={handleSaveMlmSettings} className="p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-4">
           <div className="border-b border-slate-800 pb-3">
-            <h4 className="text-sm font-bold text-white">Configure MLM & Referral Parameters</h4>
+            <h4 className="text-sm font-bold text-white">Configure Refer & Earn Parameters</h4>
             <p className="text-xs text-slate-400">Adjust tier percentages and direct referral bonus rewards instantly.</p>
           </div>
 
@@ -437,7 +437,7 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
                     mlmFeatureEnabled ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-400'
                   }`}
                 >
-                  {mlmFeatureEnabled ? 'MLM ENGINE ACTIVE ✓' : 'MLM ENGINE PAUSED'}
+                  {mlmFeatureEnabled ? 'REFER & EARN ACTIVE ✓' : 'REFER & EARN PAUSED'}
                 </button>
               </div>
             </div>

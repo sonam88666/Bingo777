@@ -33,7 +33,7 @@ import { TelegramFloatingWidget } from './components/common/TelegramFloatingWidg
 import { GameErrorBoundary } from './components/common/ErrorBoundary';
 import { store } from './services/store';
 import { firebaseSync } from './services/firebaseSync';
-import { auth } from './firebase';
+import { auth, rtdb, rtdbRef, rtdbOnValue, rtdbUpdate, onAuthStateChanged, getPersistentDeviceId } from './firebase';
 import { UserRecord, DeviceRecord, GameId, RoundSettlementNotice } from './types';
 import { AdminSettingsProvider, useAdminSettings } from './context/AdminSettingsContext';
 
@@ -50,8 +50,25 @@ function MainApp() {
   // In Lobby: Active selected game (null means showing lobby cards)
   const [selectedSubGame, setSelectedSubGame] = useState<GameId | null>(null);
 
-  // Authenticated State
-  const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
+  // Instant session hydration from localStorage so app opens immediately without auto-logout
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [currentUser, setCurrentUser] = useState<UserRecord | null>(() => {
+    try {
+      const activeUid = localStorage.getItem('bingo777_active_uid');
+      if (activeUid && !activeUid.startsWith('usr_demo_')) {
+        const fromStore = store.getUser(activeUid);
+        if (fromStore) return fromStore;
+      }
+      const cachedSession = localStorage.getItem('bingo777_session_user');
+      if (cachedSession) {
+        const parsed = JSON.parse(cachedSession) as UserRecord;
+        if (parsed && parsed.uid && !parsed.uid.startsWith('usr_demo_')) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return null;
+  });
   const [masterAdminId, setMasterAdminId] = useState<string | null>(null);
   const [showAdminLogin, setShowAdminLogin] = useState(false);
 
@@ -130,8 +147,52 @@ function MainApp() {
     });
   };
 
+  // Firebase Auth state persistence listener with authLoading guard (Never clears session while authLoading or offline)
   useEffect(() => {
-    // 1. Initial Session Hydration from authoritative unique UID or saved phone
+    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
+      const storedUid = localStorage.getItem('bingo777_active_uid');
+      if (fbUser && !fbUser.isAnonymous) {
+        const targetUid = storedUid || fbUser.uid;
+        if (!storedUid) {
+          localStorage.setItem('bingo777_active_uid', targetUid);
+        }
+        firebaseSync.attachRealtimeUserSync(targetUid, fbUser.phoneNumber || undefined);
+      } else if (storedUid) {
+        // Keep persisted localStorage session active even during network drops or virtual-email restore
+        firebaseSync.attachRealtimeUserSync(storedUid);
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubAuth();
+  }, []);
+
+  // Real-time Firebase RTDB listener on current user profile (`users/{uid}`) so wallet, role, and admin status update live
+  useEffect(() => {
+    const activeUid = currentUser?.uid || localStorage.getItem('bingo777_active_uid');
+    if (!activeUid || activeUid.startsWith('usr_demo_')) return;
+
+    const userRef = rtdbRef(rtdb, `users/${activeUid}`);
+    const unsubRtdbUser = rtdbOnValue(
+      userRef,
+      (snap) => {
+        if (!snap.exists()) return;
+        const data = snap.val();
+        if (data && typeof data === 'object') {
+          const updated = store.updateUserFromFirestore({ ...data, uid: activeUid });
+          if (updated) {
+            setCurrentUser({ ...updated });
+            localStorage.setItem('bingo777_session_user', JSON.stringify(updated));
+          }
+        }
+      },
+      () => {}
+    );
+
+    return () => unsubRtdbUser();
+  }, [currentUser?.uid]);
+
+  useEffect(() => {
+    // 1. Initial Session Hydration from authoritative unique UID or saved session
     const storedUid = localStorage.getItem('bingo777_active_uid');
     const lastPhone = localStorage.getItem('bingo777_last_phone') || '';
     const deletedUids = store.getDeletedUserUids();
@@ -140,6 +201,7 @@ function MainApp() {
     if (storedUid) {
       if (storedUid.startsWith('usr_demo_') || deletedUids.includes(storedUid)) {
         localStorage.removeItem('bingo777_active_uid');
+        localStorage.removeItem('bingo777_session_user');
         setCurrentUser(null);
       } else {
         const activeU = allUsers[storedUid] || (lastPhone ? store.findUserByPhone(lastPhone) : undefined);
@@ -148,17 +210,27 @@ function MainApp() {
             localStorage.setItem('bingo777_active_uid', activeU.uid);
           }
           setCurrentUser(activeU);
+          localStorage.setItem('bingo777_session_user', JSON.stringify(activeU));
           firebaseSync.attachRealtimeUserSync(activeU.uid, activeU.phone);
         } else {
-          // Trigger backend sync to restore session if browser storage was partially cleared
+          // Restore from mirrored session user if store is still syncing from Firebase
+          try {
+            const cachedSession = localStorage.getItem('bingo777_session_user');
+            if (cachedSession) {
+              const parsed = JSON.parse(cachedSession) as UserRecord;
+              if (parsed && parsed.uid) {
+                const restored = store.updateUserFromFirestore(parsed);
+                if (restored) setCurrentUser(restored);
+              }
+            }
+          } catch {}
           store.syncUsersWithBackend();
+          firebaseSync.pullUsersFromRtdb().catch(() => {});
         }
       }
-    } else {
-      setCurrentUser(null);
     }
 
-    // 2. Authoritative Store Subscription
+    // 2. Authoritative Store Subscription (Never logs out during authLoading or network drop)
     const unsubscribe = store.subscribe(() => {
       setStoreTick((t) => t + 1);
       const activeUid = localStorage.getItem('bingo777_active_uid');
@@ -167,6 +239,7 @@ function MainApp() {
         const isDeleted = store.getDeletedUserUids().includes(activeUid);
         if (isDeleted) {
           localStorage.removeItem('bingo777_active_uid');
+          localStorage.removeItem('bingo777_session_user');
           setCurrentUser(null);
           setSettlementQueue([]);
           showToast('Account has been safely deactivated or removed.', 'info');
@@ -174,25 +247,19 @@ function MainApp() {
         }
         const refreshed = store.getUser(activeUid) || (savedPhone ? store.findUserByPhone(savedPhone) : undefined);
         if (refreshed) {
-          if (refreshed.status === 'banned' || refreshed.status === 'deactivated') {
+          if (refreshed.isBanned === true || refreshed.status === 'banned' || refreshed.status === 'deactivated' || refreshed.status === 'blocked') {
             localStorage.removeItem('bingo777_active_uid');
+            localStorage.removeItem('bingo777_session_user');
             setCurrentUser(null);
             setSettlementQueue([]);
-            showToast('Account has been safely deactivated or removed.', 'info');
+            showToast('Your account has been suspended or deactivated by Admin.', 'info');
             return;
           }
-          if (!store.isCurrentDeviceApprovedForUser(refreshed.uid)) {
-            localStorage.removeItem('bingo777_active_uid');
-            localStorage.removeItem('maanwin_active_uid');
-            setCurrentUser(null);
-            setSettlementQueue([]);
-            showToast('Logged out: Your mobile number is now active on another Admin-approved device (1 Number = 1 Device).', 'info');
-            return;
-          }
-          setCurrentUser(refreshed);
+          setCurrentUser({ ...refreshed });
+          localStorage.setItem('bingo777_session_user', JSON.stringify(refreshed));
           syncUnacknowledgedSettlements(refreshed.uid);
         }
-      } else {
+      } else if (!authLoading) {
         setCurrentUser(null);
         setSettlementQueue([]);
       }
@@ -211,7 +278,7 @@ function MainApp() {
       }
     });
 
-    // 4. Authoritative Local Notification Subscription (Support Ticket Updates & Withdrawal Settlements)
+    // 4. Authoritative Local Notification Subscription
     const unsubNotifications = store.subscribeUserNotifications((notif) => {
       const activeUid = localStorage.getItem('bingo777_active_uid');
       if (activeUid && notif.uid === activeUid) {
@@ -237,7 +304,7 @@ function MainApp() {
       unsubSettlement();
       unsubNotifications();
     };
-  }, [showToast]);
+  }, [showToast, authLoading]);
 
   const activeSettlement = settlementQueue.length > 0 ? settlementQueue[0] : null;
 
@@ -261,6 +328,50 @@ function MainApp() {
     }
     setShowAdminLogin(false);
     setViewMode('master_admin');
+  };
+
+  const handleOpenAdminPortal = async () => {
+    const persistentDeviceId = getPersistentDeviceId();
+    // If logged-in user has isAdmin === true OR role === 'admin' / 'master_admin', grant immediate access & bind device on first login
+    if (
+      currentUser &&
+      (currentUser.isAdmin === true ||
+        currentUser.role === 'admin' ||
+        currentUser.role === 'master_admin')
+    ) {
+      if (!currentUser.boundDeviceId) {
+        await rtdbUpdate(rtdbRef(rtdb, `users/${currentUser.uid}`), {
+          boundDeviceId: persistentDeviceId,
+          lastUsedDeviceId: persistentDeviceId,
+          lastLogin: Date.now(),
+          isOnline: true
+        }).catch(() => {});
+        store.updateUserFromFirestore({
+          uid: currentUser.uid,
+          boundDeviceId: persistentDeviceId,
+          lastUsedDeviceId: persistentDeviceId
+        });
+      } else if (
+        currentUser.boundDeviceId !== persistentDeviceId &&
+        currentUser.role !== 'master_admin'
+      ) {
+        setShowAdminLogin(true);
+        return;
+      }
+
+      const token = 'BINGO_MASTER_2026_KEY';
+      sessionStorage.setItem('bingo777_master_admin_token', token);
+      localStorage.setItem('bingo777_master_admin_token', token);
+      setMasterAdminId(currentUser.name || currentUser.username || currentUser.uid);
+      setViewMode('master_admin');
+      return;
+    }
+
+    if (masterAdminId) {
+      setViewMode('master_admin');
+    } else {
+      setShowAdminLogin(true);
+    }
   };
 
   const handleAdminLogout = () => {
@@ -322,6 +433,7 @@ function MainApp() {
             onOpenDeposit={() => setActiveNavTab('wallet')}
             onOpenSupport={() => setShowSupportModal(true)}
             onOpenAuth={() => setShowAuthModal(true)}
+            onOpenAdmin={handleOpenAdminPortal}
           />
 
           {/* Main Content Area Based on Active Bottom Nav Tab */}
@@ -569,6 +681,7 @@ function MainApp() {
                 onLogout={() => {
                   localStorage.removeItem('bingo777_active_uid');
                   localStorage.removeItem('maanwin_active_uid');
+                  localStorage.removeItem('bingo777_session_user');
                   store.logoutUser(currentUser.uid);
                   firebaseSync.detachRealtimeUserSync();
                   try { auth.signOut(); } catch {}
@@ -598,10 +711,7 @@ function MainApp() {
             activeTab={activeNavTab}
             onChangeTab={handleTabChange}
             unreadSupportCount={unreadSupportCount}
-            onSecretAdminTrigger={() => {
-              if (masterAdminId) setViewMode('master_admin');
-              else setShowAdminLogin(true);
-            }}
+            onSecretAdminTrigger={handleOpenAdminPortal}
           />
         </div>
       )}

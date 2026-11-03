@@ -72,7 +72,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
 
   const handleClaimMlmCommission = () => {
     if (mlmData.unclaimedCommission <= 0) {
-      showToast('No unclaimed MLM commission available right now. Simulate or wait for downline bets!', 'info');
+      showToast('No unclaimed Refer & Earn commission available right now. Invite friends to earn!', 'info');
       return;
     }
     setIsClaimingMlm(true);
@@ -82,12 +82,12 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
       if (res.success) {
         confetti({ particleCount: 110, spread: 80, origin: { y: 0.55 } });
         showToast(
-          `🎉 ₹${res.claimedAmount?.toFixed(2)} 3-Tier MLM Commission credited to your main wallet!`,
+          `🎉 ₹${res.claimedAmount?.toFixed(2)} Refer & Earn Commission credited to your main wallet!`,
           'success'
         );
         setMlmData(store.getMlmDashboardData(user.uid));
       } else {
-        showToast(res.error || 'Could not claim MLM commission', 'error');
+        showToast(res.error || 'Could not claim Refer & Earn commission', 'error');
       }
     }, 300);
   };
@@ -167,13 +167,13 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
           <div className="space-y-0.5">
             <span className="text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950 px-2.5 py-0.5 rounded-full inline-flex items-center space-x-1 shadow-sm">
               <Layers className="w-3 h-3" />
-              <span>3-TIER MLM AFFILIATE & ₹{adminSettings.referralBonusAmount} REFER HUB</span>
+              <span>REFER & EARN · ₹{adminSettings.referralBonusAmount} REWARDS HUB</span>
             </span>
             <h3 className="font-brand font-black text-xl sm:text-2xl text-white leading-tight">
-              Multi-Level Partner Commission Center
+              Refer & Earn Partner Center
             </h3>
             <p className="text-xs font-medium text-amber-200/90">
-              Earn L1 (1.0%) · L2 (0.5%) · L3 (0.25%) lifetime betting turnover commissions + ₹{adminSettings.referralBonusAmount} direct bonuses!
+              Invite friends & earn ₹{adminSettings.referralBonusAmount} direct bonus + L1 (1.0%) · L2 (0.5%) · L3 (0.25%) team rewards!
             </p>
           </div>
           <button
@@ -196,7 +196,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>3-Tier MLM Commission (L1·L2·L3)</span>
+            <span>Refer & Earn Commission (L1·L2·L3)</span>
             {mlmData.unclaimedCommission > 0 && (
               <span className="px-1.5 py-0.2 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-black">
                 ₹{mlmData.unclaimedCommission}
@@ -224,7 +224,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
           <div className="p-3.5 rounded-2xl bg-slate-950 border border-amber-500/30 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between">
               <div>
-                <span className="text-[10px] text-slate-500 block uppercase font-bold">Your Partner Code</span>
+                <span className="text-[10px] text-slate-500 block uppercase font-bold">Your Refer Code</span>
                 <span className="font-mono font-black text-amber-300 text-base tracking-wider">
                   {referralCode}
                 </span>
@@ -240,7 +240,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
 
             <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between">
               <div className="truncate mr-2">
-                <span className="text-[10px] text-slate-500 block uppercase font-bold">3-Tier Affiliate Link</span>
+                <span className="text-[10px] text-slate-500 block uppercase font-bold">Refer & Earn Invite Link</span>
                 <span className="font-mono text-xs text-slate-300 truncate block">{shareUrl}</span>
               </div>
               <button
@@ -255,13 +255,13 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
 
           {activeTab === 'mlm_hub' ? (
             <>
-              {/* 1. UNCLAIMED MLM COMMISSION VAULT & INSTANT WALLET WITHDRAWAL */}
+              {/* 1. UNCLAIMED REFER & EARN COMMISSION VAULT & INSTANT WALLET WITHDRAWAL */}
               <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-950 via-slate-950 to-emerald-950/60 border-2 border-emerald-500/40 shadow-xl space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <div className="flex items-center space-x-2">
                       <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-black uppercase">
-                        Real-Time Affiliate Vault
+                        Refer & Earn Reward Vault
                       </span>
                       <span className="text-[10px] text-slate-400 font-mono">
                         Today: +₹{mlmData.todayCommission.toFixed(2)}
@@ -382,13 +382,13 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                 </div>
               </div>
 
-              {/* 3. INTERACTIVE MLM PASSIVE INCOME CALCULATOR */}
+              {/* 3. INTERACTIVE REFER & EARN PASSIVE INCOME CALCULATOR */}
               <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
                     <Calculator className="w-4 h-4 text-amber-400" />
                     <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-                      3-Tier Affiliate Passive Income Estimator
+                      Refer & Earn Passive Income Estimator
                     </h4>
                   </div>
                   <span className="text-[10px] text-emerald-400 font-mono font-bold">
@@ -442,7 +442,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center space-x-1.5">
                     <Users className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Downline Affiliate Network ({filteredMembers.length})</span>
+                    <span>Refer & Earn Team Network ({filteredMembers.length})</span>
                   </h4>
                   <div className="flex gap-1">
                     {(['all', 1, 2, 3] as const).map((tier) => (
@@ -806,7 +806,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
 
         {/* Footer */}
         <div className="p-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400 shrink-0">
-          <span>3-Tier MLM Commission (1% · 0.5% · 0.25%) + Direct Referral Ledger</span>
+          <span>Refer & Earn Commission (1% · 0.5% · 0.25%) + Direct Referral Ledger</span>
           <button
             onClick={onClose}
             className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold"

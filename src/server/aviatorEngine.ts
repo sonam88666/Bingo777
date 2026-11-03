@@ -43,6 +43,12 @@ export class ServerAviatorEngine {
     maxPayoutPerBet: 500000,
     maxMultiplierCap: 50,
     streakBreakerEnabled: true,
+    oneXTrendEnabled: true,
+    oneXProbabilityPercent: 82,
+    highFlowMaxMultiplier: 12,
+    trendWaveMode: 'AUTO_WAVE',
+    trendSequenceQueue: [],
+    trendNudgeOffset: 0,
     waitingDurationMs: 5000,
     crashedDisplayMs: 3500,
     allowAutoCashout: true,
@@ -83,17 +89,25 @@ export class ServerAviatorEngine {
 
   private seedInitialHistory() {
     const now = Date.now();
+    let prevCrash = 1.45;
     for (let i = 20; i >= 1; i--) {
       const rNum = this.roundCounter++;
       const seed = this.generateCryptoSeed();
       const { crashMultiplier, serverSeedHash, hmacHash } = computeProvablyFairCrash({
         serverSeed: seed,
-        clientSeed: this.config.clientSeed,
+        clientSeed: this.config.clientSeed || 'bingo777_aviator_live_v2',
         roundNumber: rNum,
         nonce: rNum,
         rtpPercent: this.config.rtpPercent,
-        maxMultiplierCap: this.config.maxMultiplierCap
+        maxMultiplierCap: this.config.maxMultiplierCap,
+        previousCrashMultiplier: prevCrash,
+        streakBreakerEnabled: this.config.streakBreakerEnabled !== false,
+        oneXTrendEnabled: this.config.oneXTrendEnabled !== false,
+        oneXProbabilityPercent: this.config.oneXProbabilityPercent ?? 82,
+        highFlowMaxMultiplier: this.config.highFlowMaxMultiplier ?? 12,
+        trendWaveMode: this.config.trendWaveMode ?? 'AUTO_WAVE'
       });
+      prevCrash = crashMultiplier;
       this.pastCrashes.unshift(crashMultiplier);
       this.roundHistory.unshift({
         roundId: `av_${rNum}`,
@@ -101,7 +115,7 @@ export class ServerAviatorEngine {
         crashMultiplier,
         serverSeedHash,
         serverSeed: seed,
-        clientSeed: this.config.clientSeed,
+        clientSeed: this.config.clientSeed || 'bingo777_aviator_live_v2',
         nonce: rNum,
         hmacHash,
         rtpPercent: this.config.rtpPercent,
@@ -123,25 +137,44 @@ export class ServerAviatorEngine {
     const roundId = `av_${rNum}_${now.toString(36).slice(-4)}`;
     this.currentServerSeed = this.generateCryptoSeed();
 
-    const prevCrash = this.pastCrashes[0] || 1.5;
+    const prevCrash = this.pastCrashes[0] || 1.45;
     const pf = computeProvablyFairCrash({
       serverSeed: this.currentServerSeed,
-      clientSeed: this.config.clientSeed,
+      clientSeed: this.config.clientSeed || 'bingo777_aviator_live_v2',
       roundNumber: rNum,
       nonce: rNum,
       rtpPercent: this.config.rtpPercent,
       maxMultiplierCap: this.config.maxMultiplierCap,
       previousCrashMultiplier: prevCrash,
-      streakBreakerEnabled: (this.config as any).streakBreakerEnabled !== false
+      streakBreakerEnabled: this.config.streakBreakerEnabled !== false,
+      oneXTrendEnabled: this.config.oneXTrendEnabled !== false,
+      oneXProbabilityPercent: this.config.oneXProbabilityPercent ?? 82,
+      highFlowMaxMultiplier: this.config.highFlowMaxMultiplier ?? 12,
+      trendWaveMode: this.config.trendWaveMode ?? 'AUTO_WAVE',
+      trendNudgeOffset: this.config.trendNudgeOffset ?? 0
     });
 
     const maxCap = Math.max(2, Number(this.config.maxMultiplierCap) || 50);
+    let queuedCrash: number | null = null;
+    if (
+      (this.nextRoundOverride === null || this.nextRoundOverride === undefined) &&
+      Array.isArray(this.config.trendSequenceQueue) &&
+      this.config.trendSequenceQueue.length > 0
+    ) {
+      const nextInQueue = this.config.trendSequenceQueue.shift();
+      if (typeof nextInQueue === 'number' && Number.isFinite(nextInQueue) && nextInQueue >= 1.0) {
+        queuedCrash = Math.min(maxCap, Math.floor(nextInQueue * 100) / 100);
+      }
+    }
+
     const finalCrash =
       this.nextRoundOverride !== null && Number.isFinite(this.nextRoundOverride) && this.nextRoundOverride >= 1.0
         ? Math.floor(this.nextRoundOverride * 100) / 100
+        : queuedCrash !== null
+        ? queuedCrash
         : Math.min(maxCap, pf.crashMultiplier);
 
-    const usedOverride = this.nextRoundOverride;
+    const usedOverride = this.nextRoundOverride ?? queuedCrash;
     this.nextRoundOverride = null;
     this.config.nextCrashOverride = null;
 
@@ -623,7 +656,33 @@ export class ServerAviatorEngine {
           this.config.maxMultiplierCap = cfgPayload.maxMultiplierCap;
         }
         if (typeof cfgPayload.streakBreakerEnabled === 'boolean') {
-          (this.config as any).streakBreakerEnabled = cfgPayload.streakBreakerEnabled;
+          this.config.streakBreakerEnabled = cfgPayload.streakBreakerEnabled;
+        }
+        if (typeof cfgPayload.oneXTrendEnabled === 'boolean') {
+          this.config.oneXTrendEnabled = cfgPayload.oneXTrendEnabled;
+        }
+        if (typeof cfgPayload.oneXProbabilityPercent === 'number' && cfgPayload.oneXProbabilityPercent >= 55 && cfgPayload.oneXProbabilityPercent <= 96) {
+          this.config.oneXProbabilityPercent = cfgPayload.oneXProbabilityPercent;
+        }
+        if (typeof cfgPayload.highFlowMaxMultiplier === 'number' && cfgPayload.highFlowMaxMultiplier >= 3) {
+          this.config.highFlowMaxMultiplier = cfgPayload.highFlowMaxMultiplier;
+        }
+        if (
+          cfgPayload.trendWaveMode === 'AUTO_WAVE' ||
+          cfgPayload.trendWaveMode === 'LONG_1X' ||
+          cfgPayload.trendWaveMode === 'SHORT_1X' ||
+          cfgPayload.trendWaveMode === 'MIX'
+        ) {
+          this.config.trendWaveMode = cfgPayload.trendWaveMode;
+        }
+        if (Array.isArray(cfgPayload.trendSequenceQueue)) {
+          this.config.trendSequenceQueue = cfgPayload.trendSequenceQueue
+            .map((v: unknown) => Math.floor(Number(v) * 100) / 100)
+            .filter((v: number) => Number.isFinite(v) && v >= 1.0)
+            .slice(0, 24);
+        }
+        if (typeof cfgPayload.trendNudgeOffset === 'number' && Number.isFinite(cfgPayload.trendNudgeOffset)) {
+          this.config.trendNudgeOffset = Math.floor(cfgPayload.trendNudgeOffset);
         }
         if (typeof cfgPayload.waitingDurationMs === 'number' && cfgPayload.waitingDurationMs >= 3000 && cfgPayload.waitingDurationMs <= 15000) {
           this.config.waitingDurationMs = cfgPayload.waitingDurationMs;
@@ -645,6 +704,42 @@ export class ServerAviatorEngine {
         }
         this.config.updatedAt = Date.now();
         this.config.updatedBy = adminId;
+        // Recompute waiting round multiplier if not manually overridden
+        if (this.currentRound && this.currentRound.status === 'waiting') {
+          const queueHead =
+            Array.isArray(this.config.trendSequenceQueue) &&
+            this.config.trendSequenceQueue.length > 0 &&
+            Number.isFinite(this.config.trendSequenceQueue[0]) &&
+            this.config.trendSequenceQueue[0] >= 1.0
+              ? Math.floor(this.config.trendSequenceQueue[0] * 100) / 100
+              : null;
+
+          if (queueHead !== null && this.nextRoundOverride === null) {
+            this.currentRound.crashMultiplier = Math.min(
+              Math.max(2, Number(this.config.maxMultiplierCap) || 50),
+              queueHead
+            );
+            this.roundFlightDurationMs = computeFlightDurationMsForMultiplier(this.currentRound.crashMultiplier);
+          } else if (this.currentRound.manualCrashOverride === null) {
+            const pf = computeProvablyFairCrash({
+              serverSeed: this.currentServerSeed,
+              clientSeed: this.config.clientSeed || 'bingo777_aviator_live_v2',
+              roundNumber: this.currentRound.roundNumber || this.roundCounter,
+              nonce: this.currentRound.nonce || this.roundCounter,
+              rtpPercent: this.config.rtpPercent,
+              maxMultiplierCap: this.config.maxMultiplierCap,
+              previousCrashMultiplier: this.pastCrashes[0] || 1.45,
+              streakBreakerEnabled: this.config.streakBreakerEnabled !== false,
+              oneXTrendEnabled: this.config.oneXTrendEnabled !== false,
+              oneXProbabilityPercent: this.config.oneXProbabilityPercent ?? 82,
+              highFlowMaxMultiplier: this.config.highFlowMaxMultiplier ?? 12,
+              trendWaveMode: this.config.trendWaveMode ?? 'AUTO_WAVE',
+              trendNudgeOffset: this.config.trendNudgeOffset ?? 0
+            });
+            this.currentRound.crashMultiplier = pf.crashMultiplier;
+            this.roundFlightDurationMs = computeFlightDurationMsForMultiplier(pf.crashMultiplier);
+          }
+        }
       } else if (action === 'toggle_pause') {
         const pausedVal = typeof body.paused === 'boolean' ? body.paused : Boolean(payload?.paused);
         this.config.paused = pausedVal;
@@ -667,7 +762,12 @@ export class ServerAviatorEngine {
               roundNumber: this.currentRound.roundNumber || this.roundCounter,
               nonce: this.currentRound.nonce || this.roundCounter,
               rtpPercent: this.config.rtpPercent,
-              maxMultiplierCap: this.config.maxMultiplierCap
+              maxMultiplierCap: this.config.maxMultiplierCap,
+              previousCrashMultiplier: this.pastCrashes[0] || 1.45,
+              streakBreakerEnabled: this.config.streakBreakerEnabled !== false,
+              oneXTrendEnabled: this.config.oneXTrendEnabled !== false,
+              oneXProbabilityPercent: this.config.oneXProbabilityPercent ?? 82,
+              highFlowMaxMultiplier: this.config.highFlowMaxMultiplier ?? 12
             });
             this.currentRound.crashMultiplier = pf.crashMultiplier;
             this.currentRound.manualCrashOverride = null;

@@ -180,6 +180,187 @@ export function generateSecureHexSeed(byteLength: number = 32): string {
  * - rtpPercent: target return-to-player (default 97%)
  * - maxMultiplierCap: maximum cap (default 1000x)
  */
+export type AviatorTrendWave = 'LONG_1X' | 'SHORT_1X' | 'MIX';
+
+/**
+ * Deterministically resolves which Trend Wave is active for a given round number
+ * when trendWaveMode is 'AUTO_WAVE' (alternating Long 1x, Short 1x, and Mix waves).
+ */
+export function resolveAviatorTrendWave(
+  roundNumber: number,
+  clientSeed: string = 'bingo777-public-aviator-seed-v1',
+  configuredMode?: 'AUTO_WAVE' | 'LONG_1X' | 'SHORT_1X' | 'MIX',
+  nudgeOffset: number = 0
+): { activeWave: AviatorTrendWave; stepInWave: number; waveLength: number } {
+  const safeOffset = Number.isFinite(nudgeOffset) ? Math.floor(nudgeOffset) : 0;
+  const safeRound = Math.max(1, Math.floor((Number(roundNumber) || 1) + safeOffset));
+  const waveBlock = Math.floor(safeRound / 6);
+  const stepInWave = ((safeRound % 6) + 6) % 6;
+
+  if (configuredMode === 'LONG_1X' || configuredMode === 'SHORT_1X' || configuredMode === 'MIX') {
+    return { activeWave: configuredMode, stepInWave, waveLength: 6 };
+  }
+
+  const waveHash = sha256Hex(`${clientSeed}:trend_wave:${waveBlock}`);
+  const waveSelector = parseInt(waveHash.slice(0, 8), 16) / 0xffffffff;
+
+  // 40% Long 1x Trend ("Lamba Trend"), 30% Short 1x Trend ("Short Trend"), 30% Mix Trend ("Mix Chalega")
+  let activeWave: AviatorTrendWave = 'MIX';
+  if (waveSelector < 0.40) {
+    activeWave = 'LONG_1X';
+  } else if (waveSelector < 0.70) {
+    activeWave = 'SHORT_1X';
+  } else {
+    activeWave = 'MIX';
+  }
+
+  return { activeWave, stepInWave, waveLength: 6 };
+}
+
+export function classifyAviatorColorTier(multiplier: number): {
+  colorTier: 'BLUE_1X' | 'PURPLE_MID' | 'PINK_HIGH';
+  colorLabel: string;
+  numberBandLabel: string;
+} {
+  const m = Math.max(1.0, Number(multiplier) || 1.0);
+  if (m < 2.0) {
+    return {
+      colorTier: 'BLUE_1X',
+      colorLabel: 'Blue 1x',
+      numberBandLabel: '1.00x–1.99x'
+    };
+  }
+  if (m < 10.0) {
+    return {
+      colorTier: 'PURPLE_MID',
+      colorLabel: 'Purple 2x–9x',
+      numberBandLabel: '2.00x–9.99x'
+    };
+  }
+  return {
+    colorTier: 'PINK_HIGH',
+    colorLabel: 'Pink 10x+',
+    numberBandLabel: '10.00x+'
+  };
+}
+
+export function forecastUpcomingAviatorTrends(options: {
+  baseRoundNumber: number;
+  count?: number;
+  clientSeed?: string;
+  rtpPercent?: number;
+  maxMultiplierCap?: number;
+  lastCrashMultiplier?: number;
+  streakBreakerEnabled?: boolean;
+  oneXTrendEnabled?: boolean;
+  oneXProbabilityPercent?: number;
+  highFlowMaxMultiplier?: number;
+  trendWaveMode?: 'AUTO_WAVE' | 'LONG_1X' | 'SHORT_1X' | 'MIX';
+  trendNudgeOffset?: number;
+  nextCrashOverride?: number | null;
+  trendSequenceQueue?: number[];
+}): Array<{
+  stepOffset: number;
+  roundNumber: number;
+  predictedMultiplier: number;
+  colorTier: 'BLUE_1X' | 'PURPLE_MID' | 'PINK_HIGH';
+  colorLabel: string;
+  numberBandLabel: string;
+  activeWave: AviatorTrendWave;
+  stepInWave: number;
+  source: 'OVERRIDE_NEXT' | 'QUEUED_SEQUENCE' | 'STREAK_BREAKER' | 'WAVE_FORECAST';
+}> {
+  const count = Math.min(24, Math.max(1, options.count || 12));
+  const baseRound = Math.max(1, Math.floor(Number(options.baseRoundNumber) || 1001));
+  const clientSeed = options.clientSeed || 'bingo777_aviator_live_v2';
+  const maxCap = Math.max(2, Number(options.maxMultiplierCap) || 50);
+  const nudgeOffset = Number(options.trendNudgeOffset) || 0;
+  const queue = Array.isArray(options.trendSequenceQueue) ? options.trendSequenceQueue : [];
+  let prevCrash = Number(options.lastCrashMultiplier) || 1.45;
+
+  const nodes: Array<{
+    stepOffset: number;
+    roundNumber: number;
+    predictedMultiplier: number;
+    colorTier: 'BLUE_1X' | 'PURPLE_MID' | 'PINK_HIGH';
+    colorLabel: string;
+    numberBandLabel: string;
+    activeWave: AviatorTrendWave;
+    stepInWave: number;
+    source: 'OVERRIDE_NEXT' | 'QUEUED_SEQUENCE' | 'STREAK_BREAKER' | 'WAVE_FORECAST';
+  }> = [];
+
+  for (let i = 0; i < count; i++) {
+    const rNum = baseRound + i;
+    const { activeWave, stepInWave } = resolveAviatorTrendWave(
+      rNum,
+      clientSeed,
+      options.trendWaveMode ?? 'AUTO_WAVE',
+      nudgeOffset
+    );
+
+    let mult = 1.45;
+    let source: 'OVERRIDE_NEXT' | 'QUEUED_SEQUENCE' | 'STREAK_BREAKER' | 'WAVE_FORECAST' = 'WAVE_FORECAST';
+
+    if (
+      i === 0 &&
+      options.nextCrashOverride !== null &&
+      options.nextCrashOverride !== undefined &&
+      Number.isFinite(Number(options.nextCrashOverride)) &&
+      Number(options.nextCrashOverride) >= 1.0
+    ) {
+      mult = Math.min(maxCap, Math.floor(Number(options.nextCrashOverride) * 100) / 100);
+      source = 'OVERRIDE_NEXT';
+    } else if (
+      i < queue.length &&
+      typeof queue[i] === 'number' &&
+      Number.isFinite(queue[i]) &&
+      queue[i] >= 1.0
+    ) {
+      mult = Math.min(maxCap, Math.floor(queue[i] * 100) / 100);
+      source = 'QUEUED_SEQUENCE';
+    } else {
+      // Deterministic forecast seed derived from clientSeed + roundNumber + nudgeOffset
+      const forecastSeed = sha256Hex(`aviator_forecast:${clientSeed}:${rNum}:${nudgeOffset}`);
+      const pf = computeProvablyFairCrash({
+        serverSeed: forecastSeed,
+        clientSeed,
+        roundNumber: rNum,
+        nonce: rNum,
+        rtpPercent: options.rtpPercent ?? 95,
+        maxMultiplierCap: maxCap,
+        previousCrashMultiplier: prevCrash,
+        streakBreakerEnabled: options.streakBreakerEnabled !== false,
+        oneXTrendEnabled: options.oneXTrendEnabled !== false,
+        oneXProbabilityPercent: options.oneXProbabilityPercent ?? 82,
+        highFlowMaxMultiplier: options.highFlowMaxMultiplier ?? 12,
+        trendWaveMode: options.trendWaveMode ?? 'AUTO_WAVE',
+        trendNudgeOffset: nudgeOffset
+      });
+      mult = Math.min(maxCap, pf.crashMultiplier);
+      if (options.streakBreakerEnabled !== false && prevCrash > 10.0) {
+        source = 'STREAK_BREAKER';
+      }
+    }
+
+    prevCrash = mult;
+    const tierInfo = classifyAviatorColorTier(mult);
+    nodes.push({
+      stepOffset: i + 1,
+      roundNumber: rNum,
+      predictedMultiplier: mult,
+      colorTier: tierInfo.colorTier,
+      colorLabel: tierInfo.colorLabel,
+      numberBandLabel: tierInfo.numberBandLabel,
+      activeWave,
+      stepInWave,
+      source
+    });
+  }
+
+  return nodes;
+}
+
 export function computeProvablyFairCrash(
   paramsOrServerSeed:
     | {
@@ -191,6 +372,11 @@ export function computeProvablyFairCrash(
         maxMultiplierCap?: number;
         previousCrashMultiplier?: number;
         streakBreakerEnabled?: boolean;
+        oneXTrendEnabled?: boolean;
+        oneXProbabilityPercent?: number;
+        highFlowMaxMultiplier?: number;
+        trendWaveMode?: 'AUTO_WAVE' | 'LONG_1X' | 'SHORT_1X' | 'MIX';
+        trendNudgeOffset?: number;
       }
     | string,
   clientSeedArg?: string,
@@ -198,12 +384,18 @@ export function computeProvablyFairCrash(
   rtpPercentArg?: number,
   maxMultiplierCapArg?: number,
   previousCrashArg?: number,
-  streakBreakerArg?: boolean
+  streakBreakerArg?: boolean,
+  oneXTrendEnabledArg?: boolean,
+  oneXProbabilityPercentArg?: number,
+  highFlowMaxMultiplierArg?: number,
+  trendWaveModeArg?: 'AUTO_WAVE' | 'LONG_1X' | 'SHORT_1X' | 'MIX',
+  trendNudgeOffsetArg?: number
 ): {
   crashMultiplier: number;
   serverSeedHash: string;
   hmacHash: string;
   hmacHex: string;
+  activeWave?: AviatorTrendWave;
 } {
   const params =
     typeof paramsOrServerSeed === 'string'
@@ -215,12 +407,22 @@ export function computeProvablyFairCrash(
           rtpPercent: rtpPercentArg ?? 95,
           maxMultiplierCap: maxMultiplierCapArg ?? 50,
           previousCrashMultiplier: previousCrashArg,
-          streakBreakerEnabled: streakBreakerArg ?? true
+          streakBreakerEnabled: streakBreakerArg ?? true,
+          oneXTrendEnabled: oneXTrendEnabledArg ?? true,
+          oneXProbabilityPercent: oneXProbabilityPercentArg ?? 82,
+          highFlowMaxMultiplier: highFlowMaxMultiplierArg ?? 12,
+          trendWaveMode: trendWaveModeArg ?? 'AUTO_WAVE',
+          trendNudgeOffset: trendNudgeOffsetArg ?? 0
         }
       : {
           ...paramsOrServerSeed,
           roundNumber: paramsOrServerSeed.roundNumber ?? paramsOrServerSeed.nonce,
-          streakBreakerEnabled: paramsOrServerSeed.streakBreakerEnabled ?? true
+          streakBreakerEnabled: paramsOrServerSeed.streakBreakerEnabled ?? true,
+          oneXTrendEnabled: paramsOrServerSeed.oneXTrendEnabled ?? true,
+          oneXProbabilityPercent: paramsOrServerSeed.oneXProbabilityPercent ?? 82,
+          highFlowMaxMultiplier: paramsOrServerSeed.highFlowMaxMultiplier ?? 12,
+          trendWaveMode: paramsOrServerSeed.trendWaveMode ?? 'AUTO_WAVE',
+          trendNudgeOffset: paramsOrServerSeed.trendNudgeOffset ?? 0
         };
 
   const rtpPercent = Math.min(99, Math.max(85, Number(params.rtpPercent) || 95));
@@ -241,34 +443,145 @@ export function computeProvablyFairCrash(
   const int52b = parseInt(hex52b || '8000000000000', 16);
   const v = int52b / TWO_POW_52;
 
-  // Anti-Runaway Streak Breaker: if enabled and previous round crashed > 10.00x, force next crash below 2.50x
+  // Tertiary float w in [0, 1) from chars 26..39
+  const hex52c = hmacHash.slice(26, 39);
+  const int52c = parseInt(hex52c || '4000000000000', 16);
+  const w = int52c / TWO_POW_52;
+
+  const { activeWave, stepInWave } = resolveAviatorTrendWave(
+    params.roundNumber || params.nonce || 1,
+    params.clientSeed,
+    params.trendWaveMode,
+    params.trendNudgeOffset || 0
+  );
+
+  // Anti-Runaway Streak Breaker: if enabled and previous round crashed > 10.00x, force next crash below 1.95x
   if (
     params.streakBreakerEnabled &&
     typeof params.previousCrashMultiplier === 'number' &&
     params.previousCrashMultiplier > 10.0
   ) {
-    // 20% chance of 1.00x-1.20x bust, 80% chance of 1.21x-2.48x low crash
     const forcedMult =
-      u < 0.20
+      u < 0.25
         ? u < 0.08
           ? 1.00
-          : Math.floor((1.01 + v * 0.19) * 100) / 100
-        : Math.floor((1.21 + v * 1.27) * 100) / 100;
-    const cappedForced = Math.max(1.00, Math.min(2.49, Math.min(maxCap, forcedMult)));
+          : Math.floor((1.01 + v * 0.20) * 100) / 100
+        : Math.floor((1.21 + v * 0.72) * 100) / 100;
+    const cappedForced = Math.max(1.00, Math.min(1.95, Math.min(maxCap, forcedMult)));
     return {
       crashMultiplier: cappedForced,
       serverSeedHash,
       hmacHash,
-      hmacHex: hmacHash
+      hmacHex: hmacHash,
+      activeWave
     };
   }
 
-  // 5-Tier Realistic Probability Distribution calibrated to targetRtp (default 95%):
-  // - Tier 1: Instant bust (1.00x - 1.20x): ~10% probability (~4% exact 1.00x)
-  // - Tier 2: Common low (1.21x - 2.00x): ~45% probability (cumulative 0.10 -> 0.55)
-  // - Tier 3: Medium (2.01x - 5.00x): ~30% probability (cumulative 0.55 -> 0.85)
-  // - Tier 4: High (5.01x - 15.00x): ~12% probability (cumulative 0.85 -> 0.97)
-  // - Tier 5: Rare super-high (15.01x+): capped at ~3% probability (0.97 -> 1.00) and never exceeding maxMultiplierCap
+  // Dynamic Multi-Wave Trend Engine:
+  // "Kabhi kabhi thoda lamba trend chalaye, kabhi kabhi short trend chalaye, kabhi mix chalega"
+  if (params.oneXTrendEnabled !== false) {
+    const baseOneXProb = Math.min(0.96, Math.max(0.55, (Number(params.oneXProbabilityPercent) || 82) / 100));
+    const flowCap = Math.min(maxCap, Math.max(3.0, Number(params.highFlowMaxMultiplier) || 12));
+    const prevWasFlow =
+      typeof params.previousCrashMultiplier === 'number' && params.previousCrashMultiplier >= 2.0;
+
+    let shouldStayInOneX = true;
+
+    if (activeWave === 'LONG_1X') {
+      // LAMBA TREND (Long 1x Streak):
+      // Steps 0..4 (5 consecutive rounds) stay in 1.00x–1.98x (~95% chance),
+      // and Step 5 (end of wave) releases an occasional 2.05x–flowCap flight (~72% chance)
+      if (stepInWave < 5) {
+        shouldStayInOneX = u < Math.max(0.94, baseOneXProb);
+      } else {
+        shouldStayInOneX = u < 0.28;
+      }
+    } else if (activeWave === 'SHORT_1X') {
+      // SHORT TREND (Brief 1–2 round 1x pauses then quick flow):
+      // Steps 0, 1 are 1x; Step 2 flows (2x+); Steps 3, 4 are 1x; Step 5 flows (2x+)
+      if (stepInWave === 2 || stepInWave === 5) {
+        // Flow slot in short trend (~78% chance to flow 2.00x+)
+        shouldStayInOneX = u < 0.22;
+      } else {
+        // Short 1–2 round 1x pause (~92% chance to stay 1x)
+        shouldStayInOneX = prevWasFlow ? u < 0.96 : u < Math.max(0.88, baseOneXProb);
+      }
+    } else {
+      // MIX TREND ("Kabhi mix chalega"):
+      // Balanced unpredictable mix (~56% 1x, ~44% flow) where back-to-back 2x+ flights
+      // can occasionally happen (e.g. 1.35x -> 2.60x -> 3.20x -> 1.18x -> 2.15x)
+      const mixOneXThreshold = prevWasFlow ? 0.62 : 0.54;
+      shouldStayInOneX = u < mixOneXThreshold;
+    }
+
+    if (shouldStayInOneX) {
+      let oneXMult = 1.00;
+      if (w < 0.06) {
+        // Instant 1.00x bust
+        oneXMult = 1.00;
+      } else if (w < 0.24) {
+        // Early 1x crash: 1.01x - 1.24x
+        oneXMult = 1.01 + v * 0.23;
+      } else if (w < 0.68) {
+        // Core 1x trend: 1.25x - 1.64x
+        oneXMult = 1.25 + Math.pow(v, 1.05) * 0.39;
+      } else {
+        // Upper 1x trend: 1.65x - 1.98x
+        oneXMult = 1.65 + Math.pow(v, 1.15) * 0.33;
+      }
+      const cleanOneX = Math.max(1.00, Math.min(1.98, Math.floor(oneXMult * 100) / 100));
+      return {
+        crashMultiplier: Math.min(maxCap, cleanOneX),
+        serverSeedHash,
+        hmacHash,
+        hmacHex: hmacHash,
+        activeWave
+      };
+    }
+
+    // Flow round (2.00x up to flowCap / rare spike)
+    let flowMult = 2.05;
+    if (activeWave === 'SHORT_1X') {
+      // Short trend flows are mostly crisp medium flights (2.02x - 5.60x) with occasional higher spike
+      if (w < 0.80) {
+        flowMult = 2.02 + Math.pow(v, 1.2) * 3.48;
+      } else {
+        const midSpan = Math.max(1.0, flowCap - 4.5);
+        flowMult = 4.50 + Math.pow(v, 1.45) * midSpan;
+      }
+    } else if (activeWave === 'MIX') {
+      // Mix trend flows span 2.01x - 4.20x (68%) and 4.21x - flowCap (32%)
+      if (w < 0.68) {
+        flowMult = 2.01 + Math.pow(v, 1.2) * 2.19;
+      } else {
+        const mixSpan = Math.max(1.0, flowCap - 4.21);
+        flowMult = 4.21 + Math.pow(v, 1.5) * mixSpan;
+      }
+    } else {
+      // LONG_1X breakout flow: after a long 1x streak, rewards patience with 2.15x - flowCap+
+      if (w < 0.65) {
+        flowMult = 2.15 + Math.pow(v, 1.2) * 3.35;
+      } else if (w < 0.92) {
+        const midSpan = Math.max(1.0, flowCap - 5.5);
+        flowMult = 5.50 + Math.pow(v, 1.4) * midSpan;
+      } else {
+        const rareCeiling = Math.min(maxCap, Math.max(flowCap, flowCap * 1.8));
+        const rareSpan = Math.max(0.5, rareCeiling - flowCap);
+        flowMult = flowCap + Math.pow(v, 1.8) * rareSpan;
+      }
+    }
+
+    const cleanFlow = Math.max(2.00, Math.min(maxCap, Math.floor(flowMult * 100) / 100));
+    return {
+      crashMultiplier: cleanFlow,
+      serverSeedHash,
+      hmacHash,
+      hmacHex: hmacHash,
+      activeWave
+    };
+  }
+
+  // Standard 5-Tier Realistic Probability Distribution when 1x Trend Mode is turned OFF by Admin:
   let rawMultiplier = 1.00;
 
   if (u < 0.04) {

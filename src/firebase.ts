@@ -1,5 +1,18 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInAnonymously } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+  signInAnonymously,
+  setPersistence,
+  browserLocalPersistence,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  RecaptchaVerifier,
+  signInWithPhoneNumber
+} from 'firebase/auth';
 import {
   initializeFirestore,
   doc,
@@ -39,13 +52,38 @@ export const rtdb = firebaseConfig.databaseURL ? getDatabase(app, firebaseConfig
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
-// Automatically ensure an active Firebase Auth session exists and validate connection on boot
+// Single permanent device identifier stored in localStorage.getItem('BINGO_PERSISTENT_DEVICE_ID')
+// Generated once if it does not exist; never overwritten on refresh or logout.
+export function getPersistentDeviceId(): string {
+  if (typeof window === 'undefined') return 'dev_server_default';
+  try {
+    const existing = localStorage.getItem('BINGO_PERSISTENT_DEVICE_ID');
+    if (existing && existing.trim().length > 0) {
+      return existing.trim();
+    }
+    const legacy = localStorage.getItem('app_device_uuid') || localStorage.getItem('bingo777_client_device_id');
+    const generated =
+      legacy && legacy.startsWith('dev_')
+        ? legacy
+        : `dev_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 10)}`;
+    localStorage.setItem('BINGO_PERSISTENT_DEVICE_ID', generated);
+    localStorage.setItem('app_device_uuid', generated);
+    localStorage.setItem('bingo777_client_device_id', generated);
+    return generated;
+  } catch {
+    return 'dev_fallback_persistent';
+  }
+}
+
+// Configure Firebase Auth persistence immediately on initialization
 if (typeof window !== 'undefined') {
-  const initAndValidateConnection = async () => {
+  getPersistentDeviceId();
+  setPersistence(auth, browserLocalPersistence).catch((err) => {
+    console.warn('[Firebase] setPersistence warning:', err);
+  });
+
+  const validateConnection = async () => {
     try {
-      if (!auth.currentUser) {
-        await signInAnonymously(auth).catch(() => {});
-      }
       await getDocFromServer(doc(db, 'test', 'connection'));
     } catch (error) {
       if (error instanceof Error && error.message.includes('the client is offline')) {
@@ -53,7 +91,7 @@ if (typeof window !== 'undefined') {
       }
     }
   };
-  initAndValidateConnection();
+  validateConnection();
 }
 
 export enum OperationType {
@@ -114,6 +152,14 @@ export {
   serverTimestamp,
   signInWithPopup,
   signOut,
+  signInAnonymously,
+  setPersistence,
+  browserLocalPersistence,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
   rtdbRef,
   rtdbSet,
   rtdbGet,
@@ -126,3 +172,4 @@ export {
   rtdbQuery,
   rtdbLimitToLast
 };
+

@@ -77,11 +77,22 @@ export const AccountView: React.FC<AccountViewProps> = ({
     }
   };
 
-  // Persistent Audio Settings State from browser localStorage
+  // Persistent Audio Settings State from browser localStorage + Admin audio_config
   const [audioSettings, setAudioSettings] = useState<AudioSettingsState>(() => soundFx.getAudioSettings());
+  const [showCompactVolume, setShowCompactVolume] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [, setStoreTick] = useState(0);
 
-  const isAudioSettingsEnabled = store.isFeatureEnabled('audio_settings');
+  const adminSettings = store.getAdminSettings();
+  const adminAudioConfig = adminSettings.audio_config;
+  const isAudioSettingsEnabled =
+    store.isFeatureEnabled('audio_settings') &&
+    adminSettings.featureAudioSettings !== false &&
+    adminAudioConfig?.enabled !== false &&
+    adminAudioConfig?.allowUserAudioControls !== false;
+  const isSfxAllowedByAdmin = adminAudioConfig?.sfxAllowed !== false;
+  const isBgmAllowedByAdmin = adminAudioConfig?.bgmAllowed !== false;
+
   const isDepositHistoryEnabled = store.isFeatureEnabled('deposit_history');
   const isBetHistoryEnabled = store.isFeatureEnabled('bet_history');
   const isMlmAffiliateEnabled = store.isFeatureEnabled('mlm_affiliate') || store.isFeatureEnabled('referrals');
@@ -90,26 +101,48 @@ export const AccountView: React.FC<AccountViewProps> = ({
   const isAppUpdateModalEnabled = store.isFeatureEnabled('app_update_modal');
 
   useEffect(() => {
-    return soundFx.subscribe(() => {
+    const unsubSound = soundFx.subscribe(() => {
       setAudioSettings(soundFx.getAudioSettings());
     });
+    const unsubStore = store.subscribe(() => {
+      setStoreTick((t) => t + 1);
+      setAudioSettings(soundFx.getAudioSettings());
+    });
+    return () => {
+      unsubSound();
+      unsubStore();
+    };
   }, []);
 
   const handleToggleSfx = () => {
+    if (!isSfxAllowedByAdmin) {
+      showToast('Game sound effects are disabled by Admin', 'info');
+      return;
+    }
+    if (audioSettings.isMuted) {
+      soundFx.setMasterMuted(false);
+    }
     const next = !audioSettings.sfxEnabled;
     soundFx.setSfxEnabled(next);
-    showToast(next ? 'Game sound effects enabled' : 'Game sound effects disabled', 'info');
+    showToast(next ? 'SFX ON' : 'SFX OFF', 'info');
   };
 
   const handleToggleBgm = () => {
+    if (!isBgmAllowedByAdmin) {
+      showToast('Background music is disabled by Admin', 'info');
+      return;
+    }
+    if (audioSettings.isMuted) {
+      soundFx.setMasterMuted(false);
+    }
     const next = !audioSettings.bgmEnabled;
     soundFx.setBgmEnabled(next);
-    showToast(next ? 'Background music started' : 'Background music paused', 'info');
+    showToast(next ? 'Music ON' : 'Music OFF', 'info');
   };
 
   const handleToggleMasterMute = () => {
     const muted = soundFx.toggleMute();
-    showToast(muted ? 'All game audio muted' : 'Game audio unmuted', 'info');
+    showToast(muted ? 'Audio Muted' : 'Audio Unmuted', 'info');
   };
 
   const handleSfxVolumeChange = (vol: number) => {
@@ -119,8 +152,6 @@ export const AccountView: React.FC<AccountViewProps> = ({
   const handleBgmVolumeChange = (vol: number) => {
     soundFx.setBgmVolume(vol);
   };
-
-
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -133,7 +164,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
     : 0;
 
   return (
-    <div className="max-w-xl mx-auto px-3 sm:px-4 py-4 space-y-4">
+    <div className="max-w-xl mx-auto px-3 sm:px-4 py-4 space-y-3.5">
       {/* Profile Card Header */}
       <div className="rounded-3xl bg-gradient-to-r from-slate-900 via-amber-950/40 to-slate-900 border border-amber-500/30 p-5 shadow-2xl relative overflow-hidden">
         <div className="flex items-center space-x-3.5 relative z-10">
@@ -195,129 +226,98 @@ export const AccountView: React.FC<AccountViewProps> = ({
         </div>
       </div>
 
-      {/* Persistent Audio Settings Panel */}
+      {/* Compact Small-Icon Audio & Sound Bar (Admin Managed) */}
       {isAudioSettingsEnabled && (
-        <div className="rounded-3xl bg-slate-900 border border-slate-800 shadow-xl p-4 sm:p-5 space-y-4">
-          {/* Header */}
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800/80">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center shadow-inner">
-                <Volume2 className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex items-center space-x-2">
-                  <h4 className="font-brand font-bold text-slate-100 text-sm">
-                    Audio & Sound Settings
-                  </h4>
-                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-slate-800 border border-slate-700 text-slate-400 flex items-center space-x-1">
-                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
-                    <span>Saved Locally</span>
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Controls game sound effects and background music stored in your browser
-                </p>
-              </div>
-            </div>
-
-            {/* Master Silence Toggle */}
-            <button
-              type="button"
-              onClick={handleToggleMasterMute}
-              title={audioSettings.isMuted ? 'Unmute Master Audio' : 'Mute Master Audio'}
-              className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center space-x-1.5 transition active:scale-95 ${
-                audioSettings.isMuted
-                  ? 'bg-rose-500/15 border-rose-500/30 text-rose-300 hover:bg-rose-500/25'
-                  : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
-              }`}
-            >
-              {audioSettings.isMuted ? (
-                <>
-                  <VolumeX className="w-3.5 h-3.5 text-rose-400" />
-                  <span>Muted</span>
-                </>
-              ) : (
-                <>
-                  <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Sound ON</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          {/* Global Mute Alert if Muted */}
-          {audioSettings.isMuted && (
-            <div className="p-3 rounded-2xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <VolumeX className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>All game sounds and music are currently silenced.</span>
-              </div>
+        <div className="rounded-2xl bg-slate-900 border border-slate-800 shadow-lg px-3.5 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            {/* Compact Label + Master Sound Icon */}
+            <div className="flex items-center space-x-2 min-w-0">
               <button
                 type="button"
-                onClick={() => {
-                  soundFx.setMasterMuted(false);
-                  showToast('Audio unmuted', 'info');
-                }}
-                className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 hover:bg-amber-400 transition"
+                onClick={handleToggleMasterMute}
+                title={audioSettings.isMuted ? 'Unmute Sound' : 'Mute All Sound'}
+                className={`w-7 h-7 rounded-lg flex items-center justify-center border transition active:scale-95 shrink-0 ${
+                  audioSettings.isMuted
+                    ? 'bg-rose-500/15 border-rose-500/30 text-rose-400'
+                    : 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                }`}
               >
-                Unmute
+                {audioSettings.isMuted ? (
+                  <VolumeX className="w-3.5 h-3.5" />
+                ) : (
+                  <Volume2 className="w-3.5 h-3.5" />
+                )}
               </button>
+              <div className="min-w-0">
+                <span className="font-bold text-slate-200 text-xs block truncate">
+                  Sound & Music
+                </span>
+              </div>
             </div>
-          )}
 
-          <div className="space-y-3">
-            {/* 1. Game Sound Effects (SFX) Toggle & Slider */}
-            <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800/80 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center transition ${
-                    audioSettings.sfxEnabled && !audioSettings.isMuted
-                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                      : 'bg-slate-800 text-slate-500 border border-slate-700'
-                  }`}>
-                    <Sliders className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-slate-200 text-xs">
-                        Game Sound Effects (SFX)
-                      </span>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
-                        audioSettings.sfxEnabled
-                          ? 'bg-amber-500/20 text-amber-300'
-                          : 'bg-slate-800 text-slate-500'
-                      }`}>
-                        {audioSettings.sfxEnabled ? 'ACTIVE' : 'MUTED'}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400">
-                      Countdown ticks, win fanfare, bet chips, dice & card flips
-                    </p>
-                  </div>
-                </div>
-
-                {/* Interactive Toggle Switch */}
+            {/* Small Icon Toggle Buttons (SFX, BGM, Volume Popover) */}
+            <div className="flex items-center space-x-1.5 shrink-0">
+              {/* Small SFX Icon Button */}
+              {isSfxAllowedByAdmin && (
                 <button
                   type="button"
                   onClick={handleToggleSfx}
-                  role="switch"
-                  aria-checked={audioSettings.sfxEnabled}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    audioSettings.sfxEnabled ? 'bg-amber-500 shadow-md shadow-amber-500/30' : 'bg-slate-700'
+                  title="Toggle Game Sound Effects (SFX)"
+                  className={`h-7 px-2.5 rounded-lg border text-[10px] font-bold flex items-center space-x-1 transition active:scale-95 ${
+                    audioSettings.sfxEnabled && !audioSettings.isMuted
+                      ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                      : 'bg-slate-950 border-slate-800 text-slate-500'
                   }`}
                 >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-slate-950 shadow ring-0 transition duration-200 ease-in-out ${
-                      audioSettings.sfxEnabled ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
+                  {audioSettings.sfxEnabled && !audioSettings.isMuted ? (
+                    <Volume2 className="w-3 h-3 text-amber-400" />
+                  ) : (
+                    <VolumeX className="w-3 h-3 text-slate-500" />
+                  )}
+                  <span>SFX</span>
                 </button>
-              </div>
+              )}
 
-              {/* SFX Volume Slider & Test Sound */}
-              <div className="flex items-center space-x-3 pt-2 border-t border-slate-800/60">
-                <Volume1 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                <div className="flex-1 flex items-center space-x-2">
+              {/* Small BGM Icon Button */}
+              {isBgmAllowedByAdmin && (
+                <button
+                  type="button"
+                  onClick={handleToggleBgm}
+                  title="Toggle Background Music (BGM)"
+                  className={`h-7 px-2.5 rounded-lg border text-[10px] font-bold flex items-center space-x-1 transition active:scale-95 ${
+                    audioSettings.bgmEnabled && !audioSettings.isMuted
+                      ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                      : 'bg-slate-950 border-slate-800 text-slate-500'
+                  }`}
+                >
+                  <Music className={`w-3 h-3 ${audioSettings.bgmEnabled && !audioSettings.isMuted ? 'text-purple-400' : 'text-slate-500'}`} />
+                  <span>BGM</span>
+                </button>
+              )}
+
+              {/* Tiny Volume Mixer Icon Button */}
+              <button
+                type="button"
+                onClick={() => setShowCompactVolume(!showCompactVolume)}
+                title="Adjust Volume"
+                className={`w-7 h-7 rounded-lg border flex items-center justify-center transition active:scale-95 ${
+                  showCompactVolume
+                    ? 'bg-sky-500/20 border-sky-500/40 text-sky-300'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Sliders className="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+
+          {/* Optional Compact Volume Sliders (Only shown when user taps the tiny Sliders icon) */}
+          {showCompactVolume && (
+            <div className="mt-2.5 pt-2 border-t border-slate-800/80 grid grid-cols-2 gap-3 text-[10px]">
+              {isSfxAllowedByAdmin && (
+                <div className="flex items-center space-x-1.5">
+                  <Volume1 className="w-3 h-3 text-amber-400 shrink-0" />
+                  <span className="text-slate-400 font-semibold">SFX</span>
                   <input
                     type="range"
                     min="0.05"
@@ -325,72 +325,18 @@ export const AccountView: React.FC<AccountViewProps> = ({
                     step="0.05"
                     value={audioSettings.sfxVolume}
                     onChange={(e) => handleSfxVolumeChange(parseFloat(e.target.value))}
-                    disabled={!audioSettings.sfxEnabled}
-                    className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer disabled:opacity-40"
+                    disabled={!audioSettings.sfxEnabled || audioSettings.isMuted}
+                    className="w-full accent-amber-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer disabled:opacity-40"
                   />
-                  <span className="text-[10px] font-mono text-slate-400 w-8 text-right font-bold">
+                  <span className="font-mono text-slate-400 w-7 text-right">
                     {Math.round(audioSettings.sfxVolume * 100)}%
                   </span>
                 </div>
-
-              </div>
-            </div>
-
-            {/* 2. Background Music (BGM) Toggle & Slider */}
-            <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800/80 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center transition ${
-                    audioSettings.bgmEnabled && !audioSettings.isMuted
-                      ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                      : 'bg-slate-800 text-slate-500 border border-slate-700'
-                  }`}>
-                    <Music className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-slate-200 text-xs">
-                        Background Lounge Music (BGM)
-                      </span>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded flex items-center space-x-1 ${
-                        audioSettings.bgmEnabled && !audioSettings.isMuted
-                          ? 'bg-purple-500/20 text-purple-300'
-                          : 'bg-slate-800 text-slate-500'
-                      }`}>
-                        {audioSettings.bgmEnabled && !audioSettings.isMuted && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping inline-block" />
-                        )}
-                        <span>{audioSettings.bgmEnabled ? 'PLAYING' : 'OFF'}</span>
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400">
-                      Ambient casino lounge synthesizer chords in real-time
-                    </p>
-                  </div>
-                </div>
-
-                {/* Interactive Toggle Switch */}
-                <button
-                  type="button"
-                  onClick={handleToggleBgm}
-                  role="switch"
-                  aria-checked={audioSettings.bgmEnabled}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    audioSettings.bgmEnabled ? 'bg-purple-600 shadow-md shadow-purple-600/30' : 'bg-slate-700'
-                  }`}
-                >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-slate-950 shadow ring-0 transition duration-200 ease-in-out ${
-                      audioSettings.bgmEnabled ? 'translate-x-5' : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {/* BGM Volume Slider */}
-              <div className="flex items-center space-x-3 pt-2 border-t border-slate-800/60">
-                <Volume1 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                <div className="flex-1 flex items-center space-x-2">
+              )}
+              {isBgmAllowedByAdmin && (
+                <div className="flex items-center space-x-1.5">
+                  <Music className="w-3 h-3 text-purple-400 shrink-0" />
+                  <span className="text-slate-400 font-semibold">BGM</span>
                   <input
                     type="range"
                     min="0.05"
@@ -398,24 +344,16 @@ export const AccountView: React.FC<AccountViewProps> = ({
                     step="0.05"
                     value={audioSettings.bgmVolume}
                     onChange={(e) => handleBgmVolumeChange(parseFloat(e.target.value))}
-                    disabled={!audioSettings.bgmEnabled}
-                    className="w-full accent-purple-500 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer disabled:opacity-40"
+                    disabled={!audioSettings.bgmEnabled || audioSettings.isMuted}
+                    className="w-full accent-purple-500 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer disabled:opacity-40"
                   />
-                  <span className="text-[10px] font-mono text-slate-400 w-8 text-right font-bold">
+                  <span className="font-mono text-slate-400 w-7 text-right">
                     {Math.round(audioSettings.bgmVolume * 100)}%
                   </span>
                 </div>
-              </div>
+              )}
             </div>
-
-          </div>
-
-          {/* Local Storage Indicator Footer */}
-          <div className="pt-2 text-center">
-            <span className="text-[10px] text-slate-500 font-medium">
-              Preferences are saved to this device (browser state) and apply across all games.
-            </span>
-          </div>
+          )}
         </div>
       )}
 
@@ -463,7 +401,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
           </button>
         )}
 
-        {/* Refer & Earn + 3-Level MLM Affiliate Commission Program */}
+        {/* Refer & Earn Commission Program */}
         {isMlmAffiliateEnabled && (
           <button
             onClick={onOpenReferral}
@@ -476,13 +414,13 @@ export const AccountView: React.FC<AccountViewProps> = ({
               <div className="text-left">
                 <div className="flex items-center space-x-2">
                   <span className="font-bold text-slate-200 group-hover:text-amber-300 block">
-                    MLM Affiliate & Refer (₹120 + 3-Tier Commission)
+                    Refer & Earn (₹120 + 3-Tier Commission)
                   </span>
                   <span className="px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300 text-[9px] font-black uppercase">
-                    L1 · L2 · L3
+                    REFER & EARN
                   </span>
                 </div>
-                <span className="text-[11px] text-slate-500">Earn 1% / 0.5% / 0.25% downline turnover commission & ₹120 bonuses</span>
+                <span className="text-[11px] text-slate-500">Invite friends & earn ₹120 cash bonus + 1% / 0.5% / 0.25% team rewards</span>
               </div>
             </div>
             <ChevronRight className="w-4 h-4 text-indigo-400 group-hover:translate-x-0.5 transition" />

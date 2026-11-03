@@ -7,9 +7,12 @@ export interface UserRecord {
   uid: string;
   phone: string;
   username: string;
+  name?: string;
   balance: number;
+  wallet?: number;
   vipLevel: number;
   status: 'active' | 'suspended' | 'banned' | 'deactivated' | 'blocked';
+  isBanned?: boolean;
   isBlocked?: boolean;
   blockedReason?: string;
   blockedAt?: number;
@@ -22,8 +25,14 @@ export interface UserRecord {
   totalLostAmount: number;
   totalDeposited?: number;
   totalWithdrawn?: number;
+  totalDeposit?: number;
+  totalWithdraw?: number;
   devices: Record<string, DeviceRecord>;
-  role?: 'user' | 'master_admin';
+  boundDeviceId?: string | null;
+  lastUsedDeviceId?: string;
+  registrationDeviceId?: string;
+  role?: 'user' | 'admin' | 'master_admin';
+  isAdmin?: boolean;
   referralCode: string;
   referredBy?: string;
   referredByCode?: string;
@@ -169,8 +178,28 @@ export interface AviatorEngineConfig {
   autoCashoutAllowed?: boolean;
   dualBetStationsAllowed?: boolean;
   streakBreakerEnabled?: boolean;
+  oneXTrendEnabled?: boolean;
+  oneXProbabilityPercent?: number;
+  highFlowMaxMultiplier?: number;
+  trendWaveMode?: 'AUTO_WAVE' | 'LONG_1X' | 'SHORT_1X' | 'MIX';
+  trendSequenceQueue?: number[];
+  trendNudgeOffset?: number;
   forceCrashNow?: boolean;
   gameEnabled?: boolean;
+}
+
+export type AviatorColorTier = 'BLUE_1X' | 'PURPLE_MID' | 'PINK_HIGH';
+
+export interface AviatorUpcomingTrendNode {
+  stepOffset: number; // 1 = next round, 2 = +2 round, etc.
+  roundNumber: number;
+  predictedMultiplier: number;
+  colorTier: AviatorColorTier;
+  colorLabel: string;
+  numberBandLabel: string;
+  activeWave: 'LONG_1X' | 'SHORT_1X' | 'MIX';
+  stepInWave: number;
+  source: 'OVERRIDE_NEXT' | 'QUEUED_SEQUENCE' | 'STREAK_BREAKER' | 'WAVE_FORECAST';
 }
 
 export interface AviatorRoundHistoryItem {
@@ -539,6 +568,7 @@ export interface AdminSettings {
   featureFirstDepositBonus?: boolean;
   featureLiveChat?: boolean;
   featureDeviceApproval?: boolean;
+  featureAudioSettings?: boolean;
   roundDurationSeconds?: number;
   upiId?: string;
   upiMerchantName?: string;
@@ -567,11 +597,42 @@ export interface AdminSettings {
   apkForceUpdatePrompt?: boolean;
   // Live Admin Ads & App Update Popup System (/admin_settings/app_popup)
   app_popup?: AppPopupConfig;
-  // Global Authentication & OTP Configuration (/admin_settings/auth_config)
+  // Global Authentication & Signup/Login Page Configuration (/admin_settings/auth_config)
   auth_config?: AuthConfig;
+  // Real-Time Currency Converter Configuration (/admin_settings/currency_config)
+  currency_config?: CurrencyConverterConfig;
   // Official Telegram Support Configuration (/admin_settings/telegram_support)
   telegram_support?: TelegramSupportConfig;
+  // Audio & Sound System Configuration (/admin_settings/audio_config)
+  audio_config?: AudioSystemConfig;
   updatedAt?: number;
+}
+
+export interface AudioSystemConfig {
+  enabled: boolean;
+  allowUserAudioControls: boolean;
+  sfxAllowed: boolean;
+  bgmAllowed: boolean;
+  defaultSfxEnabled: boolean;
+  defaultBgmEnabled: boolean;
+  defaultSfxVolume: number;
+  defaultBgmVolume: number;
+  updatedAt?: number;
+  updatedBy?: string;
+}
+
+export interface CurrencyConverterConfig {
+  enabled: boolean;
+  defaultCurrency: string;
+  rateMode: 'live_api' | 'custom_manual';
+  rateAdjustmentPercent: number;
+  enabledCurrencies: string[];
+  customRatesFromInr: Record<string, number>;
+  showInWalletDashboard: boolean;
+  showBreakdownConversion: boolean;
+  allowUserCurrencySwitch: boolean;
+  updatedAt?: number;
+  updatedBy?: string;
 }
 
 export interface TelegramSupportConfig {
@@ -587,6 +648,18 @@ export interface AuthConfig {
   otpLoginEnabled: boolean;
   passwordLoginEnabled?: boolean;
   directLoginEnabled?: boolean;
+  allowNewUserSignup?: boolean;
+  defaultAuthTab?: 'login' | 'register' | 'otp';
+  defaultLoginMethod?: 'otp' | 'password' | 'direct';
+  showNameFieldOnSignup?: boolean;
+  showReferralFieldOnSignup?: boolean;
+  requireReferralOnSignup?: boolean;
+  minPasswordLength?: number;
+  loginPageTitle?: string;
+  loginPageSubtitle?: string;
+  signupBannerText?: string;
+  signupButtonText?: string;
+  loginButtonText?: string;
   updatedAt?: number;
   updatedBy?: string;
 }

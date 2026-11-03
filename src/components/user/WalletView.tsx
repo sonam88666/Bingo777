@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   ArrowDownCircle, 
   ArrowUpCircle, 
@@ -10,13 +10,69 @@ import {
   Lock,
   Wallet,
   Sparkles,
-  Coins
+  Coins,
+  Globe,
+  RefreshCw,
+  ArrowRightLeft
 } from 'lucide-react';
-import { UserRecord } from '../../types';
+import { UserRecord, CurrencyConverterConfig } from '../../types';
 import { store } from '../../services/store';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
 import { DepositHistorySection } from './DepositHistorySection';
+import { rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
+
+export interface CurrencyConfig {
+  code: string;
+  symbol: string;
+  name: string;
+  flag: string;
+  locale: string;
+}
+
+export const SUPPORTED_CURRENCIES: CurrencyConfig[] = [
+  { code: 'INR', symbol: '₹', name: 'Indian Rupee', flag: '🇮🇳', locale: 'en-IN' },
+  { code: 'USD', symbol: '$', name: 'US Dollar', flag: '🇺🇸', locale: 'en-US' },
+  { code: 'EUR', symbol: '€', name: 'Euro', flag: '🇪🇺', locale: 'de-DE' },
+  { code: 'GBP', symbol: '£', name: 'British Pound', flag: '🇬🇧', locale: 'en-GB' },
+  { code: 'AED', symbol: 'د.إ', name: 'UAE Dirham', flag: '🇦🇪', locale: 'en-AE' },
+  { code: 'BDT', symbol: '৳', name: 'Bangladeshi Taka', flag: '🇧🇩', locale: 'en-BD' },
+  { code: 'NPR', symbol: 'रू', name: 'Nepalese Rupee', flag: '🇳🇵', locale: 'en-NP' },
+  { code: 'SGD', symbol: 'S$', name: 'Singapore Dollar', flag: '🇸🇬', locale: 'en-SG' },
+  { code: 'AUD', symbol: 'A$', name: 'Australian Dollar', flag: '🇦🇺', locale: 'en-AU' },
+  { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar', flag: '🇨🇦', locale: 'en-CA' },
+  { code: 'USDT', symbol: '₮', name: 'Tether USD', flag: '🪙', locale: 'en-US' },
+];
+
+export const FALLBACK_RATES_FROM_INR: Record<string, number> = {
+  INR: 1,
+  USD: 0.0119,
+  EUR: 0.0110,
+  GBP: 0.0094,
+  AED: 0.0437,
+  BDT: 1.425,
+  NPR: 1.60,
+  SGD: 0.0160,
+  AUD: 0.0183,
+  CAD: 0.0166,
+  USDT: 0.0119,
+};
+
+function detectBrowserCurrency(): string {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    if (tz.includes('New_York') || tz.includes('Chicago') || tz.includes('Los_Angeles')) return 'USD';
+    if (tz.includes('London')) return 'GBP';
+    if (tz.includes('Dubai')) return 'AED';
+    if (tz.includes('Dhaka')) return 'BDT';
+    if (tz.includes('Kathmandu')) return 'NPR';
+    if (tz.includes('Singapore')) return 'SGD';
+    if (tz.includes('Sydney') || tz.includes('Melbourne')) return 'AUD';
+    if (tz.includes('Toronto') || tz.includes('Vancouver')) return 'CAD';
+    if (tz.includes('Berlin') || tz.includes('Paris') || tz.includes('Madrid')) return 'EUR';
+  } catch {}
+  return 'USD';
+}
 
 interface WalletViewProps {
   user: UserRecord;
@@ -70,6 +126,256 @@ export const WalletView: React.FC<WalletViewProps> = ({
   const minUsdtWithdrawal = adminSettings.minUsdtWithdrawal || 10;
   const usdtRate = adminSettings.usdtExchangeRate || 90;
   const usdtErc20Address = adminSettings.usdtErc20Address || '0xF600F72A9d4b9B0D6F6972a9037767ca7A9f3d45';
+
+  // Admin Currency Converter Config synced in real-time with Firebase RTDB & Store
+  const [currencyAdminConfig, setCurrencyAdminConfig] = useState<CurrencyConverterConfig>(() => ({
+    enabled: true,
+    defaultCurrency: 'USD',
+    rateMode: 'live_api',
+    rateAdjustmentPercent: 0,
+    enabledCurrencies: ['INR', 'USD', 'EUR', 'GBP', 'AED', 'BDT', 'NPR', 'SGD', 'AUD', 'CAD', 'USDT'],
+    customRatesFromInr: { ...FALLBACK_RATES_FROM_INR, USDT: 1 / (adminSettings.usdtExchangeRate || 90) },
+    showInWalletDashboard: true,
+    showBreakdownConversion: true,
+    allowUserCurrencySwitch: true,
+    ...(adminSettings.currency_config || {}),
+  }));
+
+  useEffect(() => {
+    const cfgRef = rtdbRef(rtdb, 'admin_settings/currency_config');
+    const unsubscribe = rtdbOnValue(
+      cfgRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          if (data && typeof data === 'object') {
+            setCurrencyAdminConfig((prev) => ({
+              ...prev,
+              ...data,
+              enabledCurrencies: Array.isArray(data.enabledCurrencies) && data.enabledCurrencies.length > 0
+                ? data.enabledCurrencies
+                : prev.enabledCurrencies,
+              customRatesFromInr: {
+                ...prev.customRatesFromInr,
+                ...(data.customRatesFromInr || {}),
+              },
+            }));
+          }
+        }
+      },
+      () => {}
+    );
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (adminSettings.currency_config) {
+      setCurrencyAdminConfig((prev) => ({
+        ...prev,
+        ...adminSettings.currency_config,
+      }));
+    }
+  }, [adminSettings.currency_config]);
+
+  const availableCurrencies = SUPPORTED_CURRENCIES.filter(
+    (c) => c.code === 'INR' || currencyAdminConfig.enabledCurrencies.includes(c.code)
+  );
+
+  // Real-Time Currency Conversion State
+  const [isCurrencyConverted, setIsCurrencyConverted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bingo777_currency_toggle_enabled') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [preferredCurrency, setPreferredCurrency] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('bingo777_preferred_currency');
+      if (saved && SUPPORTED_CURRENCIES.some((c) => c.code === saved && c.code !== 'INR')) {
+        return saved;
+      }
+    } catch {}
+    return adminSettings.currency_config?.defaultCurrency || detectBrowserCurrency();
+  });
+
+  // Ensure preferredCurrency is always in availableCurrencies or fallback to defaultCurrency
+  useEffect(() => {
+    if (
+      preferredCurrency !== 'INR' &&
+      !currencyAdminConfig.enabledCurrencies.includes(preferredCurrency)
+    ) {
+      const fallbackCode =
+        currencyAdminConfig.enabledCurrencies.find((c) => c !== 'INR') ||
+        currencyAdminConfig.defaultCurrency ||
+        'USD';
+      setPreferredCurrency(fallbackCode);
+    }
+  }, [currencyAdminConfig.enabledCurrencies, currencyAdminConfig.defaultCurrency, preferredCurrency]);
+
+  const [exchangeRates, setExchangeRates] = useState<Record<string, number>>(() => ({
+    ...FALLBACK_RATES_FROM_INR,
+    ...(adminSettings.currency_config?.customRatesFromInr || {}),
+    USDT: 1 / (adminSettings.usdtExchangeRate || 90),
+  }));
+  const [isLoadingRates, setIsLoadingRates] = useState<boolean>(false);
+  const [rateSource, setRateSource] = useState<'live' | 'fallback' | 'manual'>('fallback');
+  const [lastRateUpdate, setLastRateUpdate] = useState<string>('');
+
+  const fetchLiveExchangeRates = useCallback(async (silent = true) => {
+    if (currencyAdminConfig.rateMode === 'custom_manual') {
+      setExchangeRates({
+        ...FALLBACK_RATES_FROM_INR,
+        ...(currencyAdminConfig.customRatesFromInr || {}),
+        INR: 1,
+      });
+      setRateSource('manual');
+      setLastRateUpdate('Admin Fixed');
+      if (!silent) {
+        showToast(`Using Admin-configured exchange rates (${preferredCurrency})`, 'info');
+      }
+      return;
+    }
+
+    setIsLoadingRates(true);
+    try {
+      // Primary reliable external API: ExchangeRate-API Open Access
+      let response = await fetch('https://open.er-api.com/v6/latest/INR', {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!response.ok) {
+        // Secondary reliable fallback API
+        response = await fetch('https://api.exchangerate-api.com/v4/latest/INR', {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+        });
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      const apiRates = data?.rates;
+      if (apiRates && typeof apiRates === 'object') {
+        const mergedRates: Record<string, number> = {
+          ...FALLBACK_RATES_FROM_INR,
+          ...apiRates,
+          INR: 1,
+          USDT: apiRates.USD || (1 / usdtRate),
+        };
+        setExchangeRates(mergedRates);
+        setRateSource('live');
+        const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        setLastRateUpdate(nowStr);
+        try {
+          localStorage.setItem('bingo777_cached_fx_rates', JSON.stringify({
+            rates: mergedRates,
+            timestamp: nowStr,
+          }));
+        } catch {}
+        if (!silent) {
+          showToast(`Live exchange rates updated (${preferredCurrency})`, 'success');
+        }
+      }
+    } catch {
+      // Try loading cached rates from localStorage before using static fallback
+      try {
+        const cached = localStorage.getItem('bingo777_cached_fx_rates');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed?.rates) {
+            setExchangeRates({ ...FALLBACK_RATES_FROM_INR, ...parsed.rates });
+            setLastRateUpdate(parsed.timestamp || 'Cached');
+          }
+        }
+      } catch {}
+      setRateSource('fallback');
+      if (!silent) {
+        showToast('Using cached exchange rates (network offline)', 'info');
+      }
+    } finally {
+      setIsLoadingRates(false);
+    }
+  }, [currencyAdminConfig.rateMode, currencyAdminConfig.customRatesFromInr, preferredCurrency, showToast, usdtRate]);
+
+  useEffect(() => {
+    fetchLiveExchangeRates(true);
+    const interval = setInterval(() => {
+      fetchLiveExchangeRates(true);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [fetchLiveExchangeRates]);
+
+  const isConverterActive = currencyAdminConfig.enabled !== false && currencyAdminConfig.showInWalletDashboard !== false;
+  const effectiveIsConverted = isConverterActive && isCurrencyConverted;
+
+  const handleToggleCurrencyConversion = () => {
+    if (!isConverterActive) return;
+    const next = !isCurrencyConverted;
+    setIsCurrencyConverted(next);
+    try {
+      localStorage.setItem('bingo777_currency_toggle_enabled', String(next));
+    } catch {}
+    if (next && rateSource !== 'live' && currencyAdminConfig.rateMode === 'live_api') {
+      fetchLiveExchangeRates(true);
+    }
+  };
+
+  const handleSelectCurrency = (code: string) => {
+    if (code === 'INR') {
+      setIsCurrencyConverted(false);
+      try {
+        localStorage.setItem('bingo777_currency_toggle_enabled', 'false');
+      } catch {}
+      return;
+    }
+    setPreferredCurrency(code);
+    setIsCurrencyConverted(true);
+    try {
+      localStorage.setItem('bingo777_preferred_currency', code);
+      localStorage.setItem('bingo777_currency_toggle_enabled', 'true');
+    } catch {}
+  };
+
+  const activeCurrencyConfig: CurrencyConfig = effectiveIsConverted
+    ? (availableCurrencies.find((c) => c.code === preferredCurrency) || availableCurrencies[1] || SUPPORTED_CURRENCIES[1])
+    : SUPPORTED_CURRENCIES[0];
+
+  const baseRateFromInr =
+    currencyAdminConfig.rateMode === 'custom_manual'
+      ? (currencyAdminConfig.customRatesFromInr?.[activeCurrencyConfig.code] ??
+          exchangeRates[activeCurrencyConfig.code] ??
+          FALLBACK_RATES_FROM_INR[activeCurrencyConfig.code] ??
+          1)
+      : (exchangeRates[activeCurrencyConfig.code] ??
+          FALLBACK_RATES_FROM_INR[activeCurrencyConfig.code] ??
+          1);
+
+  const spreadMultiplier = 1 + (Number(currencyAdminConfig.rateAdjustmentPercent) || 0) / 100;
+
+  const activeRateFromInr = effectiveIsConverted && activeCurrencyConfig.code !== 'INR'
+    ? baseRateFromInr * spreadMultiplier
+    : 1;
+
+  const formatWalletAmount = (inrAmount: number, isBreakdown = false): string => {
+    const safeInr = Number.isFinite(inrAmount) ? inrAmount : 0;
+    if (
+      !effectiveIsConverted ||
+      activeCurrencyConfig.code === 'INR' ||
+      (isBreakdown && currencyAdminConfig.showBreakdownConversion === false)
+    ) {
+      return `₹${safeInr.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    const converted = safeInr * activeRateFromInr;
+    return `${activeCurrencyConfig.symbol}${converted.toLocaleString(activeCurrencyConfig.locale, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  };
 
   const depositPresets = [250, 500, 1000, 2000, 5000, 10000];
   const usdtDepositPresets = [5, 10, 25, 50, 100, 500];
@@ -326,38 +632,188 @@ export const WalletView: React.FC<WalletViewProps> = ({
               </div>
             </div>
 
-            <div className="px-2.5 py-1 rounded-full bg-slate-900/90 border border-amber-500/30 text-[11px] font-mono font-bold text-amber-300">
-              VIP {user.vipLevel}
+            <div className="flex items-center space-x-2">
+              <div className="px-2.5 py-1 rounded-full bg-slate-900/90 border border-amber-500/30 text-[11px] font-mono font-bold text-amber-300">
+                VIP {user.vipLevel}
+              </div>
             </div>
           </div>
 
-          {/* Main Available Balance */}
-          <div>
-            <span className="text-[11px] font-semibold text-slate-400">Available Playing Balance</span>
-            <div className="font-mono font-black text-3xl sm:text-4xl text-amber-300 tracking-tight">
-              ₹{user.balance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {/* Main Available Balance + Real-Time Currency Conversion Toggle */}
+          <div className="pt-1 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-[11px] font-semibold text-slate-400">
+                  Available Playing Balance ({activeCurrencyConfig.code})
+                </span>
+                {effectiveIsConverted && (
+                  <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-[9px] font-mono font-bold text-emerald-300 flex items-center space-x-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>
+                      {rateSource === 'live' ? 'LIVE FX' : rateSource === 'manual' ? 'FIXED FX' : 'FX EST'}
+                    </span>
+                  </span>
+                )}
+              </div>
+              <div className="font-mono font-black text-3xl sm:text-4xl text-amber-300 tracking-tight flex items-baseline space-x-2 flex-wrap">
+                <span>{formatWalletAmount(user.balance)}</span>
+                {effectiveIsConverted && (
+                  <span className="text-xs font-mono font-semibold text-slate-400">
+                    (Base: ₹{user.balance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                  </span>
+                )}
+              </div>
             </div>
+
+            {/* Real-Time Currency Toggle Control */}
+            {isConverterActive && (
+              <div className="flex items-center space-x-2 self-start sm:self-end bg-slate-950/80 border border-slate-800/90 rounded-2xl p-1.5">
+                <button
+                  type="button"
+                  onClick={handleToggleCurrencyConversion}
+                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center space-x-1.5 transition ${
+                    !effectiveIsConverted
+                      ? 'bg-amber-500 text-slate-950 shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="View in Base Currency (INR ₹)"
+                >
+                  <span>🇮🇳 INR (₹)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleToggleCurrencyConversion}
+                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center space-x-1.5 transition ${
+                    effectiveIsConverted
+                      ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="Convert to Preferred Local Currency"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                  <span>
+                    {availableCurrencies.find((c) => c.code === preferredCurrency)?.flag || '🌐'} {preferredCurrency}
+                  </span>
+                </button>
+              </div>
+            )}
           </div>
+
+          {/* Local Currency Selector & Live Exchange Rate Bar */}
+          {isConverterActive && (
+            <div className="p-2.5 rounded-2xl bg-slate-950/75 border border-slate-800/80 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                <div className="flex items-center space-x-1.5 text-slate-300">
+                  <Globe className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span className="font-semibold">Local Currency View:</span>
+                  {currencyAdminConfig.allowUserCurrencySwitch !== false ? (
+                    <select
+                      value={effectiveIsConverted ? preferredCurrency : 'INR'}
+                      onChange={(e) => handleSelectCurrency(e.target.value)}
+                      aria-label="Select preferred currency"
+                      className="bg-slate-900 border border-slate-700/80 text-amber-300 font-mono font-bold text-[11px] rounded-lg px-2 py-1 focus:outline-none focus:border-amber-500 cursor-pointer"
+                    >
+                      {availableCurrencies.map((curr) => (
+                        <option key={curr.code} value={curr.code} className="bg-slate-900 text-slate-100">
+                          {curr.flag} {curr.code} ({curr.symbol}) - {curr.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-lg bg-slate-900 border border-slate-700/80 text-amber-300 font-mono font-bold text-[11px]">
+                      {activeCurrencyConfig.flag} {activeCurrencyConfig.code} ({activeCurrencyConfig.symbol})
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  {effectiveIsConverted ? (
+                    <span className="font-mono text-[10px] text-slate-400">
+                      1 {activeCurrencyConfig.code} ≈ ₹{(1 / activeRateFromInr).toFixed(2)} · 1 INR = {activeRateFromInr < 0.1 ? activeRateFromInr.toFixed(4) : activeRateFromInr.toFixed(2)} {activeCurrencyConfig.code}
+                    </span>
+                  ) : (
+                    <span className="font-mono text-[10px] text-slate-400">
+                      1 {preferredCurrency} ≈ ₹{(1 / ((exchangeRates[preferredCurrency] || FALLBACK_RATES_FROM_INR[preferredCurrency] || 0.012) * spreadMultiplier)).toFixed(2)}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => fetchLiveExchangeRates(false)}
+                    disabled={isLoadingRates}
+                    title="Refresh exchange rates"
+                    className="p-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/70 text-slate-300 hover:text-amber-300 transition disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isLoadingRates ? 'animate-spin text-amber-400' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Quick Currency Switcher Pills */}
+              {currencyAdminConfig.allowUserCurrencySwitch !== false && (
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+                  {availableCurrencies.map((curr) => {
+                    const isSelected = (curr.code === 'INR' && !effectiveIsConverted) || (effectiveIsConverted && curr.code === preferredCurrency);
+                    return (
+                      <button
+                        key={curr.code}
+                        type="button"
+                        onClick={() => handleSelectCurrency(curr.code)}
+                        className={`px-2 py-1 rounded-lg text-[10px] font-mono font-bold shrink-0 border transition flex items-center space-x-1 ${
+                          isSelected
+                            ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 shadow-sm'
+                            : 'bg-slate-900/70 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                        }`}
+                      >
+                        <span>{curr.flag}</span>
+                        <span>{curr.code}</span>
+                      </button>
+                    );
+                  })}
+                  {lastRateUpdate && (
+                    <span className="text-[9px] font-mono text-slate-500 shrink-0 ml-auto pl-1">
+                      Updated {lastRateUpdate}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Financial Breakdown Grid */}
           <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-800/80 text-[11px]">
             <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800/60">
               <span className="text-slate-500 block text-[9px] uppercase font-bold">In-Review Wth</span>
-              <span className="font-mono font-bold text-amber-400">
-                ₹{totalLockedInWithdrawal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              <span className="font-mono font-bold text-amber-400 block truncate">
+                {formatWalletAmount(totalLockedInWithdrawal, true)}
               </span>
+              {effectiveIsConverted && currencyAdminConfig.showBreakdownConversion !== false && (
+                <span className="font-mono text-[9px] text-slate-500 block">
+                  ₹{totalLockedInWithdrawal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </span>
+              )}
             </div>
             <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800/60">
               <span className="text-slate-500 block text-[9px] uppercase font-bold">Total Deposited</span>
-              <span className="font-mono font-bold text-emerald-400">
-                ₹{totalApprovedDeposits.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              <span className="font-mono font-bold text-emerald-400 block truncate">
+                {formatWalletAmount(totalApprovedDeposits, true)}
               </span>
+              {effectiveIsConverted && currencyAdminConfig.showBreakdownConversion !== false && (
+                <span className="font-mono text-[9px] text-slate-500 block">
+                  ₹{totalApprovedDeposits.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </span>
+              )}
             </div>
             <div className="p-2 rounded-xl bg-slate-950/60 border border-slate-800/60">
               <span className="text-slate-500 block text-[9px] uppercase font-bold">Total Paid Out</span>
-              <span className="font-mono font-bold text-sky-400">
-                ₹{totalApprovedWithdrawals.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              <span className="font-mono font-bold text-sky-400 block truncate">
+                {formatWalletAmount(totalApprovedWithdrawals, true)}
               </span>
+              {effectiveIsConverted && currencyAdminConfig.showBreakdownConversion !== false && (
+                <span className="font-mono text-[9px] text-slate-500 block">
+                  ₹{totalApprovedWithdrawals.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </span>
+              )}
             </div>
           </div>
         </div>

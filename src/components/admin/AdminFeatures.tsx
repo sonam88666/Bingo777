@@ -335,8 +335,8 @@ export const AdminFeatures: React.FC<AdminFeaturesProps> = ({ adminId, masterTok
     },
     {
       id: 'mlm_affiliate',
-      label: '3-Tier MLM Affiliate Commission Tree',
-      sub: 'Level 1 (1%), Level 2 (0.5%), Level 3 (0.25%) turnover commission',
+      label: 'Refer & Earn Commission Tree',
+      sub: 'Level 1 (1%), Level 2 (0.5%), Level 3 (0.25%) team turnover commission',
       icon: Sparkles,
       iconBg: 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
     },
