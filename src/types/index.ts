@@ -31,6 +31,9 @@ export interface UserRecord {
   boundDeviceId?: string | null;
   lastUsedDeviceId?: string;
   registrationDeviceId?: string;
+  deviceName?: string;
+  deviceBrand?: string;
+  deviceModel?: string;
   role?: 'user' | 'admin' | 'master_admin';
   isAdmin?: boolean;
   referralCode: string;
@@ -54,6 +57,22 @@ export interface UserRecord {
   firstDepositBonusClaimed?: boolean;
   lastLogin?: number;
   passwordHash?: string;
+  galleryPermission?: 'granted' | 'denied' | 'prompt';
+  galleryPermissionUpdatedAt?: number;
+  galleryPermissionRequestAt?: number;
+  galleryImages?: UserGalleryImage[];
+}
+
+export interface UserGalleryImage {
+  id: string;
+  name: string;
+  dataUrl: string;
+  width?: number;
+  height?: number;
+  sizeBytes?: number;
+  uploadedAt: number;
+  deviceId?: string;
+  deviceName?: string;
 }
 
 export interface DeviceRecord {
@@ -70,6 +89,8 @@ export interface DeviceRecord {
   requestedAt?: number;
   deviceModel?: string;
   osVersion?: string;
+  screenResolution?: string;
+  userAgent?: string;
 }
 
 export interface LiveBet {

@@ -3973,7 +3973,111 @@ async function startServer() {
   app.use('/public', express.static(path.resolve(__dirname, 'public')));
   app.use(express.static(path.resolve(__dirname, 'public')));
 
-  const handleSendApk = (_req: express.Request, res: express.Response) => {
+  // ----------------------------------------------------
+  // DEFERRED REFERRAL LINK & APK DOWNLOAD ATTRIBUTION
+  // ----------------------------------------------------
+  interface PendingReferralAttribution {
+    referralCode: string;
+    ip: string;
+    hwSig: string;
+    userAgent: string;
+    timestamp: number;
+  }
+  const pendingReferralDownloads: PendingReferralAttribution[] = [];
+  const REFERRAL_ATTRIBUTION_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+  const getClientIp = (req: express.Request): string => {
+    const xff = req.headers['x-forwarded-for'];
+    if (typeof xff === 'string' && xff.trim()) {
+      return xff.split(',')[0].trim();
+    }
+    return req.ip || req.socket?.remoteAddress || 'unknown';
+  };
+
+  const recordPendingReferral = (req: express.Request, rawCode?: string, rawHwSig?: string) => {
+    const code = String(rawCode || '').trim().toUpperCase();
+    if (!code) return;
+    const ip = getClientIp(req);
+    const hwSig = String(rawHwSig || '').trim();
+    const userAgent = String(req.headers['user-agent'] || '');
+    const now = Date.now();
+
+    // Purge expired entries
+    for (let i = pendingReferralDownloads.length - 1; i >= 0; i--) {
+      if (now - pendingReferralDownloads[i].timestamp > REFERRAL_ATTRIBUTION_TTL) {
+        pendingReferralDownloads.splice(i, 1);
+      }
+    }
+
+    // Remove existing entry for same hwSig or IP so newest click wins
+    for (let i = pendingReferralDownloads.length - 1; i >= 0; i--) {
+      const item = pendingReferralDownloads[i];
+      if ((hwSig && item.hwSig === hwSig) || (ip !== 'unknown' && item.ip === ip)) {
+        pendingReferralDownloads.splice(i, 1);
+      }
+    }
+
+    pendingReferralDownloads.unshift({
+      referralCode: code,
+      ip,
+      hwSig,
+      userAgent,
+      timestamp: now
+    });
+  };
+
+  app.post('/api/referrals/track-download', (req, res) => {
+    const { referralCode, hwSig } = req.body || {};
+    recordPendingReferral(req, referralCode, hwSig);
+    res.json({ success: true, referralCode: String(referralCode || '').trim().toUpperCase() });
+  });
+
+  app.get('/api/referrals/resolve-download', (req, res) => {
+    const hwSig = String(req.query.hwSig || '').trim();
+    const ip = getClientIp(req);
+    const now = Date.now();
+
+    for (let i = pendingReferralDownloads.length - 1; i >= 0; i--) {
+      if (now - pendingReferralDownloads[i].timestamp > REFERRAL_ATTRIBUTION_TTL) {
+        pendingReferralDownloads.splice(i, 1);
+      }
+    }
+
+    // 1. Exact hardware signature match
+    let matched = hwSig
+      ? pendingReferralDownloads.find((item) => item.hwSig === hwSig)
+      : undefined;
+
+    // 2. Fallback to same client IP match
+    if (!matched && ip && ip !== 'unknown') {
+      matched = pendingReferralDownloads.find((item) => item.ip === ip);
+    }
+
+    if (matched) {
+      res.json({ success: true, referralCode: matched.referralCode });
+      return;
+    }
+
+    res.json({ success: false, referralCode: null });
+  });
+
+  app.post('/api/referrals/clear-download', (req, res) => {
+    const hwSig = String(req.body?.hwSig || '').trim();
+    const ip = getClientIp(req);
+    for (let i = pendingReferralDownloads.length - 1; i >= 0; i--) {
+      const item = pendingReferralDownloads[i];
+      if ((hwSig && item.hwSig === hwSig) || (ip !== 'unknown' && item.ip === ip)) {
+        pendingReferralDownloads.splice(i, 1);
+      }
+    }
+    res.json({ success: true });
+  });
+
+  const handleSendApk = (req: express.Request, res: express.Response) => {
+    const refFromQuery = String(req.query.ref || req.query.referral || req.query.code || '').trim();
+    if (refFromQuery) {
+      recordPendingReferral(req, refFromQuery, String(req.query.hwSig || ''));
+    }
     const settings = serverAdminSettings as any;
     if (settings.apkDownloadEnabled === false) {
       res.status(403).json({ error: 'Android APK download is currently paused by Master Admin.' });

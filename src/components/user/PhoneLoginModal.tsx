@@ -24,6 +24,11 @@ import { firebaseSync } from '../../services/firebaseSync';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
 import { Bingo777Logo } from '../common/Bingo777Logo';
+import {
+  getSavedReferralCode,
+  resolveDeferredReferralCodeAsync,
+  clearPendingReferralCode
+} from '../../services/referralAttribution';
 
 interface CountryCode {
   code: string;
@@ -69,12 +74,23 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
     return last.replace(/\D/g, '').slice(-10);
   });
 
-  // Referral code (prefill from URL parameter ?ref= if present)
-  const [referralCode, setReferralCode] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    return (params.get('ref') || '').toUpperCase();
-  });
-  const [showReferralField, setShowReferralField] = useState(Boolean(referralCode));
+  // Referral code (prefill from URL parameter ?ref=, localStorage, or APK download attribution)
+  const [referralCode, setReferralCode] = useState(() => getSavedReferralCode());
+  const [showReferralField, setShowReferralField] = useState(() => Boolean(getSavedReferralCode()));
+
+  useEffect(() => {
+    let mounted = true;
+    resolveDeferredReferralCodeAsync()
+      .then((resolved) => {
+        if (!mounted || !resolved) return;
+        setReferralCode((prev) => prev || resolved);
+        setShowReferralField(true);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // OTP inputs (6 individual boxes)
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
@@ -483,6 +499,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
         if (linkedRef) {
           await firebaseSync.pushReferralToFirestore(linkedRef).catch(() => {});
         }
+        await clearPendingReferralCode().catch(() => {});
 
         firebaseSync.attachRealtimeUserSync(newUser.uid, cleanPhone);
 

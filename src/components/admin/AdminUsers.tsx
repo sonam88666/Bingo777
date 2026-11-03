@@ -28,9 +28,12 @@ import {
   Calendar,
   ArrowUpDown,
   Crown,
-  Filter
+  Filter,
+  Smartphone,
+  Lock,
+  X
 } from 'lucide-react';
-import { UserRecord } from '../../types';
+import { UserRecord, DeviceRecord } from '../../types';
 import { store } from '../../services/store';
 import { apiClient } from '../../services/apiClient';
 import { firebaseSync } from '../../services/firebaseSync';
@@ -122,6 +125,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
 
   const [isSyncingFirebase, setIsSyncingFirebase] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   // Dedicated User Details Sub-Screen State
   const [selectedUserUid, setSelectedUserUid] = useState<string | null>(null);
@@ -164,6 +168,9 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   const [confirmDeleteUser, setConfirmDeleteUser] = useState<UserRecord | null>(null);
   const [isHardDeleting, setIsHardDeleting] = useState<boolean>(false);
   const [localDeletedUids, setLocalDeletedUids] = useState<Set<string>>(new Set());
+
+  // View Devices Modal State
+  const [devicesModalUserUid, setDevicesModalUserUid] = useState<string | null>(null);
 
   const handleForceFirebaseSync = async () => {
     setIsSyncingFirebase(true);
@@ -241,6 +248,10 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
     if (u.registrationDeviceId) return u.registrationDeviceId;
     const firstDev = Object.values(u.devices || {})[0];
     return firstDev?.deviceId || '';
+  };
+
+  const getUserDeviceLabel = (u: UserRecord): string => {
+    return store.getUserDeviceDisplayName(u);
   };
 
   // Build Duplicate Device Fraud map: deviceId -> Set of UIDs sharing that lastUsedDeviceId or registrationDeviceId
@@ -335,17 +346,21 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
     }
 
     const filtered = users.filter((u) => {
-      // A. Search Bar (Mobile Number, User UID, Name/Username, or Device ID)
+      // A. Search Bar (Username, Name, Phone Number, UID, Login Device Brand/Name, or Device ID)
       if (q) {
         const primaryDev = getPrimaryDeviceId(u).toLowerCase();
+        const deviceBrandName = getUserDeviceLabel(u).toLowerCase();
         const allDevIds = Object.values(u.devices || {})
-          .map((d) => d?.deviceId?.toLowerCase() || '')
+          .map((d) => `${d?.deviceId || ''} ${d?.deviceName || ''} ${d?.deviceModel || ''}`.toLowerCase())
           .join(' ');
         const matchSearch =
           u.uid.toLowerCase().includes(q) ||
+          `#${u.uid.toLowerCase()}`.includes(q) ||
           (u.name || '').toLowerCase().includes(q) ||
           (u.username || '').toLowerCase().includes(q) ||
           (u.phone || '').toLowerCase().includes(q) ||
+          `+91${u.phone || ''}`.toLowerCase().includes(q) ||
+          deviceBrandName.includes(q) ||
           primaryDev.includes(q) ||
           (u.boundDeviceId || '').toLowerCase().includes(q) ||
           (u.lastUsedDeviceId || '').toLowerCase().includes(q) ||
@@ -505,6 +520,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
       role: isUserAdmin(u) ? (u.role === 'master_admin' ? 'master_admin' : 'admin') : 'user',
       isAdmin: isUserAdmin(u),
       isBanned: isUserBanned(u),
+      deviceName: getUserDeviceLabel(u),
       boundDeviceId: u.boundDeviceId ?? null,
       lastUsedDeviceId: getPrimaryDeviceId(u) || null,
       createdAt: u.createdAt || Date.now(),
@@ -543,6 +559,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
       'role',
       'isAdmin',
       'isBanned',
+      'deviceName',
       'boundDeviceId',
       'lastUsedDeviceId',
       'createdAt',
@@ -1071,24 +1088,42 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
 
               <div className="p-2.5 rounded-lg bg-white border border-slate-200 flex items-center justify-between">
                 <div>
-                  <span className="text-[10px] font-bold uppercase text-slate-400 block">Bound Device ID</span>
-                  <span className="font-mono font-black text-blue-700 text-xs">
-                    {selectedUser.boundDeviceId || getPrimaryDeviceId(selectedUser) || 'Unbound'}
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                    Actual Login Device ({store.getUserAssociatedDevices(selectedUser).length} Recorded)
+                  </span>
+                  <span className="font-mono font-black text-blue-700 text-xs block">
+                    📱 {getUserDeviceLabel(selectedUser)}
+                  </span>
+                  <span className="font-mono text-[10px] text-slate-500">
+                    ID: {selectedUser.boundDeviceId || getPrimaryDeviceId(selectedUser) || 'Unbound'}
                   </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    copyText(
-                      selectedUser.boundDeviceId || getPrimaryDeviceId(selectedUser) || '',
-                      'Device ID'
-                    )
-                  }
-                  className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"
-                  title="Copy Device ID"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDevicesModalUserUid(selectedUser.uid);
+                    }}
+                    className="px-2 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] flex items-center space-x-1"
+                    title="View All Associated Devices"
+                  >
+                    <Smartphone className="w-3 h-3" />
+                    <span>View Devices</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      copyText(
+                        `${getUserDeviceLabel(selectedUser)} (${selectedUser.boundDeviceId || getPrimaryDeviceId(selectedUser) || 'Unbound'})`,
+                        'Login Device'
+                      )
+                    }
+                    className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600"
+                    title="Copy Device Info"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1654,486 +1689,469 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   }
 
   // ============================================================================
-  // MAIN SCREEN: ADVANCED USER MANAGEMENT DASHBOARD (FILTERS, FRAUD, EXPORT/IMPORT)
+  // MAIN SCREEN: CLEAN & COMPACT USER LIST + FILTER BAR
   // ============================================================================
   const activeWalletTarget = walletEditTargetUser || selectedUser;
 
   return (
-    <div className="space-y-4">
-      {/* 1. EXPORT & IMPORT TOOLBAR (CSV & JSON) */}
-      <div className="p-3.5 rounded-2xl bg-slate-900 border border-amber-500/30 shadow-md flex flex-wrap items-center justify-between gap-2.5">
-        <div className="flex items-center space-x-2">
-          <FileSpreadsheet className="w-4 h-4 text-amber-400 shrink-0" />
-          <div>
-            <div className="text-xs font-black text-slate-100">
-              User Data Export & Import (CSV / JSON)
-            </div>
-            <div className="text-[10px] text-slate-400">
-              Filtered: <strong className="text-amber-300">{filteredAndSortedUsers.length}</strong> users · Total Database: <strong className="text-emerald-300">{users.length}</strong> users
-            </div>
-          </div>
-        </div>
-
+    <div className="space-y-2.5">
+      {/* 1. COMPACT TOP SEARCH + SORT + QUICK TOOLBAR */}
+      <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
         <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => handleExportCSV(filteredAndSortedUsers, 'filtered')}
-            className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center space-x-1 transition shadow-xs"
-          >
-            <Download className="w-3 h-3" />
-            <span>Export Filtered (CSV)</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleExportJSON(filteredAndSortedUsers, 'filtered')}
-            className="px-2.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-[11px] flex items-center space-x-1 transition shadow-xs"
-          >
-            <Download className="w-3 h-3" />
-            <span>Export Filtered (JSON)</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleExportCSV(users, 'all')}
-            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-[11px] flex items-center space-x-1 transition"
-          >
-            <Download className="w-3 h-3 text-amber-400" />
-            <span>All (CSV)</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleExportJSON(users, 'all')}
-            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-[11px] flex items-center space-x-1 transition"
-          >
-            <Download className="w-3 h-3 text-amber-400" />
-            <span>All (JSON)</span>
-          </button>
+          {/* Instant Search Bar by Username, Phone Number, UID, or Device Name */}
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="w-3.5 h-3.5 text-amber-400 absolute left-3 top-2.5 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search by Username, Phone, UID, or Device (Samsung, Vivo...)"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700/90 rounded-lg pl-8 pr-16 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-amber-400"
+            />
+            {searchTerm && (
+              <div className="absolute right-2 top-1.5 flex items-center space-x-1">
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono font-bold text-[9px]">
+                  {filteredAndSortedUsers.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="p-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                  title="Clear search"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )}
+          </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".json,.csv,application/json,text/csv"
-            onChange={handleImportUsersFile}
-            className="hidden"
-          />
-          <button
-            type="button"
-            disabled={isImporting}
-            onClick={() => fileInputRef.current?.click()}
-            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] flex items-center space-x-1 transition shadow-xs disabled:opacity-50"
-          >
-            <Upload className="w-3 h-3" />
-            <span>{isImporting ? 'Importing...' : 'Import Users (JSON / CSV)'}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 2. SEARCH BAR + SORT DROPDOWN + SYNC BUTTON */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-          <input
-            type="text"
-            placeholder="Instant Search by Mobile Number, User UID, Name, or Device ID..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-white border border-slate-200/90 rounded-2xl pl-10 pr-4 py-2.5 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 shadow-xs focus:outline-none focus:border-blue-600"
-          />
-        </div>
-
-        {/* D. Balance & Activity Sorting Dropdown */}
-        <div className="flex items-center gap-2">
-          <div className="relative flex items-center bg-white border border-slate-200 rounded-2xl px-3 py-2 shadow-xs">
-            <ArrowUpDown className="w-3.5 h-3.5 text-blue-600 mr-1.5 shrink-0" />
+          {/* Compact Sort Select */}
+          <div className="flex items-center bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5">
+            <ArrowUpDown className="w-3 h-3 text-amber-400 mr-1 shrink-0" />
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as SortOption)}
-              className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none pr-2"
+              className="bg-transparent text-[11px] font-bold text-slate-200 focus:outline-none"
             >
-              <option value="wallet_desc">Wallet: High to Low 💰</option>
-              <option value="wallet_asc">Wallet: Low to High</option>
-              <option value="newest">Newest Joined First</option>
-              <option value="oldest">Oldest Joined First</option>
-              <option value="recent_active">Recently Active</option>
-              <option value="highest_deposit">Highest Depositor</option>
+              <option value="newest" className="bg-slate-900">Newest</option>
+              <option value="wallet_desc" className="bg-slate-900">Wallet: High</option>
+              <option value="wallet_asc" className="bg-slate-900">Wallet: Low</option>
+              <option value="recent_active" className="bg-slate-900">Active</option>
+              <option value="highest_deposit" className="bg-slate-900">Top Deposit</option>
+              <option value="oldest" className="bg-slate-900">Oldest</option>
             </select>
           </div>
 
+          {/* Toggle Advanced Date & Export/Import Drawer */}
+          <button
+            type="button"
+            onClick={() => setShowAdvancedFilters((v) => !v)}
+            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center space-x-1 border transition ${
+              showAdvancedFilters || datePreset !== 'all'
+                ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+            }`}
+            title="Date Filters & CSV/JSON Export"
+          >
+            <Filter className="w-3 h-3" />
+            <span>Filters & CSV</span>
+          </button>
+
+          {/* Refresh Button */}
           <button
             type="button"
             onClick={handleForceFirebaseSync}
             disabled={isSyncingFirebase}
-            className="px-3.5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs flex items-center space-x-1.5 shadow-xs transition shrink-0"
+            className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 transition"
+            title="Sync Firebase Users"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncingFirebase ? 'animate-spin' : ''}`} />
-            <span>Refresh 🔄</span>
           </button>
-        </div>
-      </div>
 
-      {/* 3. B: ROLE & STATUS FILTER TABS */}
-      <div className="space-y-2 bg-slate-900/90 border border-slate-800 rounded-2xl p-3">
-        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between">
-          <span className="flex items-center space-x-1">
-            <Filter className="w-3 h-3 text-amber-400" />
-            <span>Role & Status Filter Tabs</span>
-          </span>
+          {/* Add User Button */}
           <button
             type="button"
-            onClick={handleResetAllFilters}
-            className="text-amber-400 hover:text-amber-300 font-bold underline text-[10px]"
+            onClick={() => setShowAddUserModal(true)}
+            className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-[11px] flex items-center space-x-1 transition"
           >
-            Reset All Filters
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add</span>
           </button>
         </div>
-        <div className="flex flex-wrap gap-1.5">
+
+        {/* Single Sleek Horizontal Filter Pill Bar */}
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pt-0.5">
           {(
             [
-              { id: 'all', label: `All Users (${counts.all})` },
-              { id: 'admins', label: `Admins Only 👑 (${counts.admins})` },
-              { id: 'regular', label: `Regular Players 👤 (${counts.regular})` },
-              { id: 'online', label: `Online Now 🟢 (${counts.online})` },
-              { id: 'banned', label: `Banned / Blocked 🚫 (${counts.banned})` }
+              { id: 'all', mode: 'role', label: `All (${counts.all})` },
+              { id: 'online', mode: 'role', label: `🟢 Online (${counts.online})` },
+              { id: 'admins', mode: 'role', label: `👑 Admins (${counts.admins})` },
+              { id: 'vip_deposited', mode: 'fraud', label: `💎 Deposited (${counts.vip_deposited})` },
+              { id: 'free_bonus', mode: 'fraud', label: `🎁 Free (${counts.free_bonus})` },
+              { id: 'low_balance', mode: 'fraud', label: `📉 Low ₹ (${counts.low_balance})` },
+              { id: 'duplicate_device', mode: 'fraud', label: `⚠️ Dup (${counts.duplicate_device})` },
+              { id: 'banned', mode: 'role', label: `🚫 Banned (${counts.banned})` }
             ] as const
-          ).map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setRoleStatusFilter(tab.id)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                roleStatusFilter === tab.id
-                  ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
-                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+          ).map((pill) => {
+            const isActive =
+              pill.mode === 'role'
+                ? roleStatusFilter === pill.id && (pill.id !== 'all' || fraudWalletFilter === 'all')
+                : fraudWalletFilter === pill.id;
 
-        {/* 4. C: WALLET, VIP & FRAUD FILTERS */}
-        <div className="pt-2 border-t border-slate-800">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
-            Wallet, VIP & Multi-Account Fraud Filters
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {(
-              [
-                { id: 'all', label: `All Wallets (${counts.all})` },
-                { id: 'vip_deposited', label: `VIP / Deposited Users 💎 (${counts.vip_deposited})` },
-                { id: 'free_bonus', label: `Free Bonus Users 🎁 (${counts.free_bonus})` },
-                { id: 'low_balance', label: `Low / Zero Balance 📉 (${counts.low_balance})` },
-                { id: 'duplicate_device', label: `Duplicate Device Fraud ⚠️ (${counts.duplicate_device})` }
-              ] as const
-            ).map((tab) => (
+            return (
               <button
-                key={tab.id}
-                type="button"
-                onClick={() => setFraudWalletFilter(tab.id)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                  fraudWalletFilter === tab.id
-                    ? tab.id === 'duplicate_device'
-                      ? 'bg-rose-500 text-white font-black shadow-sm'
-                      : 'bg-sky-500 text-slate-950 font-black shadow-sm'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* 5. E: COMPLETE DATE RANGE FILTER */}
-        <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Calendar className="w-3.5 h-3.5 text-amber-400" />
-            <select
-              value={dateFilterMode}
-              onChange={(e) => setDateFilterMode(e.target.value as DateFilterMode)}
-              className="bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-amber-300 focus:outline-none"
-            >
-              <option value="createdAt">By Joining Date (createdAt)</option>
-              <option value="lastLogin">By Last Login (lastLogin)</option>
-            </select>
-
-            {(
-              [
-                { id: 'all', label: 'All Time' },
-                { id: 'today', label: 'Today' },
-                { id: 'yesterday', label: 'Yesterday' },
-                { id: 'last7', label: 'Last 7 Days' },
-                { id: 'last30', label: 'Last 30 Days' }
-              ] as const
-            ).map((preset) => (
-              <button
-                key={preset.id}
+                key={`${pill.mode}_${pill.id}`}
                 type="button"
                 onClick={() => {
-                  setDatePreset(preset.id);
-                  setCustomFromDate('');
-                  setCustomToDate('');
+                  if (pill.id === 'all') {
+                    setRoleStatusFilter('all');
+                    setFraudWalletFilter('all');
+                  } else if (pill.mode === 'role') {
+                    setRoleStatusFilter(pill.id as RoleStatusFilter);
+                    setFraudWalletFilter('all');
+                  } else {
+                    setRoleStatusFilter('all');
+                    setFraudWalletFilter(pill.id as FraudWalletFilter);
+                  }
                 }}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
-                  datePreset === preset.id
-                    ? 'bg-emerald-500 text-slate-950 font-black'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                className={`px-2 py-1 rounded-md text-[10px] font-bold whitespace-nowrap transition ${
+                  isActive
+                    ? 'bg-amber-500 text-slate-950 font-black'
+                    : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
                 }`}
               >
-                {preset.label}
+                {pill.label}
               </button>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-            <span className="text-slate-400 font-semibold">From:</span>
-            <input
-              type="date"
-              value={customFromDate}
-              onChange={(e) => {
-                setCustomFromDate(e.target.value);
-                setDatePreset('custom');
-              }}
-              className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-slate-200 font-mono"
-            />
-            <span className="text-slate-400 font-semibold">To:</span>
-            <input
-              type="date"
-              value={customToDate}
-              onChange={(e) => {
-                setCustomToDate(e.target.value);
-                setDatePreset('custom');
-              }}
-              className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-slate-200 font-mono"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* 6. F: USER ROWS WITH COMPLETE INFO & QUICK ACTIONS */}
-      <div className="space-y-2.5">
-        {filteredAndSortedUsers.length === 0 ? (
-          <div className="p-10 rounded-2xl bg-white border border-slate-200 text-center text-slate-500 text-xs space-y-2">
-            <div>No users found matching your active filters.</div>
+            );
+          })}
+          {(roleStatusFilter !== 'all' || fraudWalletFilter !== 'all' || datePreset !== 'all' || searchTerm) && (
             <button
               type="button"
               onClick={handleResetAllFilters}
-              className="px-3 py-1.5 rounded-xl bg-blue-600 text-white font-bold text-xs"
+              className="px-2 py-1 rounded-md text-[10px] font-bold text-rose-300 bg-rose-500/15 hover:bg-rose-500/25 whitespace-nowrap"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+
+        {/* Collapsible Date Range & CSV/JSON Export/Import Drawer */}
+        {showAdvancedFilters && (
+          <div className="pt-2 border-t border-slate-800 space-y-2 text-[11px]">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <div className="flex flex-wrap items-center gap-1">
+                <Calendar className="w-3 h-3 text-amber-400" />
+                <select
+                  value={dateFilterMode}
+                  onChange={(e) => setDateFilterMode(e.target.value as DateFilterMode)}
+                  className="bg-slate-950 border border-slate-700 rounded-md px-2 py-1 text-[10px] font-bold text-amber-300"
+                >
+                  <option value="createdAt">Joined Date</option>
+                  <option value="lastLogin">Last Active</option>
+                </select>
+                {(
+                  [
+                    { id: 'all', label: 'All' },
+                    { id: 'today', label: 'Today' },
+                    { id: 'yesterday', label: 'Yesterday' },
+                    { id: 'last7', label: '7D' },
+                    { id: 'last30', label: '30D' }
+                  ] as const
+                ).map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => {
+                      setDatePreset(preset.id);
+                      setCustomFromDate('');
+                      setCustomToDate('');
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                      datePreset === preset.id
+                        ? 'bg-emerald-500 text-slate-950 font-black'
+                        : 'bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1 text-[10px]">
+                <input
+                  type="date"
+                  value={customFromDate}
+                  onChange={(e) => {
+                    setCustomFromDate(e.target.value);
+                    setDatePreset('custom');
+                  }}
+                  className="bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-200 font-mono"
+                />
+                <span className="text-slate-500">-</span>
+                <input
+                  type="date"
+                  value={customToDate}
+                  onChange={(e) => {
+                    setCustomToDate(e.target.value);
+                    setDatePreset('custom');
+                  }}
+                  className="bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-200 font-mono"
+                />
+              </div>
+            </div>
+
+            {/* Export / Import Row */}
+            <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1 border-t border-slate-800/80">
+              <span className="text-[10px] text-slate-400">
+                Showing <strong className="text-amber-300">{filteredAndSortedUsers.length}</strong> of {users.length} users
+              </span>
+              <div className="flex flex-wrap items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => handleExportCSV(filteredAndSortedUsers, 'filtered')}
+                  className="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px] flex items-center space-x-1"
+                >
+                  <Download className="w-2.5 h-2.5" />
+                  <span>CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExportJSON(filteredAndSortedUsers, 'filtered')}
+                  className="px-2 py-1 rounded bg-sky-600 text-white font-bold text-[10px] flex items-center space-x-1"
+                >
+                  <Download className="w-2.5 h-2.5" />
+                  <span>JSON</span>
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json,.csv,application/json,text/csv"
+                  onChange={handleImportUsersFile}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  disabled={isImporting}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-2 py-1 rounded bg-amber-500 text-slate-950 font-black text-[10px] flex items-center space-x-1"
+                >
+                  <Upload className="w-2.5 h-2.5" />
+                  <span>{isImporting ? '...' : 'Import'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 2. CLEAN, COMPACT USER LIST TABLE / ROWS */}
+      <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden shadow-md">
+        {/* Compact Table Header */}
+        <div className="px-3 py-2 bg-slate-950/90 border-b border-slate-800 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <span>Users · Phone · Device ({filteredAndSortedUsers.length})</span>
+          <div className="flex items-center space-x-6">
+            <span>Wallet / D·W</span>
+            <span className="hidden sm:inline">Quick Actions</span>
+          </div>
+        </div>
+
+        {filteredAndSortedUsers.length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-xs space-y-2">
+            <div>No users found matching &ldquo;{searchTerm || 'active filters'}&rdquo;.</div>
+            <button
+              type="button"
+              onClick={handleResetAllFilters}
+              className="px-3 py-1 rounded-lg bg-amber-500 text-slate-950 font-bold text-xs"
             >
               Reset Filters
             </button>
           </div>
         ) : (
-          filteredAndSortedUsers.map((u) => {
-            const uIsAdmin = isUserAdmin(u);
-            const uIsBanned = isUserBanned(u);
-            const uIsOnline = isUserOnlineNow(u);
-            const uWallet = getUserWallet(u);
-            const uTotalDep = getUserTotalDeposit(u);
-            const uTotalWit = getUserTotalWithdraw(u);
-            const uDeviceId = getPrimaryDeviceId(u);
-            const isDupDevice = duplicateDeviceUidSet.has(u.uid);
-            const sharedCount = isDupDevice ? getSharedDeviceCount(u) : 1;
+          <div className="divide-y divide-slate-800/80">
+            {filteredAndSortedUsers.map((u) => {
+              const uIsAdmin = isUserAdmin(u);
+              const uIsBanned = isUserBanned(u);
+              const uIsOnline = isUserOnlineNow(u);
+              const uWallet = getUserWallet(u);
+              const uTotalDep = getUserTotalDeposit(u);
+              const uTotalWit = getUserTotalWithdraw(u);
+              const isDupDevice = duplicateDeviceUidSet.has(u.uid);
+              const uDeviceName = getUserDeviceLabel(u);
 
-            return (
-              <div
-                key={u.uid}
-                onClick={() => setSelectedUserUid(u.uid)}
-                className={`p-3.5 rounded-2xl bg-white border shadow-xs hover:border-blue-400 cursor-pointer flex flex-col lg:flex-row lg:items-center justify-between gap-3 transition ${
-                  isDupDevice ? 'border-rose-300 bg-rose-50/20' : 'border-slate-200/90'
-                }`}
-              >
-                {/* Left: User Identity, Timestamps, Device ID & Fraud Badges */}
-                <div className="flex items-start space-x-3 min-w-0">
-                  <div className="relative shrink-0">
-                    <div
-                      className={`w-11 h-11 rounded-full flex items-center justify-center ${
-                        uIsAdmin
-                          ? 'bg-amber-100 text-amber-700'
-                          : uIsBanned
-                          ? 'bg-rose-100 text-rose-600'
-                          : 'bg-blue-100 text-[#2563EB]'
-                      }`}
-                    >
-                      {uIsAdmin ? <Crown className="w-6 h-6" /> : <User className="w-6 h-6" />}
+              return (
+                <div
+                  key={u.uid}
+                  onClick={() => setSelectedUserUid(u.uid)}
+                  className={`px-2.5 sm:px-3 py-2 hover:bg-slate-800/60 cursor-pointer flex items-center justify-between gap-2 transition ${
+                    isDupDevice ? 'bg-rose-950/20' : ''
+                  }`}
+                >
+                  {/* Left: Compact Avatar + Name/UID + Phone/Password/Login Device Name */}
+                  <div className="flex items-center space-x-2 min-w-0 flex-1">
+                    <div className="relative shrink-0">
+                      <div
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center ${
+                          uIsAdmin
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                            : uIsBanned
+                            ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                            : 'bg-slate-800 text-sky-400 border border-slate-700'
+                        }`}
+                      >
+                        {uIsAdmin ? <Crown className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
+                      </div>
+                      {uIsOnline && (
+                        <span
+                          className="w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-slate-900 absolute -bottom-0.5 -right-0.5"
+                          title="Online"
+                        />
+                      )}
                     </div>
-                    {uIsOnline && (
-                      <span
-                        className="w-3 h-3 rounded-full bg-emerald-500 border-2 border-white absolute bottom-0 right-0"
-                        title="Online Now"
-                      />
-                    )}
+
+                    <div className="min-w-0 flex-1">
+                      {/* Row Line 1: Name, UID, Tiny Status Indicators */}
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="font-bold text-slate-100 text-xs truncate max-w-[100px] sm:max-w-[160px]">
+                          {u.name || u.username}
+                        </span>
+                        <span className="font-mono text-[10px] text-slate-400 shrink-0">
+                          #{u.uid}
+                        </span>
+                        {uIsAdmin && (
+                          <span className="px-1 py-0.2 rounded text-[9px] font-black bg-amber-500 text-slate-950 shrink-0">
+                            ADMIN
+                          </span>
+                        )}
+                        {uIsBanned ? (
+                          <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 shrink-0">
+                            Banned
+                          </span>
+                        ) : (
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" title="Active" />
+                        )}
+                        {uTotalDep > 0 && (
+                          <span className="text-[10px] shrink-0" title="VIP Depositor">💎</span>
+                        )}
+                        {isDupDevice && (
+                          <span className="text-[10px] text-rose-400 font-bold shrink-0" title="Duplicate Device">
+                            ⚠️
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Row Line 2: Phone, Password & Actual Login Device Name + View Devices Trigger */}
+                      <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-slate-400 mt-0.5">
+                        <span className="text-slate-300 font-semibold">{u.phone}</span>
+                        <span className="text-amber-300/90">🔑 {u.passwordHash || '—'}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDevicesModalUserUid(u.uid);
+                          }}
+                          className="inline-flex items-center space-x-0.5 px-1.5 py-0.2 rounded bg-sky-500/15 hover:bg-sky-500/30 border border-sky-500/30 text-sky-300 font-sans font-bold text-[9px] truncate max-w-[155px] sm:max-w-none transition"
+                          title={`Click to view device history (${uDeviceName})`}
+                        >
+                          <Smartphone className="w-2.5 h-2.5 mr-0.5 shrink-0 text-sky-400" />
+                          <span className="truncate">{uDeviceName}</span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-mono font-black text-slate-900 text-sm">
-                        {u.name || u.username}
-                      </span>
-                      <span className="font-mono text-xs text-slate-500">({u.uid})</span>
-                      {uIsAdmin && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500 text-slate-950">
-                          👑 ADMIN
-                        </span>
-                      )}
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          !uIsBanned ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'
-                        }`}
-                      >
-                        {!uIsBanned ? 'Active' : 'Banned'}
-                      </span>
-                      {uTotalDep > 0 ? (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-800">
-                          💎 VIP Depositor
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600">
-                          🎁 Free Bonus
-                        </span>
-                      )}
-                      {isDupDevice && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-600 text-white flex items-center space-x-1">
-                          <AlertTriangle className="w-3 h-3" />
-                          <span>⚠️ Duplicate Device ({sharedCount} Accounts)</span>
-                        </span>
-                      )}
+                  {/* Right: Compact Balance + View Devices Button + Small Icon Actions */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="text-right leading-tight">
+                      <div className="font-mono font-black text-xs text-emerald-400 tabular-nums">
+                        ₹{uWallet.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      </div>
+                      <div className="font-mono text-[9px] text-slate-400 tabular-nums">
+                        <span className="text-sky-400">D:{uTotalDep}</span> · <span className="text-rose-400">W:{uTotalWit}</span>
+                      </div>
                     </div>
 
-                    {/* Phone, Password, Device ID Badge */}
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 font-mono">
-                      <span className="font-bold text-slate-900">+91 {u.phone}</span>
-                      <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-900 font-bold text-[11px]">
-                        🔑 Pass: {u.passwordHash || 'Not Set'}
-                      </span>
-                      <span
-                        className={`px-2 py-0.5 rounded-md font-mono text-[10px] font-bold ${
-                          isDupDevice
-                            ? 'bg-rose-100 border border-rose-300 text-rose-800'
-                            : 'bg-slate-100 border border-slate-200 text-slate-700'
-                        }`}
-                        title={`Bound: ${u.boundDeviceId || 'None'} | Last Used: ${uDeviceId || 'None'}`}
+                    {/* Compact Small Icon Buttons */}
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDevicesModalUserUid(u.uid);
+                        }}
+                        className="h-6 sm:h-7 px-2 rounded-lg bg-sky-500/15 hover:bg-sky-500/30 border border-sky-500/30 text-sky-300 font-bold text-[10px] flex items-center space-x-1 transition"
+                        title="View Associated Devices History"
                       >
-                        📱 Device: {uDeviceId ? uDeviceId.slice(0, 16) : 'Unbound'}
-                        {u.boundDeviceId ? ' 🔒' : ''}
-                      </span>
-                    </div>
+                        <Smartphone className="w-3 h-3 shrink-0 text-sky-400" />
+                        <span className="hidden md:inline">View Devices</span>
+                        <span className="font-mono text-[9px] bg-sky-500/20 px-1 rounded">
+                          {store.getUserAssociatedDevices(u).length}
+                        </span>
+                      </button>
 
-                    {/* Formatted Joining Date & Last Active Time (DD/MM/YYYY, hh:mm A) */}
-                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
-                      <span>
-                        <strong>Joined:</strong> {formatDateTime(u.createdAt)}
-                      </span>
-                      <span>
-                        <strong>Last Active:</strong> {formatDateTime(u.lastLogin || u.lastActive)}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWalletEditTargetUser(u);
+                          setBalanceModalMode('set');
+                          setAdjustAmount(uWallet);
+                          setAdjustReason('Quick Wallet Edit');
+                        }}
+                        className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-blue-500/15 hover:bg-blue-500/30 border border-blue-500/30 text-blue-400 flex items-center justify-center transition"
+                        title="Edit Wallet"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => handleQuickToggleAdmin(u, e)}
+                        className={`w-6 h-6 sm:w-7 sm:h-7 rounded-lg border flex items-center justify-center transition ${
+                          uIsAdmin
+                            ? 'bg-amber-500 text-slate-950 border-amber-400'
+                            : 'bg-slate-800 hover:bg-amber-500/20 border-slate-700 text-slate-400 hover:text-amber-300'
+                        }`}
+                        title={uIsAdmin ? 'Remove Admin' : 'Make Admin'}
+                      >
+                        <Crown className="w-3 h-3" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => handleQuickResetDeviceLock(u, e)}
+                        className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-400 flex items-center justify-center transition"
+                        title="Reset Device Lock"
+                      >
+                        <Unlock className="w-3 h-3" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => handleQuickToggleBan(u, e)}
+                        className={`w-6 h-6 sm:w-7 sm:h-7 rounded-lg border flex items-center justify-center transition ${
+                          uIsBanned
+                            ? 'bg-emerald-600 text-white border-emerald-500'
+                            : 'bg-rose-500/15 hover:bg-rose-500/30 border-rose-500/30 text-rose-400'
+                        }`}
+                        title={uIsBanned ? 'Unban User' : 'Ban User'}
+                      >
+                        <Ban className="w-3 h-3" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteUser(u)}
+                        className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-slate-800 hover:bg-rose-600/30 border border-slate-700 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 flex items-center justify-center transition"
+                        title="Delete User"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
                     </div>
                   </div>
                 </div>
-
-                {/* Right: Wallet Metrics & Quick Row Actions */}
-                <div className="flex flex-col sm:flex-row lg:flex-col xl:flex-row items-start sm:items-center lg:items-end xl:items-center justify-between gap-2.5 shrink-0 border-t lg:border-t-0 pt-2.5 lg:pt-0 border-slate-100">
-                  <div className="flex items-center gap-3 text-xs">
-                    <div className="text-left sm:text-right">
-                      <div className="text-[10px] text-slate-400 font-semibold uppercase">Wallet</div>
-                      <div className="font-mono font-black text-sm text-slate-900 tabular-nums">
-                        ₹{uWallet.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                      </div>
-                    </div>
-                    <div className="text-left sm:text-right">
-                      <div className="text-[10px] text-emerald-600 font-semibold uppercase">Deposit</div>
-                      <div className="font-mono font-bold text-xs text-emerald-700 tabular-nums">
-                        ₹{uTotalDep.toLocaleString('en-IN')}
-                      </div>
-                    </div>
-                    <div className="text-left sm:text-right">
-                      <div className="text-[10px] text-rose-600 font-semibold uppercase">Withdraw</div>
-                      <div className="font-mono font-bold text-xs text-rose-700 tabular-nums">
-                        ₹{uTotalWit.toLocaleString('en-IN')}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Quick Row Action Buttons */}
-                  <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                    {/* Make/Remove Admin 👑 */}
-                    <button
-                      type="button"
-                      onClick={(e) => handleQuickToggleAdmin(u, e)}
-                      className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition ${
-                        uIsAdmin
-                          ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
-                          : 'bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-amber-900'
-                      }`}
-                      title="Make or Remove Admin Role (Resets boundDeviceId on promotion)"
-                    >
-                      {uIsAdmin ? '👑 Admin ON' : '👑 Make Admin'}
-                    </button>
-
-                    {/* Edit Wallet ✏️ */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setWalletEditTargetUser(u);
-                        setBalanceModalMode('set');
-                        setAdjustAmount(uWallet);
-                        setAdjustReason('Quick Wallet Edit');
-                      }}
-                      className="px-2.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-[11px] transition"
-                      title="Edit Wallet Balance"
-                    >
-                      ✏️ Wallet
-                    </button>
-
-                    {/* Reset Device Lock 🔓 */}
-                    <button
-                      type="button"
-                      onClick={(e) => handleQuickResetDeviceLock(u, e)}
-                      className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-[11px] transition"
-                      title="Reset Device Lock (Clears boundDeviceId in 1 click)"
-                    >
-                      🔓 Reset Device
-                    </button>
-
-                    {/* Ban/Unban 🚫 */}
-                    <button
-                      type="button"
-                      onClick={(e) => handleQuickToggleBan(u, e)}
-                      className={`px-2.5 py-1.5 rounded-xl font-bold text-[11px] transition ${
-                        uIsBanned
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-rose-50 hover:bg-rose-100 text-rose-700'
-                      }`}
-                      title={uIsBanned ? 'Unban User' : 'Ban User'}
-                    >
-                      {uIsBanned ? '✅ Unban' : '🚫 Ban'}
-                    </button>
-
-                    {/* Hard Delete */}
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteUser(u)}
-                      className="p-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 transition"
-                      title="Permanent Hard-Delete User"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })
+              );
+            })}
+          </div>
         )}
       </div>
-
-      {/* Bottom Full-Width Primary Blue "+ Add Manual User" Button */}
-      <button
-        type="button"
-        onClick={() => setShowAddUserModal(true)}
-        className="w-full py-3.5 rounded-2xl bg-[#2563EB] hover:bg-blue-700 text-white font-bold text-sm shadow-md flex items-center justify-center space-x-2 transition active:scale-[0.99]"
-      >
-        <Plus className="w-4 h-4 stroke-[2.5]" />
-        <span>Add Manual User</span>
-      </button>
 
       {/* Archived User Backups if any */}
       {deletedBackups.length > 0 && (
@@ -2441,6 +2459,265 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
           </div>
         </div>
       )}
+
+      {/* VIEW DEVICES HISTORY MODAL */}
+      {devicesModalUserUid && (() => {
+        const modalUser = store.getUser(devicesModalUserUid);
+        if (!modalUser) return null;
+        const associatedDevices: DeviceRecord[] = store.getUserAssociatedDevices(modalUser);
+
+        const handleBindSpecificDevice = async (devId: string) => {
+          try {
+            await rtdbUpdate(rtdbRef(rtdb, `users/${modalUser.uid}`), {
+              boundDeviceId: devId,
+              lastUsedDeviceId: devId,
+              updatedAt: Date.now()
+            });
+            store.updateUserFromFirestore({
+              uid: modalUser.uid,
+              boundDeviceId: devId,
+              lastUsedDeviceId: devId
+            });
+            showToast(`Bound user ${modalUser.username} to device ${devId}`, 'success');
+          } catch {
+            showToast('Failed to bind device', 'error');
+          }
+        };
+
+        const handleRemoveDeviceFromHistory = async (devId: string) => {
+          try {
+            const nextDevices = { ...(modalUser.devices || {}) };
+            delete nextDevices[devId];
+            const patch: Record<string, any> = {
+              devices: nextDevices,
+              updatedAt: Date.now()
+            };
+            if (modalUser.boundDeviceId === devId) patch.boundDeviceId = null;
+            if (modalUser.lastUsedDeviceId === devId) {
+              const remaining = Object.keys(nextDevices)[0] || null;
+              patch.lastUsedDeviceId = remaining;
+            }
+            await rtdbUpdate(rtdbRef(rtdb, `users/${modalUser.uid}`), patch);
+            store.updateUserFromFirestore({
+              uid: modalUser.uid,
+              ...patch
+            });
+            showToast(`Removed device ${devId} from user history`, 'info');
+          } catch {
+            showToast('Failed to remove device entry', 'error');
+          }
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-3xl p-4 sm:p-5 shadow-2xl space-y-4 text-slate-100 max-h-[90vh] flex flex-col overflow-hidden">
+              {/* Modal Header */}
+              <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-800 shrink-0">
+                <div className="flex items-center space-x-3 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl bg-sky-500/15 border border-sky-500/30 text-sky-400 flex items-center justify-center shrink-0">
+                    <Smartphone className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-black text-sm sm:text-base text-white truncate">
+                        {modalUser.name || modalUser.username} (#{modalUser.uid})
+                      </h3>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                        📱 {getUserDeviceLabel(modalUser)}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                      +91 {modalUser.phone} · Bound ID: {modalUser.boundDeviceId || 'Unbound'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDevicesModalUserUid(null)}
+                  className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Content Body */}
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950/70 border border-slate-800 rounded-xl px-3 py-2 text-[11px]">
+                  <div className="text-slate-300">
+                    Showing <strong>only actual devices</strong> where this user logged in ({associatedDevices.length}).
+                  </div>
+                  {modalUser.boundDeviceId && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleQuickResetDeviceLock(modalUser, e)}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 font-bold text-[10px] flex items-center space-x-1"
+                    >
+                      <Unlock className="w-3 h-3" />
+                      <span>Reset Bound Device Lock</span>
+                    </button>
+                  )}
+                </div>
+
+                {associatedDevices.length === 0 ? (
+                  <div className="p-8 text-center rounded-2xl bg-slate-950 border border-slate-800 text-slate-400 text-xs">
+                    No login device recorded for this user yet. Their real device ID &amp; model will appear automatically as soon as they log in.
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {associatedDevices.map((dev, idx) => {
+                      const isCurrentUsed = modalUser.lastUsedDeviceId === dev.deviceId || idx === 0;
+                      const isBound = modalUser.boundDeviceId === dev.deviceId;
+                      const isRegDevice = modalUser.registrationDeviceId === dev.deviceId;
+
+                      // Check if any other users share this exact deviceId
+                      const otherUsersSharing = users.filter(
+                        (other) =>
+                          other.uid !== modalUser.uid &&
+                          (other.lastUsedDeviceId === dev.deviceId ||
+                            other.boundDeviceId === dev.deviceId ||
+                            other.registrationDeviceId === dev.deviceId ||
+                            Boolean(other.devices?.[dev.deviceId]))
+                      );
+
+                      return (
+                        <div
+                          key={dev.deviceId}
+                          className={`p-3 rounded-2xl border space-y-2 ${
+                            isCurrentUsed
+                              ? 'bg-sky-950/25 border-sky-500/40'
+                              : 'bg-slate-950/80 border-slate-800'
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="space-y-1 min-w-0">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-bold text-xs sm:text-sm text-white flex items-center gap-1">
+                                  <Smartphone className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                  <span>{dev.deviceName || dev.deviceModel || 'Logged-in Device'}</span>
+                                </span>
+                                {isCurrentUsed && (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                    Active Login Device
+                                  </span>
+                                )}
+                                {isBound && (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                    🔒 Bound Lock
+                                  </span>
+                                )}
+                                {isRegDevice && (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                    Signup Device
+                                  </span>
+                                )}
+                                {otherUsersSharing.length > 0 && (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                                    ⚠️ Shared with {otherUsersSharing.length} other account(s)
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Device ID with Copy */}
+                              <div className="flex items-center gap-1.5 text-[11px] font-mono text-slate-300">
+                                <span className="text-slate-500">Device ID:</span>
+                                <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-sky-300 font-bold">
+                                  {dev.deviceId}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(dev.deviceId, 'Device ID')}
+                                  className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
+                                  title="Copy Device ID"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Per-Device Quick Actions */}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {!isBound ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleBindSpecificDevice(dev.deviceId)}
+                                  className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-[10px] flex items-center space-x-1 transition"
+                                  title="Bind User Account to This Device ID"
+                                >
+                                  <Lock className="w-3 h-3" />
+                                  <span>Bind Device</span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleQuickResetDeviceLock(modalUser, e)}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-[10px] flex items-center space-x-1 transition"
+                                >
+                                  <Unlock className="w-3 h-3" />
+                                  <span>Unbind</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveDeviceFromHistory(dev.deviceId)}
+                                className="p-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/30 text-rose-300 transition"
+                                title="Remove Device from History"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Timestamps & Hardware Specs */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[10px]">
+                            <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800/80">
+                              <span className="text-slate-500 uppercase font-bold block">
+                                Last Login Timestamp
+                              </span>
+                              <span className="font-mono font-bold text-emerald-400">
+                                {formatDateTime(dev.lastUsedAt || modalUser.lastLogin)}
+                              </span>
+                            </div>
+                            <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800/80">
+                              <span className="text-slate-500 uppercase font-bold block">
+                                First Login / Registered
+                              </span>
+                              <span className="font-mono font-bold text-slate-200">
+                                {formatDateTime(dev.registeredAt || modalUser.createdAt)}
+                              </span>
+                            </div>
+                            <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800/80">
+                              <span className="text-slate-500 uppercase font-bold block">
+                                OS · Browser · Screen
+                              </span>
+                              <span className="font-mono font-bold text-sky-300">
+                                {dev.osVersion || dev.os || 'Android'} · {dev.browser || 'Chrome'}
+                                {dev.screenResolution ? ` · ${dev.screenResolution}` : ''}
+                              </span>
+                            </div>
+                          </div>
+
+                          {dev.userAgent && (
+                            <div className="text-[9px] font-mono text-slate-500 truncate px-1" title={dev.userAgent}>
+                              UA: {dev.userAgent}
+                            </div>
+                          )}
+
+                          {otherUsersSharing.length > 0 && (
+                            <div className="p-2 rounded-xl bg-rose-950/40 border border-rose-500/30 text-[10px] text-rose-200">
+                              <span className="font-bold">Also logged in on this Device ID: </span>
+                              {otherUsersSharing.map((o) => `${o.name || o.username} (#${o.uid} · ${o.phone})`).join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

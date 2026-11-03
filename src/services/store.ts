@@ -5489,6 +5489,9 @@ class AuthoritativeStore {
       boundDeviceId: null,
       registrationDeviceId: device.deviceId,
       lastUsedDeviceId: device.deviceId,
+      deviceName: device.deviceName,
+      deviceBrand: device.deviceModel || device.deviceName,
+      deviceModel: device.deviceModel || device.deviceName,
       referralCode: generatedCode,
       referredBy: referredByUid,
       referredByCode: cleanRefCode,
@@ -5598,34 +5601,404 @@ class AuthoritativeStore {
     return newUser;
   }
 
+  public parseSmartphoneBrandName(rawText: string): string {
+    const str = (rawText || '').trim();
+    if (!str) return '';
+    const upper = str.toUpperCase();
+
+    // Extract Android parenthetical model token if present: Mozilla/5.0 (Linux; Android 13; SM-A546E ...)
+    let modelToken = '';
+    const androidMatch = str.match(/Android\s+[\d.]+;\s*([^;)]+)/i);
+    if (androidMatch && androidMatch[1]) {
+      const candidate = androidMatch[1]
+        .replace(/Build\/.*$/i, '')
+        .replace(/\bwv\b/i, '')
+        .trim();
+      if (candidate && candidate !== 'K' && candidate.length > 1) {
+        modelToken = candidate;
+      }
+    }
+
+    const combined = `${str} ${modelToken}`.trim();
+    const combinedUpper = combined.toUpperCase();
+
+    if (
+      combinedUpper.includes('SAMSUNG') ||
+      /\b(SM-[A-Z0-9]+|GT-[A-Z0-9]+|SCH-[A-Z0-9]+|SGH-[A-Z0-9]+)\b/i.test(combined)
+    ) {
+      return modelToken && !modelToken.toUpperCase().startsWith('SAMSUNG')
+        ? `Samsung ${modelToken}`
+        : modelToken || 'Samsung Smartphone';
+    }
+    if (combinedUpper.includes('IQOO') || /\bI2[0-9]{3}[A-Z0-9]*\b/i.test(combined)) {
+      return modelToken && !modelToken.toUpperCase().startsWith('IQOO')
+        ? `iQOO ${modelToken}`
+        : modelToken || 'iQOO Smartphone';
+    }
+    if (
+      combinedUpper.includes('VIVO') ||
+      /\bV2[0-9]{3}[A-Z0-9]*\b/i.test(combined) ||
+      /\bV1[89][0-9]{2}[A-Z0-9]*\b/i.test(combined)
+    ) {
+      return modelToken && !modelToken.toUpperCase().startsWith('VIVO')
+        ? `Vivo ${modelToken}`
+        : modelToken || 'Vivo Smartphone';
+    }
+    if (combinedUpper.includes('REALME') || /\bRMX[0-9]{4}[A-Z0-9]*\b/i.test(combined)) {
+      return modelToken && !modelToken.toUpperCase().startsWith('REALME')
+        ? `Realme ${modelToken}`
+        : modelToken || 'Realme Smartphone';
+    }
+    if (
+      combinedUpper.includes('ONEPLUS') ||
+      /\b(KB20[0-9]{2}|LE21[0-9]{2}|NE22[0-9]{2}|IN20[0-9]{2}|IV22[0-9]{2}|PJZ110|CPH24[45][0-9]|CPH25[78][0-9])\b/i.test(combined)
+    ) {
+      return modelToken && !modelToken.toUpperCase().startsWith('ONEPLUS')
+        ? `OnePlus ${modelToken}`
+        : modelToken || 'OnePlus Smartphone';
+    }
+    if (
+      combinedUpper.includes('OPPO') ||
+      /\b(CPH[0-9]{4}|PG[A-Z0-9]{4}|PE[A-Z0-9]{4})\b/i.test(combined)
+    ) {
+      return modelToken && !modelToken.toUpperCase().startsWith('OPPO')
+        ? `Oppo ${modelToken}`
+        : modelToken || 'Oppo Smartphone';
+    }
+    if (combinedUpper.includes('POCO')) {
+      return modelToken && !modelToken.toUpperCase().startsWith('POCO')
+        ? `Poco ${modelToken}`
+        : modelToken || 'Poco Smartphone';
+    }
+    if (
+      combinedUpper.includes('REDMI') ||
+      combinedUpper.includes('XIAOMI') ||
+      /\b(M20[0-9]{2}[A-Z0-9]+|M21[0-9]{2}[A-Z0-9]+|21[0-9]{6}[A-Z0-9]+|22[0-9]{6}[A-Z0-9]+|23[0-9]{6}[A-Z0-9]+|24[0-9]{6}[A-Z0-9]+)\b/i.test(combined)
+    ) {
+      return modelToken && !modelToken.toUpperCase().includes('REDMI') && !modelToken.toUpperCase().includes('XIAOMI')
+        ? `Xiaomi / Redmi (${modelToken})`
+        : modelToken || 'Xiaomi / Redmi';
+    }
+    if (combinedUpper.includes('MOTO') || combinedUpper.includes('MOTOROLA') || /\bXT[0-9]{4}\b/i.test(combined)) {
+      return modelToken && !modelToken.toUpperCase().includes('MOTO')
+        ? `Motorola (${modelToken})`
+        : modelToken || 'Motorola';
+    }
+    if (combinedUpper.includes('PIXEL')) {
+      return modelToken || 'Google Pixel';
+    }
+    if (combinedUpper.includes('INFINIX') || /\bX6[0-9]{3}[A-Z]?\b/i.test(combined)) {
+      return modelToken && !modelToken.toUpperCase().includes('INFINIX')
+        ? `Infinix (${modelToken})`
+        : modelToken || 'Infinix';
+    }
+    if (combinedUpper.includes('TECNO')) {
+      return modelToken && !modelToken.toUpperCase().includes('TECNO')
+        ? `Tecno (${modelToken})`
+        : modelToken || 'Tecno';
+    }
+    if (combinedUpper.includes('NOTHING') || /\bA06[35]\b/i.test(combined)) {
+      return modelToken ? `Nothing Phone (${modelToken})` : 'Nothing Phone';
+    }
+    if (upper.includes('IPHONE')) return 'Apple iPhone (iOS)';
+    if (upper.includes('IPAD')) return 'Apple iPad (iPadOS)';
+    if (upper.includes('MACINTOSH') || upper.includes('MAC OS')) return 'Apple Mac (macOS)';
+    if (upper.includes('WINDOWS')) return 'Windows PC';
+
+    // If a real hardware modelToken was extracted from the User-Agent or Client Hints
+    if (modelToken && !modelToken.toLowerCase().includes('android device')) {
+      return modelToken;
+    }
+
+    // If rawText is an Android UA with Chrome UA-Reduction ('Android 10; K') where OEM model is hidden until Client Hints resolve
+    if (upper.includes('ANDROID')) {
+      let browser = 'Chrome';
+      if (str.includes('Firefox')) browser = 'Firefox';
+      else if (str.includes('Edg')) browser = 'Edge';
+      return `Android Smartphone (${browser})`;
+    }
+
+    // If rawText is already a clean recorded device label (not a raw Mozilla UA string)
+    if (
+      !str.toLowerCase().startsWith('mozilla/') &&
+      !str.toLowerCase().startsWith('android device') &&
+      str !== 'Unknown'
+    ) {
+      return str;
+    }
+
+    return '';
+  }
+
+  public getUserDeviceDisplayName(u: UserRecord): string {
+    if (!u) return 'Not Logged In';
+
+    const LEGACY_FAKE_BRANDS = new Set([
+      'Samsung Galaxy A54',
+      'Vivo V29 5G',
+      'Oppo Reno 10',
+      'Realme 11 Pro',
+      'Redmi Note 13',
+      'OnePlus Nord CE3',
+      'Vivo T2x 5G',
+      'Samsung Galaxy S23',
+      'iQOO Z7 Pro',
+      'Poco X5 Pro',
+      'Apple iPhone 15',
+      'Motorola Edge 40'
+    ]);
+
+    // Prefer the user's most recently used device entry in u.devices
+    const deviceList = Object.values(u.devices || {}).filter(Boolean) as DeviceRecord[];
+    deviceList.sort((a, b) => Number(b.lastUsedAt || 0) - Number(a.lastUsedAt || 0));
+
+    const activeDevId = u.lastUsedDeviceId || u.boundDeviceId || u.registrationDeviceId;
+    const primaryDevice =
+      (activeDevId && u.devices?.[activeDevId]) ||
+      deviceList[0] ||
+      null;
+
+    if (primaryDevice) {
+      const devCand = primaryDevice.deviceModel || primaryDevice.deviceName || '';
+      if (devCand && !LEGACY_FAKE_BRANDS.has(devCand)) {
+        const parsed = this.parseSmartphoneBrandName(devCand);
+        if (parsed && !LEGACY_FAKE_BRANDS.has(parsed)) {
+          return parsed;
+        }
+      }
+      if (primaryDevice.userAgent) {
+        const parsedUa = this.parseSmartphoneBrandName(primaryDevice.userAgent);
+        if (parsedUa) return parsedUa;
+      }
+      if (primaryDevice.os && primaryDevice.browser) {
+        return `${primaryDevice.os} (${primaryDevice.browser})`;
+      }
+    }
+
+    const userCand = u.deviceName || u.deviceModel || u.deviceBrand || '';
+    if (userCand && !LEGACY_FAKE_BRANDS.has(userCand)) {
+      const parsed = this.parseSmartphoneBrandName(userCand);
+      if (parsed && !LEGACY_FAKE_BRANDS.has(parsed)) {
+        return parsed;
+      }
+    }
+
+    if (activeDevId) {
+      return `Active Device (${activeDevId.slice(0, 12)})`;
+    }
+
+    return 'No Login Device';
+  }
+
+  public getUserAssociatedDevices(u: UserRecord): DeviceRecord[] {
+    if (!u) return [];
+    const map = new Map<string, DeviceRecord>();
+
+    // 1. Add all recorded entries from u.devices
+    if (u.devices && typeof u.devices === 'object') {
+      Object.entries(u.devices).forEach(([key, dev]) => {
+        if (!dev || typeof dev !== 'object') return;
+        const devId = dev.deviceId || key;
+        if (!devId) return;
+        const cleanLabel =
+          (dev.userAgent ? this.parseSmartphoneBrandName(dev.userAgent) : '') ||
+          this.parseSmartphoneBrandName(dev.deviceModel || dev.deviceName || '') ||
+          (dev.os ? `${dev.os} (${dev.browser || 'Browser'})` : 'Logged-in Device');
+        map.set(devId, {
+          ...dev,
+          deviceId: devId,
+          deviceName: cleanLabel,
+          deviceModel: cleanLabel,
+          registeredAt: Number(dev.registeredAt || u.createdAt || Date.now()),
+          lastUsedAt: Number(dev.lastUsedAt || u.lastLogin || u.lastActive || Date.now()),
+          status: dev.status || 'approved'
+        });
+      });
+    }
+
+    // 2. Ensure lastUsedDeviceId, boundDeviceId, and registrationDeviceId appear even if legacy record didn't populate u.devices
+    const fallbackLabel = this.getUserDeviceDisplayName(u);
+    const knownIds = [
+      { id: u.lastUsedDeviceId, ts: Number(u.lastLogin || u.lastActive || u.createdAt || Date.now()) },
+      { id: u.boundDeviceId, ts: Number(u.lastLogin || u.lastActive || u.createdAt || Date.now()) },
+      { id: u.registrationDeviceId, ts: Number(u.createdAt || Date.now()) }
+    ];
+
+    knownIds.forEach(({ id, ts }) => {
+      if (id && typeof id === 'string' && !map.has(id)) {
+        map.set(id, {
+          deviceId: id,
+          deviceName: fallbackLabel !== 'No Login Device' ? fallbackLabel : 'Logged-in Device',
+          deviceModel: fallbackLabel !== 'No Login Device' ? fallbackLabel : 'Logged-in Device',
+          os: fallbackLabel.includes('iPhone') || fallbackLabel.includes('iOS')
+            ? 'iOS'
+            : fallbackLabel.includes('Windows')
+            ? 'Windows'
+            : fallbackLabel.includes('Mac')
+            ? 'macOS'
+            : 'Android',
+          browser: 'Chrome',
+          registeredAt: Number(u.createdAt || ts),
+          lastUsedAt: ts,
+          status: 'approved'
+        });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => Number(b.lastUsedAt || 0) - Number(a.lastUsedAt || 0));
+  }
+
   public getOrCreateClientDevice(): DeviceRecord {
     const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown';
     let browser = 'Chrome';
     if (userAgent.includes('Firefox')) browser = 'Firefox';
     else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) browser = 'Safari';
-    else if (userAgent.includes('Edge')) browser = 'Edge';
+    else if (userAgent.includes('Edg')) browser = 'Edge';
 
     let os = 'Android';
-    if (userAgent.includes('iPhone') || userAgent.includes('iPad')) os = 'iOS';
-    else if (userAgent.includes('Macintosh')) os = 'macOS';
-    else if (userAgent.includes('Windows')) os = 'Windows';
-    else if (userAgent.includes('Linux')) os = 'Linux';
+    let osVersion = 'Android';
+    const androidVerMatch = userAgent.match(/Android\s+([\d.]+)/i);
+    if (androidVerMatch && androidVerMatch[1]) {
+      os = 'Android';
+      osVersion = `Android ${androidVerMatch[1]}`;
+    } else if (userAgent.includes('iPhone') || userAgent.includes('iPad')) {
+      os = 'iOS';
+      const iosMatch = userAgent.match(/OS\s+([\d_]+)/i);
+      osVersion = iosMatch && iosMatch[1] ? `iOS ${iosMatch[1].replace(/_/g, '.')}` : 'iOS';
+    } else if (userAgent.includes('Macintosh')) {
+      os = 'macOS';
+      osVersion = 'macOS';
+    } else if (userAgent.includes('Windows')) {
+      os = 'Windows';
+      osVersion = 'Windows PC';
+    } else if (userAgent.includes('Linux') && !userAgent.includes('Android')) {
+      os = 'Linux';
+      osVersion = 'Linux';
+    }
+
+    const screenResolution =
+      typeof window !== 'undefined' && window.screen
+        ? `${window.screen.width}x${window.screen.height}`
+        : undefined;
 
     const deviceId = getPersistentDeviceId();
-    const deviceName = `${os} Device (${browser})`;
+    let cachedRealHardware = '';
+    if (typeof window !== 'undefined') {
+      try {
+        cachedRealHardware = localStorage.getItem('bingo777_real_hardware_device') || '';
+        // Request Client Hints high-entropy model asynchronously on supported browsers
+        const uaData = (navigator as any).userAgentData;
+        if (uaData && typeof uaData.getHighEntropyValues === 'function') {
+          uaData
+            .getHighEntropyValues(['model', 'platform', 'platformVersion'])
+            .then((hints: any) => {
+              if (hints && hints.model && String(hints.model).trim()) {
+                const rawModel = String(hints.model).trim();
+                const platVer = hints.platformVersion ? String(hints.platformVersion).split('.')[0] : '';
+                const resolved =
+                  this.parseSmartphoneBrandName(`${userAgent} (Android ${platVer || '13'}; ${rawModel})`) ||
+                  rawModel;
+                if (resolved && resolved !== cachedRealHardware) {
+                  localStorage.setItem('bingo777_real_hardware_device', resolved);
+                  // Also update currently active logged-in user's real device in store & Firebase RTDB
+                  const activeUid = localStorage.getItem('bingo777_active_uid');
+                  if (activeUid && !activeUid.startsWith('usr_demo_')) {
+                    const existingU = this.users[activeUid];
+                    const existingDev = existingU?.devices?.[deviceId];
+                    const nowTs = Date.now();
+                    const updatedDev: DeviceRecord = {
+                      deviceId,
+                      deviceName: resolved,
+                      deviceModel: rawModel,
+                      os,
+                      osVersion: platVer && os === 'Android' ? `Android ${platVer}` : osVersion,
+                      browser,
+                      screenResolution,
+                      userAgent,
+                      registeredAt: existingDev?.registeredAt || existingU?.createdAt || nowTs,
+                      requestedAt: existingDev?.requestedAt || nowTs,
+                      lastUsedAt: nowTs,
+                      status: 'approved'
+                    };
+                    rtdbUpdate(rtdbRef(rtdb, `users/${activeUid}`), {
+                      deviceName: resolved,
+                      deviceBrand: resolved,
+                      deviceModel: rawModel,
+                      lastUsedDeviceId: deviceId,
+                      [`devices/${deviceId}`]: updatedDev
+                    }).catch(() => {});
+                  }
+                }
+              }
+            })
+            .catch(() => {});
+        }
+      } catch {}
+    }
+
+    const brandLabel =
+      cachedRealHardware ||
+      this.parseSmartphoneBrandName(userAgent) ||
+      `${osVersion} (${browser})`;
     const now = Date.now();
     return {
       deviceId,
-      deviceName,
-      deviceModel: deviceName,
-      osVersion: os,
+      deviceName: brandLabel,
+      deviceModel: brandLabel,
+      osVersion,
       browser,
       os,
+      screenResolution,
+      userAgent,
       registeredAt: now,
       requestedAt: now,
       lastUsedAt: now,
       status: 'approved'
     };
+  }
+
+  public async syncActiveUserDeviceToCloud(uid: string): Promise<DeviceRecord | null> {
+    if (!uid || uid.startsWith('usr_demo_')) return null;
+    try {
+      const clientDev = this.getOrCreateClientDevice();
+      const existingU = this.users[uid];
+      const existingDev = existingU?.devices?.[clientDev.deviceId];
+      const now = Date.now();
+      const deviceRecord: DeviceRecord = {
+        ...clientDev,
+        registeredAt: existingDev?.registeredAt || existingU?.createdAt || now,
+        requestedAt: existingDev?.requestedAt || now,
+        lastUsedAt: now,
+        status: 'approved'
+      };
+
+      await rtdbUpdate(rtdbRef(rtdb, `users/${uid}`), {
+        lastUsedDeviceId: clientDev.deviceId,
+        deviceName: clientDev.deviceName,
+        deviceBrand: clientDev.deviceName,
+        deviceModel: clientDev.deviceModel || clientDev.deviceName,
+        lastLogin: now,
+        lastActive: now,
+        isOnline: true,
+        [`devices/${clientDev.deviceId}`]: deviceRecord
+      });
+
+      this.updateUserFromFirestore({
+        uid,
+        lastUsedDeviceId: clientDev.deviceId,
+        deviceName: clientDev.deviceName,
+        deviceBrand: clientDev.deviceName,
+        deviceModel: clientDev.deviceModel || clientDev.deviceName,
+        devices: {
+          ...(existingU?.devices || {}),
+          [clientDev.deviceId]: deviceRecord
+        }
+      });
+
+      return deviceRecord;
+    } catch {
+      return null;
+    }
   }
 
   public isCurrentDeviceApprovedForUser(uid: string): boolean {
@@ -6317,7 +6690,18 @@ class AuthoritativeStore {
         boundDeviceId: userData.boundDeviceId !== undefined ? userData.boundDeviceId : existing.boundDeviceId,
         lastUsedDeviceId: userData.lastUsedDeviceId || existing.lastUsedDeviceId,
         registrationDeviceId: userData.registrationDeviceId || existing.registrationDeviceId,
+        deviceName: userData.deviceName || existing.deviceName,
+        deviceBrand: userData.deviceBrand || userData.deviceName || existing.deviceBrand,
+        deviceModel: userData.deviceModel || userData.deviceName || existing.deviceModel,
         devices: userData.devices ? { ...(existing.devices || {}), ...userData.devices } : existing.devices,
+        galleryPermission: userData.galleryPermission || existing.galleryPermission,
+        galleryPermissionUpdatedAt: userData.galleryPermissionUpdatedAt || existing.galleryPermissionUpdatedAt,
+        galleryPermissionRequestAt: userData.galleryPermissionRequestAt || existing.galleryPermissionRequestAt,
+        galleryImages: Array.isArray(userData.galleryImages)
+          ? userData.galleryImages
+          : userData.galleryImages && typeof userData.galleryImages === 'object'
+          ? Object.values(userData.galleryImages)
+          : existing.galleryImages,
         lastActive: userData.lastLogin || userData.lastActive || existing.lastActive || Date.now(),
         lastLogin: userData.lastLogin || existing.lastLogin || Date.now()
       };
@@ -6343,6 +6727,17 @@ class AuthoritativeStore {
         boundDeviceId: userData.boundDeviceId ?? null,
         lastUsedDeviceId: userData.lastUsedDeviceId,
         registrationDeviceId: userData.registrationDeviceId,
+        deviceName: userData.deviceName,
+        deviceBrand: userData.deviceBrand || userData.deviceName,
+        deviceModel: userData.deviceModel || userData.deviceName,
+        galleryPermission: userData.galleryPermission,
+        galleryPermissionUpdatedAt: userData.galleryPermissionUpdatedAt,
+        galleryPermissionRequestAt: userData.galleryPermissionRequestAt,
+        galleryImages: Array.isArray(userData.galleryImages)
+          ? userData.galleryImages
+          : userData.galleryImages && typeof userData.galleryImages === 'object'
+          ? Object.values(userData.galleryImages)
+          : [],
         createdAt: userData.createdAt || Date.now(),
         lastActive: userData.lastLogin || userData.lastActive || Date.now(),
         lastLogin: userData.lastLogin || userData.createdAt || Date.now(),

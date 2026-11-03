@@ -502,7 +502,6 @@ export const AccountView: React.FC<AccountViewProps> = ({
           </button>
         )}
 
-
       </div>
 
       {/* Logout */}

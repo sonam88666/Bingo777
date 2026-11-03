@@ -8,6 +8,8 @@ import {
   ShieldCheck,
   Zap,
   Key,
+  Download,
+  CheckCircle2,
   User as UserIcon
 } from 'lucide-react';
 import { UserRecord, DeviceRecord, AuthConfig } from '../../types';
@@ -16,6 +18,13 @@ import { useToast } from '../common/Toast';
 import { firebaseSync } from '../../services/firebaseSync';
 import { apiClient } from '../../services/apiClient';
 import { Bingo777Logo } from '../common/Bingo777Logo';
+import {
+  getSavedReferralCode,
+  captureAndPersistReferralCode,
+  resolveDeferredReferralCodeAsync,
+  clearPendingReferralCode,
+  getDeviceHardwareSignature
+} from '../../services/referralAttribution';
 import {
   auth,
   rtdb,
@@ -33,9 +42,16 @@ import { PhoneLoginModal } from './PhoneLoginModal';
 interface UserAuthModalProps {
   onSuccess: (user: UserRecord) => void;
   onClose: () => void;
+  canClose?: boolean;
+  onOpenAdmin?: () => void;
 }
 
-export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose }) => {
+export const UserAuthModal: React.FC<UserAuthModalProps> = ({
+  onSuccess,
+  onClose,
+  canClose = true,
+  onOpenAdmin
+}) => {
   const { showToast } = useToast();
 
   // Real-time listener for /admin_settings/auth_config
@@ -68,10 +84,10 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
   const requireReferralOnSignup = Boolean(authConfig.requireReferralOnSignup);
   const minPasswordLength = Math.max(4, Number(authConfig.minPasswordLength) || 6);
 
-  // Default to 100% Zero-Captcha Login/Register flow
+  // Default to 100% Zero-Captcha Login/Register flow (automatically switch to Sign Up if a referral code is detected)
   const [tab, setTab] = useState<'otp' | 'login' | 'register'>(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('ref')) return 'register';
+    const initialRef = getSavedReferralCode();
+    if (initialRef) return 'register';
     const defTab = store.getAdminSettings().auth_config?.defaultAuthTab;
     if (defTab === 'register') return 'register';
     if (defTab === 'otp' && store.getAdminSettings().auth_config?.otpLoginEnabled) return 'otp';
@@ -90,15 +106,60 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
   const [phone, setPhone] = useState(() => localStorage.getItem('bingo777_last_phone') || '');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [referralCode, setReferralCode] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('ref') || '';
-  });
+  const [referralCode, setReferralCode] = useState(() => getSavedReferralCode());
+  const [isAutoAppliedReferral, setIsAutoAppliedReferral] = useState<boolean>(() => Boolean(getSavedReferralCode()));
 
   // Password visibility toggles
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Resolve deferred referral code on mount (from URL, localStorage, or browser-to-APK download attribution)
+  useEffect(() => {
+    let mounted = true;
+    resolveDeferredReferralCodeAsync()
+      .then((resolved) => {
+        if (!mounted || !resolved) return;
+        setReferralCode((prev) => prev || resolved);
+        setIsAutoAppliedReferral(true);
+        if (allowNewUserSignup) {
+          setTab('register');
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [allowNewUserSignup]);
+
+  const handleDownloadWithReferral = async () => {
+    const codeToSave = referralCode.trim().toUpperCase();
+    if (codeToSave) {
+      await captureAndPersistReferralCode(codeToSave);
+      try {
+        await navigator.clipboard.writeText(codeToSave);
+      } catch {}
+    }
+    const settings = store.getAdminSettings();
+    const hwSig = getDeviceHardwareSignature();
+    const targetUrl = (settings.apkDownloadUrl || '').trim();
+    if (targetUrl && targetUrl !== '/api/download-apk') {
+      showToast(
+        codeToSave
+          ? `Refer Code "${codeToSave}" auto-saved! Downloading App...`
+          : 'Downloading Official Bingo777 App...',
+        'success'
+      );
+      window.location.href = `/api/download-apk?ref=${encodeURIComponent(codeToSave)}&hwSig=${encodeURIComponent(hwSig)}`;
+    } else {
+      showToast(
+        codeToSave
+          ? `Refer Code "${codeToSave}" auto-filled! Sign Up below to claim your bonus.`
+          : 'Sign Up below to start playing!',
+        'info'
+      );
+    }
+  };
 
   // Real-time onValue listener to /admin_settings/auth_config
   useEffect(() => {
@@ -156,22 +217,51 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
     currentDeviceId: string
   ): Promise<UserRecord> => {
     try {
+      const clientDev = getClientDevice();
+      const detectedDeviceName =
+        clientDev.deviceName || clientDev.deviceModel || `${clientDev.os} (${clientDev.browser})`;
+      const now = Date.now();
       const userSnap = await rtdbGet(rtdbRef(rtdb, `users/${uid}`));
       if (userSnap.exists()) {
         const existingData = userSnap.val() || {};
+        const existingDev = existingData.devices?.[currentDeviceId];
+        const currentDeviceEntry: DeviceRecord = {
+          ...clientDev,
+          deviceId: currentDeviceId,
+          deviceName: detectedDeviceName,
+          deviceModel: clientDev.deviceModel || detectedDeviceName,
+          registeredAt: existingDev?.registeredAt || existingData.createdAt || now,
+          requestedAt: existingDev?.requestedAt || now,
+          lastUsedAt: now,
+          status: 'approved'
+        };
         // Preserve all existing fields (role, isAdmin, wallet, boundDeviceId, createdAt)
-        // ONLY call update with login timestamp, online status, and lastUsedDeviceId
+        // ONLY call update with login timestamp, online status, lastUsedDeviceId, real deviceName, and device history entry
         const loginPatch: Record<string, any> = {
-          lastLogin: Date.now(),
-          lastActive: Date.now(),
+          lastLogin: now,
+          lastActive: now,
           isOnline: true,
-          lastUsedDeviceId: currentDeviceId
+          lastUsedDeviceId: currentDeviceId,
+          deviceName: detectedDeviceName,
+          deviceBrand: detectedDeviceName,
+          deviceModel: clientDev.deviceModel || detectedDeviceName,
+          [`devices/${currentDeviceId}`]: currentDeviceEntry
         };
         await rtdbUpdate(rtdbRef(rtdb, `users/${uid}`), loginPatch);
 
         const merged = store.updateUserFromFirestore({
           ...existingData,
-          ...loginPatch,
+          lastLogin: now,
+          lastActive: now,
+          isOnline: true,
+          lastUsedDeviceId: currentDeviceId,
+          deviceName: detectedDeviceName,
+          deviceBrand: detectedDeviceName,
+          deviceModel: clientDev.deviceModel || detectedDeviceName,
+          devices: {
+            ...(existingData.devices || {}),
+            [currentDeviceId]: currentDeviceEntry
+          },
           uid,
           phone: existingData.phone || cleanPhone
         });
@@ -193,6 +283,17 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
             ? fallbackUser.balance
             : signupBonus;
 
+        const currentDeviceEntry: DeviceRecord = {
+          ...clientDev,
+          deviceId: currentDeviceId,
+          deviceName: detectedDeviceName,
+          deviceModel: clientDev.deviceModel || detectedDeviceName,
+          registeredAt: now,
+          requestedAt: now,
+          lastUsedAt: now,
+          status: 'approved'
+        };
+
         const newPayload: Record<string, any> = {
           uid,
           phone: cleanPhone,
@@ -211,10 +312,17 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
           boundDeviceId: fallbackUser.boundDeviceId ?? null,
           registrationDeviceId: fallbackUser.registrationDeviceId || currentDeviceId,
           lastUsedDeviceId: currentDeviceId,
+          deviceName: detectedDeviceName,
+          deviceBrand: detectedDeviceName,
+          deviceModel: clientDev.deviceModel || detectedDeviceName,
+          devices: {
+            ...(fallbackUser.devices || {}),
+            [currentDeviceId]: currentDeviceEntry
+          },
           referralCode: fallbackUser.referralCode || '',
-          createdAt: fallbackUser.createdAt || Date.now(),
-          lastLogin: Date.now(),
-          lastActive: Date.now(),
+          createdAt: fallbackUser.createdAt || now,
+          lastLogin: now,
+          lastActive: now,
           isOnline: true
         };
         if (fallbackUser.passwordHash) {
@@ -491,12 +599,15 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
       } catch {}
 
       const defaultUsername = `Player_${cleanPhone.slice(-4)}`;
-      const newUser = store.registerUser(cleanPhone, defaultUsername, device, undefined, customUid, autoPin);
+      const enteredRefCode = referralCode.trim() ? referralCode.trim().toUpperCase() : undefined;
+      const newUser = store.registerUser(cleanPhone, defaultUsername, device, enteredRefCode, customUid, autoPin);
       await apiClient
         .registerUser({
           user: newUser,
           phone: cleanPhone,
           username: newUser.username,
+          referralCode: newUser.referralCode,
+          referredBy: newUser.referredBy,
           uid: newUser.uid,
           device
         })
@@ -506,6 +617,12 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
       localStorage.setItem('bingo777_active_uid', finalUser.uid);
       localStorage.setItem('maanwin_active_uid', finalUser.uid);
       localStorage.setItem('bingo777_last_phone', cleanPhone);
+
+      const linkedRef = store.getAllReferrals().find((r) => r.referredUid === finalUser.uid);
+      if (linkedRef) {
+        await firebaseSync.pushReferralToFirestore(linkedRef).catch(() => {});
+      }
+      await clearPendingReferralCode().catch(() => {});
       firebaseSync.attachRealtimeUserSync(finalUser.uid, cleanPhone);
 
       showToast(`Welcome! ₹${finalUser.balance} Signup Bonus credited to your wallet.`, 'success');
@@ -632,6 +749,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
       if (linkedRef) {
         await firebaseSync.pushReferralToFirestore(linkedRef).catch(() => {});
       }
+      await clearPendingReferralCode().catch(() => {});
       firebaseSync.attachRealtimeUserSync(finalUser.uid, cleanPhone);
 
       showToast(`Account created! Welcome ₹${finalUser.balance} Signup Bonus credited to your wallet.`, 'success');
@@ -653,8 +771,8 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-3xl overflow-hidden shadow-2xl space-y-4 p-5 sm:p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md animate-in fade-in duration-200 overflow-y-auto">
+      <div className="w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-3xl overflow-hidden shadow-2xl space-y-4 p-5 sm:p-6 my-auto">
         {/* Clean Brand Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center space-x-2.5">
@@ -668,13 +786,27 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
               </span>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center font-bold text-sm transition"
-          >
-            ✕
-          </button>
+          {canClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-8 h-8 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center font-bold text-sm transition"
+            >
+              ✕
+            </button>
+          ) : (
+            onOpenAdmin && (
+              <button
+                type="button"
+                onClick={onOpenAdmin}
+                className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-amber-300 text-[10px] font-bold flex items-center space-x-1 transition"
+                title="Admin Access"
+              >
+                <ShieldCheck className="w-3 h-3 text-amber-400" />
+                <span>Admin</span>
+              </button>
+            )
+          )}
         </div>
 
         {/* Login / Sign Up Switcher */}
@@ -877,26 +1009,51 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({ onSuccess, onClose
             </div>
           )}
 
-          {/* Refer Code (Only on Sign Up when enabled by Admin) */}
-          {tab === 'register' && showReferralFieldOnSignup && (
-            <div>
-              <label className="text-xs font-semibold text-slate-300 mb-1 flex items-center justify-between">
-                <span>Refer Code</span>
+          {/* Refer Code (Shown on Sign Up when enabled by Admin OR when auto-filled from referral link) */}
+          {tab === 'register' && (showReferralFieldOnSignup || Boolean(referralCode)) && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                <span className="flex items-center space-x-1.5">
+                  <span>Refer Code</span>
+                  {isAutoAppliedReferral && referralCode && (
+                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold">
+                      <CheckCircle2 className="w-3 h-3" />
+                      <span>Auto-Filled</span>
+                    </span>
+                  )}
+                </span>
                 <span className="text-[10px] text-slate-500">
                   {requireReferralOnSignup ? 'Required *' : 'Optional'}
                 </span>
               </label>
               <div className="relative flex items-center">
-                <Gift className="w-4 h-4 text-slate-500 absolute left-3.5" />
+                <Gift className="w-4 h-4 text-amber-400 absolute left-3.5" />
                 <input
                   type="text"
                   placeholder={requireReferralOnSignup ? 'Enter required refer code' : 'Enter refer code (optional)'}
                   value={referralCode}
-                  onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+                  onChange={(e) => {
+                    setReferralCode(e.target.value.toUpperCase());
+                    setIsAutoAppliedReferral(false);
+                  }}
                   required={requireReferralOnSignup}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 font-mono text-xs text-amber-300 placeholder:text-slate-600 focus:outline-none focus:border-amber-500 uppercase"
+                  className={`w-full bg-slate-950 border rounded-xl pl-10 pr-4 py-2.5 font-mono text-xs text-amber-300 placeholder:text-slate-600 focus:outline-none uppercase ${
+                    isAutoAppliedReferral && referralCode
+                      ? 'border-emerald-500/60 bg-emerald-950/20 font-bold'
+                      : 'border-slate-800 focus:border-amber-500'
+                  }`}
                 />
               </div>
+              {referralCode && store.getAdminSettings().apkDownloadEnabled !== false && Boolean(store.getAdminSettings().apkDownloadUrl) && (
+                <button
+                  type="button"
+                  onClick={handleDownloadWithReferral}
+                  className="w-full py-2 px-3 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold flex items-center justify-center space-x-1.5 transition"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Download App with Refer Code ({referralCode}) Auto-Applied</span>
+                </button>
+              )}
             </div>
           )}
 

@@ -70,10 +70,16 @@ export const GameBetHistorySection: React.FC<GameBetHistorySectionProps> = ({
   };
 
   const getNumberBg = (num: number) => {
-    if (num === 0) return 'bg-gradient-to-tr from-rose-600 to-purple-600 text-white';
-    if (num === 5) return 'bg-gradient-to-tr from-emerald-600 to-purple-600 text-white';
-    if (num % 2 === 0) return 'bg-rose-600 text-white';
-    return 'bg-emerald-600 text-white';
+    if (num === 0) {
+      return 'bg-[linear-gradient(135deg,#ff3b6b_0%,#e11d48_48%,#9333ea_52%,#581c87_100%)] text-white shadow-[inset_-2px_-3px_6px_rgba(0,0,0,0.55),inset_2px_2px_4px_rgba(255,255,255,0.45),0_3px_8px_rgba(147,51,234,0.4)] ring-1 ring-white/25 drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]';
+    }
+    if (num === 5) {
+      return 'bg-[linear-gradient(135deg,#34d399_0%,#059669_48%,#9333ea_52%,#581c87_100%)] text-white shadow-[inset_-2px_-3px_6px_rgba(0,0,0,0.55),inset_2px_2px_4px_rgba(255,255,255,0.45),0_3px_8px_rgba(16,185,129,0.4)] ring-1 ring-white/25 drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]';
+    }
+    if (num % 2 === 0) {
+      return 'bg-[radial-gradient(circle_at_32%_28%,#fda4af_0%,#f43f5e_25%,#e11d48_62%,#881337_100%)] text-white shadow-[inset_-2px_-3px_6px_rgba(0,0,0,0.55),inset_2px_2px_4px_rgba(255,255,255,0.45),0_3px_8px_rgba(225,29,72,0.45)] ring-1 ring-rose-200/30 drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]';
+    }
+    return 'bg-[radial-gradient(circle_at_32%_28%,#a7f3d0_0%,#10b981_25%,#059669_62%,#064e3b_100%)] text-white shadow-[inset_-2px_-3px_6px_rgba(0,0,0,0.55),inset_2px_2px_4px_rgba(255,255,255,0.45),0_3px_8px_rgba(16,185,129,0.45)] ring-1 ring-emerald-200/30 drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]';
   };
 
   // Filtered User Bets

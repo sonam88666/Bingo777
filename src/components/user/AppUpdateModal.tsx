@@ -15,6 +15,11 @@ import { useToast } from '../common/Toast';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { Bingo777Logo } from '../common/Bingo777Logo';
 import { store } from '../../services/store';
+import {
+  getSavedReferralCode,
+  captureAndPersistReferralCode,
+  getDeviceHardwareSignature
+} from '../../services/referralAttribution';
 
 interface AppUpdateModalProps {
   onClose: () => void;
@@ -93,7 +98,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
     }
   };
 
-  const handleDownloadApk = (e: React.MouseEvent) => {
+  const handleDownloadApk = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (!apkDownloadEnabled) {
       showToast('App download is temporarily paused by Admin.', 'error');
@@ -104,8 +109,24 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
       showToast('Download link is not set by Admin yet. Please check back shortly.', 'info');
       return;
     }
-    showToast('Opening download link...', 'info');
-    window.open(targetUrl, '_blank') || (window.location.href = targetUrl);
+    const pendingRef = getSavedReferralCode();
+    if (pendingRef) {
+      await captureAndPersistReferralCode(pendingRef);
+      try {
+        await navigator.clipboard.writeText(pendingRef);
+      } catch {}
+    }
+    const hwSig = getDeviceHardwareSignature();
+    showToast(
+      pendingRef
+        ? `Refer Code "${pendingRef}" auto-saved! Opening download...`
+        : 'Opening download link...',
+      'info'
+    );
+    const downloadHref = pendingRef
+      ? `/api/download-apk?ref=${encodeURIComponent(pendingRef)}&hwSig=${encodeURIComponent(hwSig)}`
+      : targetUrl;
+    window.location.href = downloadHref;
   };
 
   return (

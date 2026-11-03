@@ -36,6 +36,7 @@ import { firebaseSync } from './services/firebaseSync';
 import { auth, rtdb, rtdbRef, rtdbOnValue, rtdbUpdate, onAuthStateChanged, getPersistentDeviceId } from './firebase';
 import { UserRecord, DeviceRecord, GameId, RoundSettlementNotice } from './types';
 import { AdminSettingsProvider, useAdminSettings } from './context/AdminSettingsContext';
+import { captureAndPersistReferralCode } from './services/referralAttribution';
 
 function MainApp() {
   const { showToast } = useToast();
@@ -149,6 +150,9 @@ function MainApp() {
 
   // Firebase Auth state persistence listener with authLoading guard (Never clears session while authLoading or offline)
   useEffect(() => {
+    // Immediately capture and persist ?ref= referral code from URL if present
+    captureAndPersistReferralCode().catch(() => {});
+
     const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
       const storedUid = localStorage.getItem('bingo777_active_uid');
       if (fbUser && !fbUser.isAnonymous) {
@@ -170,6 +174,9 @@ function MainApp() {
   useEffect(() => {
     const activeUid = currentUser?.uid || localStorage.getItem('bingo777_active_uid');
     if (!activeUid || activeUid.startsWith('usr_demo_')) return;
+
+    // Sync actual hardware/browser device entry to users/{uid}/devices/{deviceId}
+    store.syncActiveUserDeviceToCloud(activeUid).catch(() => {});
 
     const userRef = rtdbRef(rtdb, `users/${activeUid}`);
     const unsubRtdbUser = rtdbOnValue(
@@ -420,8 +427,22 @@ function MainApp() {
             />
           </GameErrorBoundary>
         </div>
+      ) : !currentUser ? (
+        /* VIEW 2A: FIRST SCREEN IS SIGNUP / LOGIN PAGE WHEN NOT LOGGED IN */
+        <div className="flex-1 flex flex-col min-h-screen bg-slate-950">
+          <UserAuthModal
+            canClose={false}
+            onOpenAdmin={handleOpenAdminPortal}
+            onSuccess={(u) => {
+              localStorage.setItem('bingo777_active_uid', u.uid);
+              setCurrentUser(u);
+              setShowAuthModal(false);
+            }}
+            onClose={() => {}}
+          />
+        </div>
       ) : (
-        /* VIEW 2: PLAYER APPLICATION (NATIVE APP EXPERIENCE) */
+        /* VIEW 2B: PLAYER APPLICATION (NATIVE APP EXPERIENCE AFTER LOGIN/SIGNUP) */
         <div className="flex-1 flex flex-col pb-20">
           {/* Maintenance Mode Overlay Message & Persistent Warning Bar */}
           <MaintenanceOverlay onOpenSupport={() => setShowSupportModal(true)} />
@@ -643,7 +664,7 @@ function MainApp() {
             )}
 
             {/* TAB: WALLET (DEPOSIT & WITHDRAW) */}
-            {activeNavTab === 'wallet' && currentUser && (
+            {activeNavTab === 'wallet' && (
               <GameErrorBoundary gameName="Wallet & Banking" onResetToLobby={() => setActiveNavTab('home')}>
                 <WalletView
                   user={currentUser}
@@ -652,20 +673,9 @@ function MainApp() {
                 />
               </GameErrorBoundary>
             )}
-            {activeNavTab === 'wallet' && !currentUser && (
-              <div className="max-w-md mx-auto p-8 text-center space-y-4">
-                <p className="text-sm text-slate-400">Please log in to manage your wallet and balance.</p>
-                <button
-                  onClick={() => setShowAuthModal(true)}
-                  className="px-6 py-2.5 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs"
-                >
-                  Log In Now
-                </button>
-              </div>
-            )}
 
             {/* TAB: ACCOUNT / PROFILE */}
-            {activeNavTab === 'account' && currentUser && (
+            {activeNavTab === 'account' && (
               <AccountView
                 user={currentUser}
                 currentDevice={currentDevice}
@@ -689,17 +699,6 @@ function MainApp() {
                   setActiveNavTab('home');
                 }}
               />
-            )}
-            {activeNavTab === 'account' && !currentUser && (
-              <div className="max-w-md mx-auto p-8 text-center space-y-4">
-                <p className="text-sm text-slate-400">Please log in to view your profile and VIP status.</p>
-                <button
-                  onClick={() => setShowAuthModal(true)}
-                  className="px-6 py-2.5 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs"
-                >
-                  Log In / Sign Up
-                </button>
-              </div>
             )}
           </main>
 
@@ -743,7 +742,7 @@ function MainApp() {
         />
       )}
 
-      {showAuthModal && (
+      {showAuthModal && currentUser && (
         <UserAuthModal
           onSuccess={(u) => {
             localStorage.setItem('bingo777_active_uid', u.uid);
@@ -754,11 +753,13 @@ function MainApp() {
         />
       )}
 
-      {/* Live Admin Ads & App Update Popup Banner */}
-      <AppPopupModal onOpenDeposit={() => {
-        setWalletInitialTab('deposit');
-        setActiveNavTab('wallet');
-      }} />
+      {/* Live Admin Ads & App Update Popup Banner (Only when logged in) */}
+      {currentUser && (
+        <AppPopupModal onOpenDeposit={() => {
+          setWalletInitialTab('deposit');
+          setActiveNavTab('wallet');
+        }} />
+      )}
 
       {/* High-Security Hidden Admin Login Modal */}
       {showAdminLogin && (

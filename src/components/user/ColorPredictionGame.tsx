@@ -230,18 +230,48 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Color background helper for numbers 0-9
-  const getNumberBg = (num: number) => {
-    if (num === 0) return 'bg-gradient-to-br from-rose-600 via-rose-600 to-purple-600 border-rose-400';
-    if (num === 5) return 'bg-gradient-to-br from-emerald-600 via-emerald-600 to-purple-600 border-emerald-400';
-    if (num % 2 === 0) return 'bg-gradient-to-br from-rose-600 to-rose-700 border-rose-400';
-    return 'bg-gradient-to-br from-emerald-600 to-emerald-700 border-emerald-400';
+  // 3D Sphere / Tile visual classes for numbers 0-9
+  const getNumber3DStyles = (num: number) => {
+    if (num === 0) {
+      return {
+        outer:
+          'bg-[linear-gradient(145deg,#3b0a26_0%,#1e1035_100%)] border-t border-rose-400/40 border-x border-purple-500/30 border-b-4 border-b-purple-950 shadow-[0_6px_14px_rgba(225,29,72,0.28)]',
+        sphere:
+          'bg-[linear-gradient(135deg,#ff3b6b_0%,#e11d48_47%,#9333ea_53%,#581c87_100%)] shadow-[inset_-4px_-6px_10px_rgba(0,0,0,0.6),inset_3px_4px_8px_rgba(255,255,255,0.45),0_4px_10px_rgba(147,51,234,0.45)] ring-1 ring-white/25',
+        ring: 'border-rose-200/40'
+      };
+    }
+    if (num === 5) {
+      return {
+        outer:
+          'bg-[linear-gradient(145deg,#072e22_0%,#1e1035_100%)] border-t border-emerald-400/40 border-x border-purple-500/30 border-b-4 border-b-purple-950 shadow-[0_6px_14px_rgba(16,185,129,0.28)]',
+        sphere:
+          'bg-[linear-gradient(135deg,#34d399_0%,#059669_47%,#9333ea_53%,#581c87_100%)] shadow-[inset_-4px_-6px_10px_rgba(0,0,0,0.6),inset_3px_4px_8px_rgba(255,255,255,0.45),0_4px_10px_rgba(16,185,129,0.45)] ring-1 ring-white/25',
+        ring: 'border-emerald-200/40'
+      };
+    }
+    if (num % 2 === 0) {
+      return {
+        outer:
+          'bg-[linear-gradient(180deg,#3f0d1d_0%,#1f060e_100%)] border-t border-rose-400/40 border-x border-rose-500/25 border-b-4 border-b-rose-950 shadow-[0_6px_14px_rgba(225,29,72,0.28)]',
+        sphere:
+          'bg-[radial-gradient(circle_at_32%_26%,#fda4af_0%,#fb7185_18%,#e11d48_58%,#881337_100%)] shadow-[inset_-4px_-6px_10px_rgba(0,0,0,0.6),inset_3px_4px_8px_rgba(255,255,255,0.45),0_4px_10px_rgba(225,29,72,0.5)] ring-1 ring-rose-200/30',
+        ring: 'border-rose-200/35'
+      };
+    }
+    return {
+      outer:
+        'bg-[linear-gradient(180deg,#083526_0%,#041b13_100%)] border-t border-emerald-400/40 border-x border-emerald-500/25 border-b-4 border-b-emerald-950 shadow-[0_6px_14px_rgba(16,185,129,0.28)]',
+      sphere:
+        'bg-[radial-gradient(circle_at_32%_26%,#a7f3d0_0%,#34d399_18%,#059669_58%,#064e3b_100%)] shadow-[inset_-4px_-6px_10px_rgba(0,0,0,0.6),inset_3px_4px_8px_rgba(255,255,255,0.45),0_4px_10px_rgba(16,185,129,0.5)] ring-1 ring-emerald-200/30',
+      ring: 'border-emerald-200/35'
+    };
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 space-y-4">
+    <div className="max-w-4xl mx-auto px-3 sm:px-4 pt-2 pb-4 space-y-2.5 sm:space-y-3.5">
       {/* Game Mode Selector Tabs: only 3 times shown: 30 second, 1 min, and 3 min (5 min removed) */}
-      <div className="grid grid-cols-3 gap-2 p-1 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-xl">
+      <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-900/95 rounded-2xl border border-slate-800/90 shadow-lg">
         {(['30s', '1min', '3min'] as const).map((mode) => (
           <button
             key={mode}
@@ -249,185 +279,215 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
               setSelectedGameType(mode);
               store.switchRoundMode(mode);
             }}
-            className={`py-2 sm:py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center space-x-1.5 transition-all ${
+            className={`py-2 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center space-x-1.5 transition-all ${
               selectedGameType === mode
-                ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 shadow-lg shadow-amber-500/20'
+                ? 'bg-gradient-to-b from-amber-400 via-amber-500 to-amber-600 text-slate-950 border-t border-amber-200/60 border-b-2 border-b-amber-700 shadow-[0_4px_12px_rgba(245,158,11,0.35)]'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
             }`}
           >
-            <Clock className="w-3.5 h-3.5" />
+            <Clock className="w-3.5 h-3.5 shrink-0" />
             <span>Win Go {mode === '30s' ? '30 Sec' : mode === '1min' ? '1 Min' : '3 Min'}</span>
           </button>
         ))}
       </div>
 
-      {/* Live Round Header & Ticking Countdown Banner */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border border-slate-800 p-4 sm:p-5 shadow-2xl">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center space-x-3">
-            <div>
-              <div className="text-xs font-semibold text-slate-400">
+      {/* Compact Live Round Header & Ticking Countdown Banner (No wasted middle space) */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900/95 to-slate-950 border border-slate-800/90 px-3.5 py-2.5 sm:px-4 sm:py-3 shadow-xl">
+        <div className="absolute -top-10 right-10 w-36 h-36 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+        <div className="flex items-center justify-between gap-2">
+          {/* Left: Active Period */}
+          <div className="min-w-0">
+            <div className="flex items-center space-x-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
                 Active Period
-              </div>
-              <div className="font-mono text-xl sm:text-2xl font-black text-amber-300 tracking-wider mt-0.5">
-                {currentRound.period}
-              </div>
+              </span>
             </div>
-
+            <div className="font-mono text-lg sm:text-2xl font-black text-amber-300 tracking-wider leading-tight mt-0.5 drop-shadow-[0_2px_4px_rgba(0,0,0,0.6)]">
+              {currentRound.period}
+            </div>
             {user && store.getLatestSettlementNotice(user.uid) && (
               <button
                 type="button"
                 onClick={() => setManualNotice(store.getLatestSettlementNotice(user.uid))}
-                className={`px-3 py-1.5 rounded-xl text-xs font-black border transition active:scale-95 flex items-center space-x-1.5 shadow-md ${
+                className={`mt-1 px-2.5 py-0.5 rounded-lg text-[10px] font-black border transition active:scale-95 inline-flex items-center space-x-1 shadow-sm ${
                   store.getLatestSettlementNotice(user.uid)?.isWin
                     ? 'bg-gradient-to-r from-emerald-500/20 to-amber-500/20 text-amber-300 border-amber-400/50 hover:bg-amber-500/30'
                     : 'bg-rose-500/10 text-rose-300 border-rose-500/40 hover:bg-rose-500/20'
                 }`}
                 title="View your latest round result popup"
               >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Last Result: {store.getLatestSettlementNotice(user.uid)?.isWin ? 'YOU WON!' : 'YOU LOST!'}</span>
+                <Sparkles className="w-3 h-3" />
+                <span>Last: {store.getLatestSettlementNotice(user.uid)?.isWin ? 'WON' : 'LOST'}</span>
               </button>
             )}
           </div>
 
-          {/* Countdown Display */}
-          <div className="flex items-center space-x-3 self-end sm:self-auto">
+          {/* Right: Countdown Display */}
+          <div className="flex items-center space-x-2.5 shrink-0">
             <div className="text-right">
               <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
                 Time Remaining
               </div>
-              <div className={`font-mono text-3xl sm:text-4xl font-black tracking-tight ${
-                isLocked ? 'text-rose-500 animate-pulse' : 'text-emerald-400'
-              }`}>
+              <div
+                className={`font-mono text-2xl sm:text-3xl font-black tracking-tight leading-none mt-0.5 drop-shadow-[0_2px_6px_rgba(0,0,0,0.7)] ${
+                  isLocked ? 'text-rose-500 animate-pulse' : 'text-emerald-400'
+                }`}
+              >
                 {formatTime(timeLeft)}
               </div>
             </div>
 
             {/* Lock status indicator */}
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${
-              isLocked 
-                ? 'bg-rose-500/10 border-rose-500/30 text-rose-400' 
-                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-            }`}>
-              {isLocked ? <Lock className="w-5 h-5 animate-bounce" /> : <Clock className="w-5 h-5" />}
+            <div
+              className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center border shadow-inner ${
+                isLocked
+                  ? 'bg-rose-500/15 border-rose-500/40 text-rose-400'
+                  : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
+              }`}
+            >
+              {isLocked ? <Lock className="w-4 h-4 sm:w-5 sm:h-5 animate-bounce" /> : <Clock className="w-4 h-4 sm:w-5 sm:h-5" />}
             </div>
           </div>
         </div>
 
         {/* Lock Warning Bar */}
         {isLocked && (
-          <div className="mt-3 py-1.5 px-3 rounded-lg bg-rose-950/70 border border-rose-500/40 text-rose-200 text-xs flex items-center justify-center space-x-1.5 font-semibold animate-pulse">
-            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>Betting locked! Final 5 seconds countdown before outcome reveal.</span>
+          <div className="mt-2 py-1 px-2.5 rounded-lg bg-rose-950/80 border border-rose-500/40 text-rose-200 text-[11px] flex items-center justify-center space-x-1.5 font-semibold animate-pulse">
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <span>Betting locked! Final 5 seconds countdown.</span>
           </div>
         )}
       </div>
 
       {/* Main Betting Area */}
-      <div className="space-y-4">
-        {/* Color Choice Buttons */}
+      <div className="space-y-3">
+        {/* 3D Color Choice Buttons */}
         <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
-          {/* Green Button */}
+          {/* Green 3D Button */}
           <button
             onClick={() => openBetModal('color', 'green')}
             disabled={isLocked}
-            className={`group relative overflow-hidden rounded-2xl p-3 sm:p-4 text-center border transition-all active:scale-95 shadow-xl ${
-              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:scale-[1.02]'
-            } bg-gradient-to-br from-emerald-600 to-emerald-800 border-emerald-400/50 shadow-emerald-950/50`}
+            className={`group relative overflow-hidden rounded-2xl py-2.5 px-2 sm:py-3.5 sm:px-3 text-center transition-all active:translate-y-0.5 active:scale-[0.98] ${
+              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:-translate-y-0.5'
+            } bg-[linear-gradient(180deg,#34d399_0%,#10b981_25%,#059669_75%,#065f46_100%)] border-t-2 border-t-emerald-200/70 border-x border-x-emerald-400/40 border-b-[5px] border-b-emerald-950 shadow-[0_8px_18px_rgba(5,150,105,0.45),inset_0_2px_6px_rgba(255,255,255,0.45)]`}
           >
-            <div className="font-brand font-black text-lg sm:text-xl text-white tracking-wide">
+            <div className="absolute inset-x-2 top-1 h-1/3 rounded-t-xl bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
+            <div className="relative font-brand font-black text-base sm:text-xl text-white tracking-wider drop-shadow-[0_2px_2px_rgba(0,0,0,0.65)]">
               GREEN
             </div>
-            <div className="text-[11px] font-bold text-emerald-200 mt-0.5">
+            <div className="relative text-[11px] font-extrabold text-emerald-50 mt-0.5 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
               2.0X Payout
             </div>
-            <div className="text-[9px] text-emerald-300/80">
+            <div className="relative text-[9px] font-semibold text-emerald-100/90">
               Numbers 1, 3, 7, 9
             </div>
           </button>
 
-          {/* Violet Button */}
+          {/* Violet 3D Button */}
           <button
             onClick={() => openBetModal('color', 'violet')}
             disabled={isLocked}
-            className={`group relative overflow-hidden rounded-2xl p-3 sm:p-4 text-center border transition-all active:scale-95 shadow-xl ${
-              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:scale-[1.02]'
-            } bg-gradient-to-br from-purple-600 to-indigo-800 border-purple-400/50 shadow-purple-950/50`}
+            className={`group relative overflow-hidden rounded-2xl py-2.5 px-2 sm:py-3.5 sm:px-3 text-center transition-all active:translate-y-0.5 active:scale-[0.98] ${
+              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:-translate-y-0.5'
+            } bg-[linear-gradient(180deg,#c084fc_0%,#9333ea_25%,#7e22ce_75%,#4c1d95_100%)] border-t-2 border-t-purple-200/70 border-x border-x-purple-400/40 border-b-[5px] border-b-purple-950 shadow-[0_8px_18px_rgba(126,34,206,0.45),inset_0_2px_6px_rgba(255,255,255,0.45)]`}
           >
-            <div className="font-brand font-black text-lg sm:text-xl text-white tracking-wide">
+            <div className="absolute inset-x-2 top-1 h-1/3 rounded-t-xl bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
+            <div className="relative font-brand font-black text-base sm:text-xl text-white tracking-wider drop-shadow-[0_2px_2px_rgba(0,0,0,0.65)]">
               VIOLET
             </div>
-            <div className="text-[11px] font-bold text-purple-200 mt-0.5">
+            <div className="relative text-[11px] font-extrabold text-purple-50 mt-0.5 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
               4.5X Payout
             </div>
-            <div className="text-[9px] text-purple-300/80">
+            <div className="relative text-[9px] font-semibold text-purple-100/90">
               Numbers 0, 5
             </div>
           </button>
 
-          {/* Red Button */}
+          {/* Red 3D Button */}
           <button
             onClick={() => openBetModal('color', 'red')}
             disabled={isLocked}
-            className={`group relative overflow-hidden rounded-2xl p-3 sm:p-4 text-center border transition-all active:scale-95 shadow-xl ${
-              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:scale-[1.02]'
-            } bg-gradient-to-br from-rose-600 to-rose-800 border-rose-400/50 shadow-rose-950/50`}
+            className={`group relative overflow-hidden rounded-2xl py-2.5 px-2 sm:py-3.5 sm:px-3 text-center transition-all active:translate-y-0.5 active:scale-[0.98] ${
+              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:-translate-y-0.5'
+            } bg-[linear-gradient(180deg,#fb7185_0%,#f43f5e_25%,#e11d48_75%,#881337_100%)] border-t-2 border-t-rose-200/70 border-x border-x-rose-400/40 border-b-[5px] border-b-rose-950 shadow-[0_8px_18px_rgba(225,29,72,0.45),inset_0_2px_6px_rgba(255,255,255,0.45)]`}
           >
-            <div className="font-brand font-black text-lg sm:text-xl text-white tracking-wide">
+            <div className="absolute inset-x-2 top-1 h-1/3 rounded-t-xl bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
+            <div className="relative font-brand font-black text-base sm:text-xl text-white tracking-wider drop-shadow-[0_2px_2px_rgba(0,0,0,0.65)]">
               RED
             </div>
-            <div className="text-[11px] font-bold text-rose-200 mt-0.5">
+            <div className="relative text-[11px] font-extrabold text-rose-50 mt-0.5 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
               2.0X Payout
             </div>
-            <div className="text-[9px] text-rose-300/80">
+            <div className="relative text-[9px] font-semibold text-rose-100/90">
               Numbers 2, 4, 6, 8
             </div>
           </button>
         </div>
 
-        {/* Number Choice Grid (0-9) - 9X Odds */}
-        <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-3 sm:p-4 shadow-xl">
+        {/* 3D Number Choice Grid (0-9) - 9X Odds */}
+        <div className="bg-gradient-to-b from-slate-900/95 to-slate-950 rounded-2xl border border-slate-800/90 p-3 sm:p-4 shadow-2xl">
           <div className="flex items-center justify-between mb-2.5">
-            <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center space-x-1">
+            <span className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center space-x-1.5">
               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>Select Number</span>
+              <span>Select 3D Number</span>
             </span>
-            <span className="text-xs font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
+            <span className="text-[11px] font-black text-amber-300 bg-amber-500/15 px-2.5 py-0.5 rounded-full border border-amber-400/30 shadow-sm">
               9.0X Multiplier
             </span>
           </div>
 
-          <div className="grid grid-cols-5 sm:grid-cols-10 gap-2">
-            {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => (
-              <button
-                key={num}
-                onClick={() => openBetModal('number', num.toString())}
-                disabled={isLocked}
-                className={`aspect-square rounded-xl font-mono font-black text-lg sm:text-xl text-white border shadow-md flex items-center justify-center transition-all ${
-                  getNumberBg(num)
-                } ${isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:scale-110 active:scale-95'}`}
-              >
-                {num}
-              </button>
-            ))}
+          <div className="grid grid-cols-5 sm:grid-cols-10 gap-2.5 sm:gap-3">
+            {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => {
+              const style3d = getNumber3DStyles(num);
+              return (
+                <button
+                  key={num}
+                  onClick={() => openBetModal('number', num.toString())}
+                  disabled={isLocked}
+                  className={`group relative aspect-square rounded-2xl p-1.5 flex items-center justify-center transition-all ${
+                    style3d.outer
+                  } ${
+                    isLocked
+                      ? 'opacity-60 cursor-not-allowed'
+                      : 'hover:-translate-y-0.5 hover:scale-105 active:translate-y-0.5 active:scale-95'
+                  }`}
+                >
+                  {/* 3D Glossy Billiard/Lottery Sphere */}
+                  <div
+                    className={`relative w-full h-full rounded-full flex items-center justify-center overflow-hidden ${style3d.sphere}`}
+                  >
+                    {/* Top-left 3D specular light reflection */}
+                    <div className="absolute top-1 left-1.5 w-4 h-2 rounded-full bg-white/55 blur-[0.5px] -rotate-12 pointer-events-none" />
+                    {/* Inner ring medallion for 3D number depth */}
+                    <div
+                      className={`w-[72%] h-[72%] rounded-full border ${style3d.ring} bg-black/15 backdrop-blur-[1px] flex items-center justify-center shadow-[inset_0_2px_4px_rgba(255,255,255,0.25),0_2px_4px_rgba(0,0,0,0.4)]`}
+                    >
+                      <span className="font-mono font-black text-lg sm:text-xl text-white leading-none drop-shadow-[0_2px_2px_rgba(0,0,0,0.9)]">
+                        {num}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Big / Small Choice Buttons */}
+        {/* 3D Big / Small Choice Buttons */}
         <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
           <button
             onClick={() => openBetModal('size', 'big')}
             disabled={isLocked}
-            className={`rounded-2xl p-3 sm:p-4 text-center border transition-all active:scale-95 shadow-xl ${
-              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:scale-[1.01]'
-            } bg-gradient-to-r from-amber-600 to-amber-700 border-amber-400/40 shadow-amber-950/40`}
+            className={`relative overflow-hidden rounded-2xl py-2.5 px-3 sm:py-3.5 sm:px-4 text-center transition-all active:translate-y-0.5 active:scale-[0.98] ${
+              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:-translate-y-0.5'
+            } bg-[linear-gradient(180deg,#fbbf24_0%,#f59e0b_28%,#d97706_75%,#92400e_100%)] border-t-2 border-t-amber-200/75 border-x border-x-amber-400/40 border-b-[5px] border-b-amber-950 shadow-[0_8px_18px_rgba(217,119,6,0.4),inset_0_2px_6px_rgba(255,255,255,0.45)]`}
           >
-            <div className="font-brand font-black text-base sm:text-lg text-white">
+            <div className="absolute inset-x-3 top-1 h-1/3 rounded-t-xl bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
+            <div className="relative font-brand font-black text-base sm:text-lg text-white tracking-wide drop-shadow-[0_2px_2px_rgba(0,0,0,0.65)]">
               BIG (5-9)
             </div>
-            <div className="text-[11px] font-bold text-amber-200">
+            <div className="relative text-[11px] font-extrabold text-amber-50 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
               2.0X Multiplier
             </div>
           </button>
@@ -435,14 +495,15 @@ export const ColorPredictionGame: React.FC<ColorPredictionGameProps> = ({
           <button
             onClick={() => openBetModal('size', 'small')}
             disabled={isLocked}
-            className={`rounded-2xl p-3 sm:p-4 text-center border transition-all active:scale-95 shadow-xl ${
-              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:scale-[1.01]'
-            } bg-gradient-to-r from-sky-600 to-sky-700 border-sky-400/40 shadow-sky-950/40`}
+            className={`relative overflow-hidden rounded-2xl py-2.5 px-3 sm:py-3.5 sm:px-4 text-center transition-all active:translate-y-0.5 active:scale-[0.98] ${
+              isLocked ? 'opacity-60 cursor-not-allowed' : 'hover:-translate-y-0.5'
+            } bg-[linear-gradient(180deg,#38bdf8_0%,#0284c7_28%,#0369a1_75%,#0c4a6e_100%)] border-t-2 border-t-sky-200/75 border-x border-x-sky-400/40 border-b-[5px] border-b-sky-950 shadow-[0_8px_18px_rgba(2,132,199,0.4),inset_0_2px_6px_rgba(255,255,255,0.45)]`}
           >
-            <div className="font-brand font-black text-base sm:text-lg text-white">
+            <div className="absolute inset-x-3 top-1 h-1/3 rounded-t-xl bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
+            <div className="relative font-brand font-black text-base sm:text-lg text-white tracking-wide drop-shadow-[0_2px_2px_rgba(0,0,0,0.65)]">
               SMALL (0-4)
             </div>
-            <div className="text-[11px] font-bold text-sky-200">
+            <div className="relative text-[11px] font-extrabold text-sky-50 drop-shadow-[0_1px_1px_rgba(0,0,0,0.5)]">
               2.0X Multiplier
             </div>
           </button>

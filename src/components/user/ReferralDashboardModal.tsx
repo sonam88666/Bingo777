@@ -58,15 +58,32 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
   }, [user.uid]);
 
   const referralCode = user.referralCode || 'BINGO777';
-  const shareUrl = `https://bingo777.in/?ref=${referralCode}`;
+  const shareUrl =
+    typeof window !== 'undefined' && window.location?.origin
+      ? `${window.location.origin}/?ref=${encodeURIComponent(referralCode)}`
+      : `https://bingo777.in/?ref=${encodeURIComponent(referralCode)}`;
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(referralCode);
     showToast(`Referral Code "${referralCode}" copied to clipboard!`, 'info');
   };
 
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(shareUrl);
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch {}
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Bingo777 Refer & Earn',
+          text: `Download & Play on Bingo777 using my Refer Code: ${referralCode} to claim your Welcome Bonus!`,
+          url: shareUrl
+        });
+        return;
+      } catch {
+        // User cancelled share sheet; link is already copied
+      }
+    }
     showToast('Referral invitation link copied!', 'info');
   };
 
