@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ExternalLink, Copy, ShieldCheck, Clock, Sparkles, X } from 'lucide-react';
+import { motion } from 'motion/react';
 import { UserRecord, TelegramSupportConfig } from '../../types';
 import { store } from '../../services/store';
 import { rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
@@ -80,8 +81,20 @@ export const SupportChatModal: React.FC<SupportChatModalProps> = ({ user, onClos
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-md bg-slate-900 border border-sky-500/30 rounded-3xl overflow-hidden shadow-2xl relative">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 16 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.94, y: 12 }}
+        transition={{ type: 'spring', stiffness: 360, damping: 28 }}
+        className="w-full max-w-md bg-slate-900 border border-sky-500/30 rounded-3xl overflow-hidden shadow-2xl relative"
+      >
         {/* Top Ambient Glow */}
         <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-64 h-48 bg-sky-500/20 rounded-full blur-3xl pointer-events-none" />
 
@@ -205,7 +218,7 @@ export const SupportChatModal: React.FC<SupportChatModalProps> = ({ user, onClos
             </p>
           )}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

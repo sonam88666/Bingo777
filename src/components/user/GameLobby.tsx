@@ -21,6 +21,7 @@ import {
   TrendingUp,
   CreditCard
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { GameId, UserRecord } from '../../types';
 import { store } from '../../services/store';
 import { firebaseSync } from '../../services/firebaseSync';
@@ -320,7 +321,12 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
     <div className="max-w-xl mx-auto px-3 sm:px-4 py-3 space-y-4">
       {/* 1. Grand Progressive Jackpot Live Ticker Box */}
       {showJackpotBanner && (
-        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-amber-950/80 via-slate-900 to-amber-950/80 border border-amber-500/40 p-3 sm:p-4 shadow-xl flex items-center justify-between">
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+          className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-amber-950/80 via-slate-900 to-amber-950/80 border border-amber-500/40 p-3 sm:p-4 shadow-xl flex items-center justify-between"
+        >
           <div className="flex items-center space-x-2.5">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-yellow-300 flex items-center justify-center text-slate-950 font-black shadow-lg shadow-amber-500/30">
               <Crown className="w-6 h-6 fill-slate-950" />
@@ -343,50 +349,64 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
             <span>Recharge</span>
             <ChevronRight className="w-3.5 h-3.5" />
           </button>
-        </div>
+        </motion.div>
       )}
 
       {/* 2. Luxury Animated Hero Carousel Banner */}
       {showHeroCarousel && activeBanner && (
-        <div className={`relative overflow-hidden rounded-3xl bg-gradient-to-r ${activeBanner.gradient} p-5 sm:p-6 shadow-2xl transition-all duration-700 border border-amber-400/30`}>
-          <div className="relative z-10 space-y-2">
-            <div className="flex items-center space-x-2">
-              <span className="px-2.5 py-0.5 rounded-full bg-slate-950/70 backdrop-blur-md text-[10px] font-black text-amber-300 tracking-wider border border-amber-400/30">
-                {activeBanner.badge}
-              </span>
-              <span className="text-[10px] font-mono text-amber-100 font-bold bg-white/10 px-2 py-0.5 rounded-full">
-                {activeBanner.tag}
-              </span>
-            </div>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98, y: 8 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1], delay: 0.05 }}
+          className={`relative overflow-hidden rounded-3xl bg-gradient-to-r ${activeBanner.gradient} p-5 sm:p-6 shadow-2xl transition-colors duration-700 border border-amber-400/30`}
+        >
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeBanner.title}
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
+              transition={{ duration: 0.28, ease: 'easeOut' }}
+              className="relative z-10 space-y-2"
+            >
+              <div className="flex items-center space-x-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-slate-950/70 backdrop-blur-md text-[10px] font-black text-amber-300 tracking-wider border border-amber-400/30">
+                  {activeBanner.badge}
+                </span>
+                <span className="text-[10px] font-mono text-amber-100 font-bold bg-white/10 px-2 py-0.5 rounded-full">
+                  {activeBanner.tag}
+                </span>
+              </div>
 
-            <h2 className="font-brand font-black text-xl sm:text-2xl text-slate-100 tracking-wide leading-tight">
-              {activeBanner.title}
-            </h2>
+              <h2 className="font-brand font-black text-xl sm:text-2xl text-slate-100 tracking-wide leading-tight">
+                {activeBanner.title}
+              </h2>
 
-            <p className="text-xs text-amber-100/90 leading-relaxed max-w-sm">
-              {activeBanner.subtitle}
-            </p>
+              <p className="text-xs text-amber-100/90 leading-relaxed max-w-sm">
+                {activeBanner.subtitle}
+              </p>
 
-            <div className="pt-2 flex items-center space-x-2">
-              {user ? (
-                <button
-                  onClick={onOpenDeposit}
-                  className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold text-xs shadow-lg active:scale-95 transition border border-amber-500/30 flex items-center space-x-1.5"
-                >
-                  <span>Recharge & Play</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              ) : (
-                <button
-                  onClick={onOpenAuth}
-                  className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold text-xs shadow-lg active:scale-95 transition border border-amber-500/30 flex items-center space-x-1.5"
-                >
-                  <span>Register & Claim</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
+              <div className="pt-2 flex items-center space-x-2">
+                {user ? (
+                  <button
+                    onClick={onOpenDeposit}
+                    className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold text-xs shadow-lg active:scale-95 transition border border-amber-500/30 flex items-center space-x-1.5"
+                  >
+                    <span>Recharge & Play</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={onOpenAuth}
+                    className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold text-xs shadow-lg active:scale-95 transition border border-amber-500/30 flex items-center space-x-1.5"
+                  >
+                    <span>Register & Claim</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </AnimatePresence>
 
           {/* Carousel Indicator Dots */}
           {banners.length > 1 && (
@@ -402,41 +422,51 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
               ))}
             </div>
           )}
-        </div>
+        </motion.div>
       )}
 
       {/* 3. Quick Action Feature Chips Row (Only Active Games) */}
       {(quickActionItems.length > 0 || showGiftCodes) && (
         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-          {quickActionItems.map((chip) => {
+          {quickActionItems.map((chip, idx) => {
             const ChipIcon = chip.icon;
             return (
-              <button
+              <motion.button
                 key={chip.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, delay: 0.04 * idx, ease: [0.22, 1, 0.36, 1] }}
+                whileHover={{ y: -2 }}
+                whileTap={{ scale: 0.95 }}
                 onClick={() => handleSelectGameWithFeatureCheck(chip.id)}
-                className="flex-1 min-w-[76px] p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-amber-500/40 flex flex-col items-center justify-center space-y-1 shadow-md active:scale-95 transition group"
+                className="flex-1 min-w-[76px] p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-amber-500/40 flex flex-col items-center justify-center space-y-1 shadow-md transition-colors group"
               >
                 <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${chip.color} group-hover:scale-110 transition`}>
                   <ChipIcon className="w-4 h-4" />
                 </div>
                 <span className="text-[10px] font-bold text-slate-300 whitespace-nowrap">{chip.label}</span>
-              </button>
+              </motion.button>
             );
           })}
 
           {showGiftCodes && (
-            <button
+            <motion.button
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.04 * quickActionItems.length, ease: [0.22, 1, 0.36, 1] }}
+              whileHover={{ y: -2 }}
+              whileTap={{ scale: 0.95 }}
               onClick={() => {
                 if (onOpenGiftCode) onOpenGiftCode();
                 else onOpenDeposit();
               }}
-              className="flex-1 min-w-[76px] p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-purple-500/40 flex flex-col items-center justify-center space-y-1 shadow-md active:scale-95 transition group"
+              className="flex-1 min-w-[76px] p-2.5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-purple-500/40 flex flex-col items-center justify-center space-y-1 shadow-md transition-colors group"
             >
               <div className="w-8 h-8 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-400 group-hover:scale-110 transition">
                 <Gift className="w-4 h-4" />
               </div>
               <span className="text-[10px] font-bold text-slate-300 whitespace-nowrap">Gift Code</span>
-            </button>
+            </motion.button>
           )}
         </div>
       )}
@@ -484,7 +514,12 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
 
       {/* 6. Stunning 2-Column Responsive Game Cards Grid (Only Active Games Rendered) */}
       {filteredGames.length === 0 ? (
-        <div className="p-8 text-center rounded-3xl bg-slate-900/80 border border-slate-800 space-y-3">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+          className="p-8 text-center rounded-3xl bg-slate-900/80 border border-slate-800 space-y-3"
+        >
           <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
             <ShieldCheck className="w-6 h-6" />
           </div>
@@ -492,62 +527,76 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
           <p className="text-xs text-slate-400 max-w-xs mx-auto">
             These games have been temporarily paused by Master Admin. Please check back shortly or explore other categories.
           </p>
-        </div>
+        </motion.div>
       ) : (
         <div className="grid grid-cols-2 gap-3">
-          {filteredGames.map((game) => {
-            const Icon = game.icon;
-            return (
-              <div
-                key={game.id}
-                onClick={() => handleSelectGameWithFeatureCheck(game.id)}
-                className={`group cursor-pointer rounded-3xl bg-gradient-to-b ${game.bgGradient} border ${game.borderColor} p-4 shadow-xl transition-all duration-200 active:scale-95 hover:shadow-2xl flex flex-col justify-between`}
-              >
-                {/* Card Top: Icon & Tags */}
-                <div className="flex items-start justify-between">
-                  <div className={`w-12 h-12 rounded-2xl bg-gradient-to-tr ${game.iconBg} flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition duration-200 border border-white/20`}>
-                    <Icon className="w-6 h-6 stroke-[2.2]" />
-                  </div>
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${game.tagColor}`}>
-                    {game.tag}
-                  </span>
-                </div>
-
-                {/* Card Middle: Title & Multiplier */}
-                <div className="mt-3.5 space-y-1">
-                  <h3 className="font-brand font-black text-sm sm:text-base text-slate-100 group-hover:text-amber-300 transition leading-tight">
-                    {game.title}
-                  </h3>
-                  <p className="text-[10px] text-slate-400 line-clamp-1">
-                    {game.subtitle}
-                  </p>
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[10px] text-slate-500 font-mono">
-                      {game.previewBadge}
-                    </span>
-                    <span className="text-amber-400 font-mono font-black text-xs">
-                      {game.multiplier}
+          <AnimatePresence mode="popLayout">
+            {filteredGames.map((game, idx) => {
+              const Icon = game.icon;
+              return (
+                <motion.div
+                  layout
+                  key={game.id}
+                  initial={{ opacity: 0, y: 16, scale: 0.96 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.94, transition: { duration: 0.18 } }}
+                  transition={{
+                    type: 'spring',
+                    stiffness: 340,
+                    damping: 26,
+                    delay: idx * 0.045
+                  }}
+                  whileHover={{ y: -3, scale: 1.015 }}
+                  whileTap={{ scale: 0.96 }}
+                  onClick={() => handleSelectGameWithFeatureCheck(game.id)}
+                  className={`group cursor-pointer rounded-3xl bg-gradient-to-b ${game.bgGradient} border ${game.borderColor} p-4 shadow-xl hover:shadow-2xl flex flex-col justify-between`}
+                >
+                  {/* Card Top: Icon & Tags */}
+                  <div className="flex items-start justify-between">
+                    <div className={`w-12 h-12 rounded-2xl bg-gradient-to-tr ${game.iconBg} flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition duration-200 border border-white/20`}>
+                      <Icon className="w-6 h-6 stroke-[2.2]" />
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-black border ${game.tagColor}`}>
+                      {game.tag}
                     </span>
                   </div>
-                </div>
 
-                {/* Card Bottom: Active Players & Play CTA */}
-                <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between">
-                  <span className="text-[9px] text-slate-400 flex items-center space-x-1">
-                    <Users className="w-3 h-3 text-slate-500" />
-                    <span>{game.playersCount}</span>
-                  </span>
+                  {/* Card Middle: Title & Multiplier */}
+                  <div className="mt-3.5 space-y-1">
+                    <h3 className="font-brand font-black text-sm sm:text-base text-slate-100 group-hover:text-amber-300 transition leading-tight">
+                      {game.title}
+                    </h3>
+                    <p className="text-[10px] text-slate-400 line-clamp-1">
+                      {game.subtitle}
+                    </p>
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {game.previewBadge}
+                      </span>
+                      <span className="text-amber-400 font-mono font-black text-xs">
+                        {game.multiplier}
+                      </span>
+                    </div>
+                  </div>
 
-                  <button
-                    className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] shadow transition flex items-center space-x-0.5 group-hover:scale-105"
-                  >
-                    <span>PLAY</span>
-                    <Play className="w-2.5 h-2.5 fill-slate-950" />
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+                  {/* Card Bottom: Active Players & Play CTA */}
+                  <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between">
+                    <span className="text-[9px] text-slate-400 flex items-center space-x-1">
+                      <Users className="w-3 h-3 text-slate-500" />
+                      <span>{game.playersCount}</span>
+                    </span>
+
+                    <button
+                      className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[10px] shadow transition flex items-center space-x-0.5 group-hover:scale-105"
+                    >
+                      <span>PLAY</span>
+                      <Play className="w-2.5 h-2.5 fill-slate-950" />
+                    </button>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
         </div>
       )}
     </div>

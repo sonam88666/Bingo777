@@ -12,6 +12,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { useToast } from '../common/Toast';
+import { motion } from 'motion/react';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
 import { Bingo777Logo } from '../common/Bingo777Logo';
 import { store } from '../../services/store';
@@ -130,8 +131,20 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full sm:max-w-md bg-slate-900 border border-amber-500/30 rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 shadow-2xl max-h-[92vh] overflow-y-auto space-y-4">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-md"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 24 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 18 }}
+        transition={{ type: 'spring', stiffness: 350, damping: 27 }}
+        className="w-full sm:max-w-md bg-slate-900 border border-amber-500/30 rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 shadow-2xl max-h-[92vh] overflow-y-auto space-y-4"
+      >
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center space-x-3">
@@ -287,7 +300,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({ onClose }) => {
             <span>Force Reload App Assets (कैश साफ करें)</span>
           </button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Gift, Sparkles } from 'lucide-react';
+import { motion } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { UserRecord } from '../../types';
 import { store } from '../../services/store';
@@ -41,8 +42,22 @@ export const GiftCodeModal: React.FC<GiftCodeModalProps> = ({ user, onClose }) =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-3xl p-6 shadow-2xl space-y-4">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 16 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        transition={{ type: 'spring', stiffness: 360, damping: 28 }}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-3xl p-6 shadow-2xl space-y-4"
+      >
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center space-x-2.5">
@@ -91,7 +106,7 @@ export const GiftCodeModal: React.FC<GiftCodeModalProps> = ({ user, onClose }) =
             <span>{isRedeeming ? 'Redeeming...' : 'Receive Gift'}</span>
           </button>
         </form>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

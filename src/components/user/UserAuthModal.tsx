@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   User as UserIcon
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import { UserRecord, DeviceRecord, AuthConfig } from '../../types';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
@@ -771,8 +772,20 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md animate-in fade-in duration-200 overflow-y-auto">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-3xl overflow-hidden shadow-2xl space-y-4 p-5 sm:p-6 my-auto">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.22 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md overflow-y-auto"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 18 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.94, y: 12 }}
+        transition={{ type: 'spring', stiffness: 350, damping: 27 }}
+        className="w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-3xl overflow-hidden shadow-2xl space-y-4 p-5 sm:p-6 my-auto"
+      >
         {/* Clean Brand Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center space-x-2.5">
@@ -786,7 +799,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
               </span>
             </div>
           </div>
-          {canClose ? (
+          {canClose && (
             <button
               type="button"
               onClick={onClose}
@@ -794,18 +807,6 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
             >
               ✕
             </button>
-          ) : (
-            onOpenAdmin && (
-              <button
-                type="button"
-                onClick={onOpenAdmin}
-                className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-400 hover:text-amber-300 text-[10px] font-bold flex items-center space-x-1 transition"
-                title="Admin Access"
-              >
-                <ShieldCheck className="w-3 h-3 text-amber-400" />
-                <span>Admin</span>
-              </button>
-            )
           )}
         </div>
 
@@ -1107,7 +1108,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
             )
           )}
         </form>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

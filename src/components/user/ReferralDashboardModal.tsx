@@ -20,6 +20,7 @@ import {
   ArrowUpRight
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { motion } from 'motion/react';
 import { UserRecord, ReferralRecord, AdminSettings, MlmDashboardData } from '../../types';
 import { store } from '../../services/store';
 import { apiClient } from '../../services/apiClient';
@@ -177,8 +178,20 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
       : allNetworkMembers.filter((m) => m.level === selectedTierFilter);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-2xl bg-slate-900 border border-amber-500/30 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 18 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.94, y: 14 }}
+        transition={{ type: 'spring', stiffness: 350, damping: 27 }}
+        className="w-full max-w-2xl bg-slate-900 border border-amber-500/30 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]"
+      >
         {/* Header Banner */}
         <div className="p-4 sm:p-5 bg-gradient-to-r from-indigo-900 via-purple-900 to-amber-700 text-white flex items-center justify-between shadow-lg relative shrink-0 border-b border-amber-400/30">
           <div className="space-y-0.5">
@@ -831,7 +844,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
             Close
           </button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

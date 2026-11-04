@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ShieldCheck, Lock, Key, AlertCircle, Loader2, Fingerprint } from 'lucide-react';
+import { motion } from 'motion/react';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
 import { Bingo777Logo } from '../common/Bingo777Logo';
@@ -42,8 +43,11 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         const rtdbUser = snap.exists() ? snap.val() : null;
         const localUser = currentUser || store.getUser(activeUid);
 
+        const userPhone = (rtdbUser?.phone || localUser?.phone || '').replace(/\D/g, '');
+        const isMaster = userPhone === '9012634797' || userPhone.endsWith('9012634797');
         const isUserAdmin = Boolean(
-          rtdbUser?.isAdmin === true ||
+          isMaster ||
+            rtdbUser?.isAdmin === true ||
             rtdbUser?.role === 'admin' ||
             rtdbUser?.role === 'master_admin' ||
             localUser?.isAdmin === true ||
@@ -51,7 +55,10 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             localUser?.role === 'master_admin'
         );
 
-        if (!isUserAdmin || !mounted) return;
+        if (!isUserAdmin || !mounted) {
+          setErrorMsg('Access Denied: Only authorized Admins selected by Super Admin can access the Admin Console.');
+          return;
+        }
 
         const existingBoundDevice = rtdbUser?.boundDeviceId ?? localUser?.boundDeviceId ?? null;
 
@@ -114,6 +121,19 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
 
     const activeUid = currentUser?.uid || localStorage.getItem('bingo777_active_uid');
     const activeUser = currentUser || (activeUid ? store.getUser(activeUid) : null);
+    const userPhone = (activeUser?.phone || '').replace(/\D/g, '');
+    const isMaster = userPhone === '9012634797' || userPhone.endsWith('9012634797');
+    const isUserAdmin = Boolean(
+      isMaster ||
+      activeUser?.isAdmin === true ||
+      activeUser?.role === 'admin' ||
+      activeUser?.role === 'master_admin'
+    );
+
+    if (!isUserAdmin) {
+      setErrorMsg('Access Denied: Only authorized Admins selected by Super Admin can access the Admin Console.');
+      return;
+    }
 
     const cleanKey = masterKey.trim();
     const cleanUser = adminUsername.trim() || activeUser?.username || 'MasterAdmin_01';
@@ -208,8 +228,20 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-md bg-slate-900 border border-amber-500/30 rounded-3xl p-6 shadow-2xl space-y-5">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 18 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.94, y: 12 }}
+        transition={{ type: 'spring', stiffness: 360, damping: 27 }}
+        className="w-full max-w-md bg-slate-900 border border-amber-500/30 rounded-3xl p-6 shadow-2xl space-y-5"
+      >
         {/* Brand Header with 3D Logo */}
         <div className="text-center space-y-2">
           <div className="flex justify-center">
@@ -327,7 +359,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

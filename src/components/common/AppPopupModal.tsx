@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Sparkles, X, ExternalLink, ArrowRight, Bell, Gift, Flame } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
 import { AppPopupConfig } from '../../types';
 
@@ -84,8 +85,23 @@ export const AppPopupModal: React.FC<AppPopupModalProps> = ({ onOpenDeposit }) =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-300">
-      <div className="relative w-full max-w-sm rounded-3xl bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 border-2 border-amber-400/80 shadow-[0_0_50px_rgba(245,158,11,0.35)] overflow-hidden">
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.22 }}
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
+        onClick={handleDismiss}
+      >
+        <motion.div
+          initial={{ opacity: 0, scale: 0.92, y: 18 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95, y: 12 }}
+          transition={{ type: 'spring', stiffness: 350, damping: 27 }}
+          onClick={(e) => e.stopPropagation()}
+          className="relative w-full max-w-sm rounded-3xl bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 border-2 border-amber-400/80 shadow-[0_0_50px_rgba(245,158,11,0.35)] overflow-hidden"
+        >
         {/* Glowing Top Accent Line */}
         <div className="h-1.5 w-full bg-gradient-to-r from-amber-500 via-yellow-300 to-amber-600 animate-pulse" />
 
@@ -152,7 +168,8 @@ export const AppPopupModal: React.FC<AppPopupModalProps> = ({ onOpenDeposit }) =
             </button>
           </div>
         </div>
-      </div>
-    </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
   );
 };

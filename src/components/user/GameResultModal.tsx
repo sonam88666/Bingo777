@@ -11,6 +11,7 @@ import {
   Volume2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { motion } from 'motion/react';
 import { RoundSettlementNotice } from '../../types';
 import { soundFx } from '../../services/soundFx';
 
@@ -330,15 +331,23 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
   };
 
   return (
-    <div 
-      className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200"
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.22 }}
+      className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label={isWin ? 'You Win Result Popup' : 'You Lost Result Popup'}
     >
-      <div 
-        className={`w-full max-w-sm sm:max-w-md rounded-3xl overflow-hidden shadow-2xl relative transition-all transform animate-in zoom-in-95 duration-250 select-none ${
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.94, y: 12 }}
+        transition={{ type: 'spring', stiffness: 350, damping: 26 }}
+        className={`w-full max-w-sm sm:max-w-md rounded-3xl overflow-hidden shadow-2xl relative select-none ${
           isWin
             ? 'bg-gradient-to-b from-slate-900 via-emerald-950/85 to-slate-950 border-2 border-amber-400/90 shadow-[0_0_55px_rgba(245,158,11,0.4),0_0_25px_rgba(16,185,129,0.35),inset_0_1px_1px_rgba(255,255,255,0.35)]'
             : 'bg-gradient-to-b from-slate-900 via-rose-950/70 to-slate-950 border-2 border-rose-500/75 shadow-[0_0_45px_rgba(225,29,72,0.4),0_0_20px_rgba(159,18,57,0.3),inset_0_1px_1px_rgba(255,255,255,0.15)]'
@@ -582,7 +591,7 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
             <span className="text-emerald-400 font-bold">Instant Wallet Settlement</span>
           </span>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

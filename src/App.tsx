@@ -4,6 +4,7 @@ import {
   Key,
   X
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { ToastProvider, useToast } from './components/common/Toast';
 import { UserHeader } from './components/user/UserHeader';
 import { GameLobby } from './components/user/GameLobby';
@@ -339,46 +340,63 @@ function MainApp() {
 
   const handleOpenAdminPortal = async () => {
     const persistentDeviceId = getPersistentDeviceId();
-    // If logged-in user has isAdmin === true OR role === 'admin' / 'master_admin', grant immediate access & bind device on first login
-    if (
-      currentUser &&
-      (currentUser.isAdmin === true ||
-        currentUser.role === 'admin' ||
-        currentUser.role === 'master_admin')
-    ) {
-      if (!currentUser.boundDeviceId) {
-        await rtdbUpdate(rtdbRef(rtdb, `users/${currentUser.uid}`), {
-          boundDeviceId: persistentDeviceId,
-          lastUsedDeviceId: persistentDeviceId,
-          lastLogin: Date.now(),
-          isOnline: true
-        }).catch(() => {});
-        store.updateUserFromFirestore({
-          uid: currentUser.uid,
-          boundDeviceId: persistentDeviceId,
-          lastUsedDeviceId: persistentDeviceId
-        });
-      } else if (
-        currentUser.boundDeviceId !== persistentDeviceId &&
-        currentUser.role !== 'master_admin'
-      ) {
-        setShowAdminLogin(true);
-        return;
-      }
+    const activeUid = currentUser?.uid || localStorage.getItem('bingo777_active_uid');
+    const liveUser = currentUser || (activeUid ? store.getUser(activeUid) : null);
+    const cleanPhone = (liveUser?.phone || '').replace(/\D/g, '');
 
-      const token = 'BINGO_MASTER_2026_KEY';
-      sessionStorage.setItem('bingo777_master_admin_token', token);
-      localStorage.setItem('bingo777_master_admin_token', token);
-      setMasterAdminId(currentUser.name || currentUser.username || currentUser.uid);
-      setViewMode('master_admin');
+    const isMasterAdmin = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
+    const isSelectedAdmin = Boolean(
+      liveUser && (
+        isMasterAdmin ||
+        liveUser.isAdmin === true ||
+        liveUser.role === 'admin' ||
+        liveUser.role === 'master_admin'
+      )
+    );
+
+    // STRICT SECURITY GUARD: Only authorized Admins selected by Super Admin or 9012634797 can open Admin Console.
+    // Random users get zero access no matter how many times they tap!
+    if (!isSelectedAdmin || !liveUser) {
+      showToast('Access Denied: Only authorized Admins selected by Super Admin can access the Admin Console.', 'error');
       return;
     }
 
-    if (masterAdminId) {
-      setViewMode('master_admin');
-    } else {
-      setShowAdminLogin(true);
+    // STRICT DEVICE LOCK SECURITY: An Admin account cannot be opened on unauthorized devices!
+    if (liveUser.boundDeviceId && liveUser.boundDeviceId !== persistentDeviceId) {
+      showToast(
+        `Device Security Lock: Admin Console is bound to another authorized device (${liveUser.boundDeviceId}). Unauthorized device access is blocked.`,
+        'error'
+      );
+      return;
     }
+
+    // Auto-bind device on first login after promotion or after Super Admin clicks "Reset Device Lock"
+    if (!liveUser.boundDeviceId) {
+      await rtdbUpdate(rtdbRef(rtdb, `users/${liveUser.uid}`), {
+        boundDeviceId: persistentDeviceId,
+        lastUsedDeviceId: persistentDeviceId,
+        isAdmin: true,
+        role: isMasterAdmin ? 'master_admin' : 'admin',
+        lastLogin: Date.now(),
+        isOnline: true
+      }).catch(() => {});
+
+      store.updateUserFromFirestore({
+        uid: liveUser.uid,
+        boundDeviceId: persistentDeviceId,
+        lastUsedDeviceId: persistentDeviceId,
+        isAdmin: true,
+        role: isMasterAdmin ? 'master_admin' : 'admin'
+      });
+      liveUser.boundDeviceId = persistentDeviceId;
+    }
+
+    const token = 'BINGO_MASTER_2026_KEY';
+    sessionStorage.setItem('bingo777_master_admin_token', token);
+    localStorage.setItem('bingo777_master_admin_token', token);
+    setMasterAdminId(liveUser.name || liveUser.username || liveUser.phone || liveUser.uid);
+    setViewMode('master_admin');
+    showToast(`Welcome Admin ${liveUser.username || liveUser.phone || 'Authorized'}!`, 'success');
   };
 
   const handleAdminLogout = () => {
@@ -716,42 +734,125 @@ function MainApp() {
       )}
 
       {/* MODALS */}
-      {showGiftModal && currentUser && (
-        <GiftCodeModal
-          user={currentUser}
-          onClose={() => setShowGiftModal(false)}
-        />
-      )}
+      <AnimatePresence>
+        {showGiftModal && currentUser && (
+          <GiftCodeModal
+            user={currentUser}
+            onClose={() => setShowGiftModal(false)}
+          />
+        )}
 
-      {showSupportModal && (
-        <SupportChatModal
-          user={currentUser}
-          onClose={() => setShowSupportModal(false)}
-        />
-      )}
+        {showSupportModal && (
+          <SupportChatModal
+            user={currentUser}
+            onClose={() => setShowSupportModal(false)}
+          />
+        )}
 
-      {showReferralModal && currentUser && (
-        <ReferralDashboardModal
-          user={currentUser}
-          onClose={() => setShowReferralModal(false)}
-          onOpenDeposit={() => {
-            setShowReferralModal(false);
-            setWalletInitialTab('deposit');
-            setActiveNavTab('wallet');
-          }}
-        />
-      )}
+        {showReferralModal && currentUser && (
+          <ReferralDashboardModal
+            user={currentUser}
+            onClose={() => setShowReferralModal(false)}
+            onOpenDeposit={() => {
+              setShowReferralModal(false);
+              setWalletInitialTab('deposit');
+              setActiveNavTab('wallet');
+            }}
+          />
+        )}
 
-      {showAuthModal && currentUser && (
-        <UserAuthModal
-          onSuccess={(u) => {
-            localStorage.setItem('bingo777_active_uid', u.uid);
-            setCurrentUser(u);
-            setShowAuthModal(false);
-          }}
-          onClose={() => setShowAuthModal(false)}
-        />
-      )}
+        {showAuthModal && currentUser && (
+          <UserAuthModal
+            onSuccess={(u) => {
+              localStorage.setItem('bingo777_active_uid', u.uid);
+              setCurrentUser(u);
+              setShowAuthModal(false);
+            }}
+            onClose={() => setShowAuthModal(false)}
+          />
+        )}
+
+        {/* High-Security Hidden Admin Login Modal */}
+        {showAdminLogin && (
+          <AdminLoginModal
+            currentUser={currentUser}
+            onSuccess={handleAdminLoginSuccess}
+            onCancel={() => setShowAdminLogin(false)}
+            onUserBlocked={() => {
+              setCurrentUser(null);
+              setShowAdminLogin(false);
+            }}
+          />
+        )}
+
+        {/* Bet & Game History Modal */}
+        {showBetHistoryModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 18 }}
+              transition={{ type: 'spring', stiffness: 350, damping: 27 }}
+              className="w-full sm:max-w-2xl bg-slate-900 border border-slate-700/80 rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 shadow-2xl max-h-[92vh] overflow-y-auto space-y-4"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center">
+                    <ShieldCheck className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-brand font-black text-slate-100 text-base">Game & Bet Order Records</h3>
+                    <span className="text-[11px] text-slate-400">Review results, payout charts & past bets</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowBetHistoryModal(false)}
+                  className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <GameBetHistorySection
+                pastRounds={store.getPastRounds()}
+                userBets={currentUser ? store.getLiveBets().filter((b) => b.uid === currentUser.uid) : []}
+                user={currentUser}
+                defaultTab="mybets"
+                onOpenDeposit={() => {
+                  setShowBetHistoryModal(false);
+                  setWalletInitialTab('deposit');
+                  setActiveNavTab('wallet');
+                }}
+                onOpenAuth={() => {
+                  setShowBetHistoryModal(false);
+                  setShowAuthModal(true);
+                }}
+              />
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* 3D WIN / LOSS Result Dialog */}
+        {activeSettlement && (
+          <GameResultModal
+            key={activeSettlement.resultId}
+            settlement={activeSettlement}
+            queuedCount={settlementQueue.length}
+            onClose={() => handleDismissSettlement(activeSettlement)}
+            onContinue={() => {
+              handleDismissSettlement(activeSettlement);
+            }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Live Admin Ads & App Update Popup Banner (Only when logged in) */}
       {currentUser && (
@@ -759,75 +860,6 @@ function MainApp() {
           setWalletInitialTab('deposit');
           setActiveNavTab('wallet');
         }} />
-      )}
-
-      {/* High-Security Hidden Admin Login Modal */}
-      {showAdminLogin && (
-        <AdminLoginModal
-          currentUser={currentUser}
-          onSuccess={handleAdminLoginSuccess}
-          onCancel={() => setShowAdminLogin(false)}
-          onUserBlocked={() => {
-            setCurrentUser(null);
-            setShowAdminLogin(false);
-          }}
-        />
-      )}
-
-      {/* Bet & Game History Modal */}
-      {showBetHistoryModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="w-full sm:max-w-2xl bg-slate-900 border border-slate-700/80 rounded-t-3xl sm:rounded-3xl p-4 sm:p-6 shadow-2xl max-h-[92vh] overflow-y-auto space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center">
-                  <ShieldCheck className="w-5 h-5 text-amber-400" />
-                </div>
-                <div>
-                  <h3 className="font-brand font-black text-slate-100 text-base">Game & Bet Order Records</h3>
-                  <span className="text-[11px] text-slate-400">Review results, payout charts & past bets</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowBetHistoryModal(false)}
-                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition"
-                title="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <GameBetHistorySection
-              pastRounds={store.getPastRounds()}
-              userBets={currentUser ? store.getLiveBets().filter((b) => b.uid === currentUser.uid) : []}
-              user={currentUser}
-              defaultTab="mybets"
-              onOpenDeposit={() => {
-                setShowBetHistoryModal(false);
-                setWalletInitialTab('deposit');
-                setActiveNavTab('wallet');
-              }}
-              onOpenAuth={() => {
-                setShowBetHistoryModal(false);
-                setShowAuthModal(true);
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* 3D WIN / LOSS Result Dialog */}
-      {activeSettlement && (
-        <GameResultModal
-          key={activeSettlement.resultId}
-          settlement={activeSettlement}
-          queuedCount={settlementQueue.length}
-          onClose={() => handleDismissSettlement(activeSettlement)}
-          onContinue={() => {
-            handleDismissSettlement(activeSettlement);
-          }}
-        />
       )}
     </div>
   );
