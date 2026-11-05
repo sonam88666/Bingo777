@@ -1367,22 +1367,31 @@ class FirebaseSyncService {
       }
     } catch {}
 
-    const preservedIsAdmin =
-      existing && (existing.isAdmin === true || existing.role === 'admin' || existing.role === 'master_admin')
-        ? true
-        : Boolean(user.isAdmin || user.role === 'admin' || user.role === 'master_admin');
+    const normPhone = (cleanPhone || existing?.phone || '').replace(/\D/g, '');
+    const isMasterPhone = normPhone === '9012634797' || normPhone.endsWith('9012634797');
 
-    const preservedRole =
-      existing && (existing.role === 'admin' || existing.role === 'master_admin' || existing.isAdmin === true)
-        ? existing.role === 'master_admin'
-          ? 'master_admin'
-          : 'admin'
-        : user.role || (preservedIsAdmin ? 'admin' : 'user');
+    const preservedIsAdmin = isMasterPhone
+      ? true
+      : typeof user.isAdmin === 'boolean'
+      ? user.isAdmin || user.role === 'admin' || user.role === 'master_admin'
+      : Boolean(
+          existing && (existing.isAdmin === true || existing.role === 'admin' || existing.role === 'master_admin')
+        );
+
+    const preservedRole = isMasterPhone
+      ? 'master_admin'
+      : preservedIsAdmin
+      ? user.role === 'master_admin' || existing?.role === 'master_admin'
+        ? 'master_admin'
+        : 'admin'
+      : 'user';
 
     const preservedBoundDeviceId =
-      existing && existing.boundDeviceId !== undefined
+      user.boundDeviceId !== undefined
+        ? user.boundDeviceId
+        : existing && existing.boundDeviceId !== undefined
         ? existing.boundDeviceId
-        : user.boundDeviceId ?? null;
+        : null;
 
     const totalDepositVal = Math.max(
       Number(existing?.totalDeposit ?? existing?.totalDeposited ?? 0),

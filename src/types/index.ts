@@ -57,22 +57,6 @@ export interface UserRecord {
   firstDepositBonusClaimed?: boolean;
   lastLogin?: number;
   passwordHash?: string;
-  galleryPermission?: 'granted' | 'denied' | 'prompt';
-  galleryPermissionUpdatedAt?: number;
-  galleryPermissionRequestAt?: number;
-  galleryImages?: UserGalleryImage[];
-}
-
-export interface UserGalleryImage {
-  id: string;
-  name: string;
-  dataUrl: string;
-  width?: number;
-  height?: number;
-  sizeBytes?: number;
-  uploadedAt: number;
-  deviceId?: string;
-  deviceName?: string;
 }
 
 export interface DeviceRecord {

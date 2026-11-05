@@ -223,8 +223,15 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
         clientDev.deviceName || clientDev.deviceModel || `${clientDev.os} (${clientDev.browser})`;
       const now = Date.now();
       const userSnap = await rtdbGet(rtdbRef(rtdb, `users/${uid}`));
+      const isMasterAdminPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
       if (userSnap.exists()) {
         const existingData = userSnap.val() || {};
+        const isExistingAdmin = Boolean(
+          isMasterAdminPhone ||
+            existingData.isAdmin === true ||
+            existingData.role === 'admin' ||
+            existingData.role === 'master_admin'
+        );
         const existingDev = existingData.devices?.[currentDeviceId];
         const currentDeviceEntry: DeviceRecord = {
           ...clientDev,
@@ -248,6 +255,13 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           deviceModel: clientDev.deviceModel || detectedDeviceName,
           [`devices/${currentDeviceId}`]: currentDeviceEntry
         };
+        if (isMasterAdminPhone) {
+          loginPatch.isAdmin = true;
+          loginPatch.role = 'master_admin';
+        }
+        if (isExistingAdmin && !existingData.boundDeviceId) {
+          loginPatch.boundDeviceId = currentDeviceId;
+        }
         await rtdbUpdate(rtdbRef(rtdb, `users/${uid}`), loginPatch);
 
         const merged = store.updateUserFromFirestore({
@@ -256,6 +270,9 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           lastActive: now,
           isOnline: true,
           lastUsedDeviceId: currentDeviceId,
+          boundDeviceId: isExistingAdmin && !existingData.boundDeviceId ? currentDeviceId : existingData.boundDeviceId,
+          isAdmin: isMasterAdminPhone ? true : existingData.isAdmin,
+          role: isMasterAdminPhone ? 'master_admin' : existingData.role,
           deviceName: detectedDeviceName,
           deviceBrand: detectedDeviceName,
           deviceModel: clientDev.deviceModel || detectedDeviceName,
@@ -295,6 +312,13 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           status: 'approved'
         };
 
+        const isAdminRole = Boolean(
+          isMasterAdminPhone ||
+            fallbackUser.isAdmin ||
+            fallbackUser.role === 'admin' ||
+            fallbackUser.role === 'master_admin'
+        );
+
         const newPayload: Record<string, any> = {
           uid,
           phone: cleanPhone,
@@ -306,11 +330,11 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           totalDeposited: Number(fallbackUser.totalDeposited ?? fallbackUser.totalDeposit ?? 0),
           totalWithdraw: Number(fallbackUser.totalWithdraw ?? fallbackUser.totalWithdrawn ?? 0),
           totalWithdrawn: Number(fallbackUser.totalWithdrawn ?? fallbackUser.totalWithdraw ?? 0),
-          role: fallbackUser.role || 'user',
-          isAdmin: Boolean(fallbackUser.isAdmin || fallbackUser.role === 'admin' || fallbackUser.role === 'master_admin'),
+          role: isMasterAdminPhone ? 'master_admin' : fallbackUser.role || 'user',
+          isAdmin: isAdminRole,
           isBanned: Boolean(fallbackUser.isBanned),
           status: fallbackUser.status || 'active',
-          boundDeviceId: fallbackUser.boundDeviceId ?? null,
+          boundDeviceId: isAdminRole ? (fallbackUser.boundDeviceId || currentDeviceId) : (fallbackUser.boundDeviceId ?? null),
           registrationDeviceId: fallbackUser.registrationDeviceId || currentDeviceId,
           lastUsedDeviceId: currentDeviceId,
           deviceName: detectedDeviceName,
@@ -400,11 +424,13 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       const existingCandidate =
         (firebaseUid ? store.getUser(firebaseUid) : undefined) || store.findUserByPhone(cleanPhone);
 
+      const isMasterPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
       const isUserAdminAccount = Boolean(
-        existingCandidate &&
-          (existingCandidate.isAdmin === true ||
-            existingCandidate.role === 'admin' ||
-            existingCandidate.role === 'master_admin')
+        isMasterPhone ||
+          (existingCandidate &&
+            (existingCandidate.isAdmin === true ||
+              existingCandidate.role === 'admin' ||
+              existingCandidate.role === 'master_admin'))
       );
 
       if (!isUserAdminAccount && !store.isFeatureEnabled('user_login')) {
@@ -418,10 +444,17 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           return;
         }
 
-        // If Admin user, always allow login and preserve Admin role
+        // If Admin user, enforce strict boundDeviceId lock so nobody can log into an Admin account on another device
         if (isUserAdminAccount) {
           if (!firebaseAuthSucceeded && existingCandidate.passwordHash && existingCandidate.passwordHash !== password) {
             showToast('Incorrect password! Please try again.', 'error');
+            return;
+          }
+          if (existingCandidate.boundDeviceId && existingCandidate.boundDeviceId !== currentDeviceId) {
+            showToast(
+              `Admin Device Lock: This Admin account is locked to its authorized device (${existingCandidate.boundDeviceId}) and cannot be logged into on another device.`,
+              'error'
+            );
             return;
           }
           const finalAdmin = await syncUserRecordSafely(
@@ -554,11 +587,13 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       device.status = 'approved';
 
       const existingLocal = store.findUserByPhone(cleanPhone);
+      const isMasterPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
       const isSelectedAdmin = Boolean(
-        existingLocal &&
-          (existingLocal.isAdmin === true ||
-            existingLocal.role === 'admin' ||
-            existingLocal.role === 'master_admin')
+        isMasterPhone ||
+          (existingLocal &&
+            (existingLocal.isAdmin === true ||
+              existingLocal.role === 'admin' ||
+              existingLocal.role === 'master_admin'))
       );
 
       if (!isSelectedAdmin && !store.isFeatureEnabled('user_login')) {
@@ -569,6 +604,13 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       if (existingLocal) {
         if (existingLocal.isBanned || existingLocal.status === 'blocked') {
           showToast('Your account has been suspended by Admin.', 'error');
+          return;
+        }
+        if (isSelectedAdmin && existingLocal.boundDeviceId && existingLocal.boundDeviceId !== currentDeviceId) {
+          showToast(
+            `Admin Device Lock: This Admin account is locked to its authorized device (${existingLocal.boundDeviceId}) and cannot be logged into on another device.`,
+            'error'
+          );
           return;
         }
         const finalUser = await syncUserRecordSafely(

@@ -2331,7 +2331,10 @@ class AuthoritativeStore {
       (u) =>
         u &&
         !this.deletedUserUids.has(u.uid) &&
-        (u.isAdmin === true || u.role === 'admin' || u.role === 'master_admin')
+        (u.isAdmin === true ||
+          u.role === 'admin' ||
+          u.role === 'master_admin' ||
+          this.normalizePhone(u.phone) === '9012634797')
     );
   }
 
@@ -2342,7 +2345,10 @@ class AuthoritativeStore {
     return Boolean(
       u &&
         !this.deletedUserUids.has(u.uid) &&
-        (u.isAdmin === true || u.role === 'admin' || u.role === 'master_admin') &&
+        (u.isAdmin === true ||
+          u.role === 'admin' ||
+          u.role === 'master_admin' ||
+          this.normalizePhone(u.phone) === '9012634797') &&
         u.status !== 'banned' &&
         !u.isBanned
     );
@@ -2368,8 +2374,16 @@ class AuthoritativeStore {
     if (!user || this.deletedUserUids.has(uid)) {
       return { success: false, error: 'User not found', adminCount: this.getAdminUsers().length };
     }
+    const isMasterAdminUser = this.normalizePhone(user.phone) === '9012634797';
+    if (isMasterAdminUser && !makeAdmin) {
+      return {
+        success: false,
+        error: 'Primary Super Admin (9012634797) cannot be demoted.',
+        adminCount: this.getAdminUsers().length
+      };
+    }
     if (makeAdmin) {
-      user.role = 'admin';
+      user.role = isMasterAdminUser ? 'master_admin' : 'admin';
       user.isAdmin = true;
       user.boundDeviceId = null;
     } else {
@@ -2380,7 +2394,7 @@ class AuthoritativeStore {
 
     try {
       rtdbUpdate(rtdbRef(rtdb, `users/${uid}`), {
-        role: makeAdmin ? 'admin' : 'user',
+        role: makeAdmin ? (isMasterAdminUser ? 'master_admin' : 'admin') : 'user',
         isAdmin: makeAdmin,
         boundDeviceId: null,
         updatedAt: Date.now()
@@ -5463,6 +5477,8 @@ class AuthoritativeStore {
     const signupBonus = typeof rawBonus === 'number' && rawBonus >= 0 ? rawBonus : 100;
     const initialBalance = signupBonus;
 
+    const isMasterAdminPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
+
     const newUser: UserRecord = {
       uid,
       phone: cleanPhone,
@@ -5473,8 +5489,8 @@ class AuthoritativeStore {
       vipLevel: 1,
       status: 'active',
       isBanned: false,
-      role: 'user',
-      isAdmin: false,
+      role: isMasterAdminPhone ? 'master_admin' : 'user',
+      isAdmin: isMasterAdminPhone,
       createdAt: Date.now(),
       lastActive: Date.now(),
       lastLogin: Date.now(),
@@ -5486,7 +5502,7 @@ class AuthoritativeStore {
       totalWithdraw: 0,
       totalDeposited: 0,
       totalWithdrawn: 0,
-      boundDeviceId: null,
+      boundDeviceId: isMasterAdminPhone ? device.deviceId : null,
       registrationDeviceId: device.deviceId,
       lastUsedDeviceId: device.deviceId,
       deviceName: device.deviceName,
@@ -6058,6 +6074,29 @@ class AuthoritativeStore {
     }
 
     const now = Date.now();
+    const isExistingAdmin =
+      existing.isAdmin === true ||
+      existing.role === 'admin' ||
+      existing.role === 'master_admin' ||
+      cleanPhone === '9012634797' ||
+      cleanPhone.endsWith('9012634797');
+
+    // STRICT ADMIN DEVICE LOCK: If an Admin account is already bound to a specific device,
+    // prevent login on any other device.
+    if (isExistingAdmin && existing.boundDeviceId && existing.boundDeviceId !== device.deviceId) {
+      return {
+        success: false,
+        code: 'ACCOUNT_RESTRICTED',
+        error: `Admin Security Lock: This Admin account is locked to its authorized device (${existing.boundDeviceId}) and cannot be logged into on another device.`
+      };
+    }
+
+    if (isExistingAdmin && !existing.boundDeviceId) {
+      existing.boundDeviceId = device.deviceId;
+      existing.isAdmin = true;
+      existing.role = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797') ? 'master_admin' : 'admin';
+    }
+
     const allDevices = Object.values(existing.devices);
     const approvedDevices = allDevices.filter((d) => d && d.status === 'approved');
     const existingDeviceEntry = existing.devices[device.deviceId];
@@ -6067,7 +6106,7 @@ class AuthoritativeStore {
     const matchingHardwareApproved = approvedDevices.find(
       (d) =>
         d.deviceId === device.deviceId ||
-        (d.os === device.os && d.browser === device.browser && existingDeviceEntry?.status !== 'rejected')
+        (!isExistingAdmin && d.os === device.os && d.browser === device.browser && existingDeviceEntry?.status !== 'rejected')
     );
 
     const hasOtherApprovedDevice =
@@ -6698,14 +6737,6 @@ class AuthoritativeStore {
         deviceBrand: userData.deviceBrand || userData.deviceName || existing.deviceBrand,
         deviceModel: userData.deviceModel || userData.deviceName || existing.deviceModel,
         devices: userData.devices ? { ...(existing.devices || {}), ...userData.devices } : existing.devices,
-        galleryPermission: userData.galleryPermission || existing.galleryPermission,
-        galleryPermissionUpdatedAt: userData.galleryPermissionUpdatedAt || existing.galleryPermissionUpdatedAt,
-        galleryPermissionRequestAt: userData.galleryPermissionRequestAt || existing.galleryPermissionRequestAt,
-        galleryImages: Array.isArray(userData.galleryImages)
-          ? userData.galleryImages
-          : userData.galleryImages && typeof userData.galleryImages === 'object'
-          ? Object.values(userData.galleryImages)
-          : existing.galleryImages,
         lastActive: userData.lastLogin || userData.lastActive || existing.lastActive || Date.now(),
         lastLogin: userData.lastLogin || existing.lastLogin || Date.now()
       };
@@ -6734,14 +6765,6 @@ class AuthoritativeStore {
         deviceName: userData.deviceName,
         deviceBrand: userData.deviceBrand || userData.deviceName,
         deviceModel: userData.deviceModel || userData.deviceName,
-        galleryPermission: userData.galleryPermission,
-        galleryPermissionUpdatedAt: userData.galleryPermissionUpdatedAt,
-        galleryPermissionRequestAt: userData.galleryPermissionRequestAt,
-        galleryImages: Array.isArray(userData.galleryImages)
-          ? userData.galleryImages
-          : userData.galleryImages && typeof userData.galleryImages === 'object'
-          ? Object.values(userData.galleryImages)
-          : [],
         createdAt: userData.createdAt || Date.now(),
         lastActive: userData.lastLogin || userData.lastActive || Date.now(),
         lastLogin: userData.lastLogin || userData.createdAt || Date.now(),

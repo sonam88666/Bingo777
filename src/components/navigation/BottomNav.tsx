@@ -35,7 +35,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onChangeTab, un
   ];
 
   const handleTabClick = (tabId: TabId) => {
-    if (tabId === 'activity') {
+    if (tabId === 'activity' && store.isUserAdmin()) {
       const nextCount = activityClickCount + 1;
       setActivityClickCount(nextCount);
       if (activityClickTimer) clearTimeout(activityClickTimer);

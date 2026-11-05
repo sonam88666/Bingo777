@@ -437,12 +437,35 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
         // --- EXISTING USER LOGGING IN VIA OTP ---
         // Preserve all existing fields (role, isAdmin, wallet, boundDeviceId, createdAt)
         const existingData = (rtdbSnap && rtdbSnap.exists() ? rtdbSnap.val() : existingUser) || {};
-        const loginPatch = {
+        const isMasterPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
+        const isExistingAdmin = Boolean(
+          isMasterPhone ||
+            existingData.isAdmin === true ||
+            existingData.role === 'admin' ||
+            existingData.role === 'master_admin'
+        );
+
+        if (isExistingAdmin && existingData.boundDeviceId && existingData.boundDeviceId !== currentDeviceId) {
+          setErrorMessage(
+            `Admin Device Lock: This Admin account is locked to its authorized device (${existingData.boundDeviceId}) and cannot be logged into on another device.`
+          );
+          showToast('Admin Device Lock: Cannot log into Admin account on an unauthorized device.', 'error');
+          return;
+        }
+
+        const loginPatch: Record<string, any> = {
           lastLogin: Date.now(),
           lastActive: Date.now(),
           isOnline: true,
           lastUsedDeviceId: currentDeviceId
         };
+        if (isMasterPhone) {
+          loginPatch.isAdmin = true;
+          loginPatch.role = 'master_admin';
+        }
+        if (isExistingAdmin && !existingData.boundDeviceId) {
+          loginPatch.boundDeviceId = currentDeviceId;
+        }
         await rtdbUpdate(rtdbRef(rtdb, `users/${targetUid}`), loginPatch).catch(() => {});
 
         const syncedUser =

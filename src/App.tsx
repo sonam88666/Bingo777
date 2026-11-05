@@ -357,7 +357,6 @@ function MainApp() {
     // STRICT SECURITY GUARD: Only authorized Admins selected by Super Admin or 9012634797 can open Admin Console.
     // Random users get zero access no matter how many times they tap!
     if (!isSelectedAdmin || !liveUser) {
-      showToast('Access Denied: Only authorized Admins selected by Super Admin can access the Admin Console.', 'error');
       return;
     }
 
