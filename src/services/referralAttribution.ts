@@ -229,12 +229,15 @@ export async function clearPendingReferralCode(): Promise<void> {
 }
 
 /**
+ * Official domain used for all referral & invite links.
+ */
+export const OFFICIAL_REFERRAL_BASE_URL = 'https://www.bingo777.in';
+
+/**
  * Builds the universal referral invite & download link for a user's referral code.
  */
 export function buildReferralInviteUrl(referralCode: string): string {
   const cleanCode = (referralCode || 'BINGO777').trim().toUpperCase();
-  if (typeof window !== 'undefined' && window.location && window.location.origin) {
-    return `${window.location.origin}/?ref=${encodeURIComponent(cleanCode)}`;
-  }
-  return `https://bingo777.in/?ref=${encodeURIComponent(cleanCode)}`;
+  return `${OFFICIAL_REFERRAL_BASE_URL}/?ref=${encodeURIComponent(cleanCode)}`;
 }
+

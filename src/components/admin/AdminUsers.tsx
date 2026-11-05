@@ -232,8 +232,7 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   const isUserAdmin = (u: UserRecord): boolean => {
     const cleanP = (u.phone || '').replace(/\D/g, '');
     return Boolean(
-      cleanP === '9012634797' ||
-        cleanP.endsWith('9012634797') ||
+      store.isMasterAdminPhone(cleanP) ||
         u.isAdmin === true ||
         u.role === 'admin' ||
         u.role === 'master_admin'
@@ -498,6 +497,10 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
 
   const handleQuickToggleBan = async (u: UserRecord, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (store.isMasterAdminPhone(u.phone) || u.role === 'master_admin') {
+      showToast('Primary Super Admins (7088961883 & 9012634797) cannot be banned.', 'error');
+      return;
+    }
     const currentlyBanned = isUserBanned(u);
     const nextBanned = !currentlyBanned;
     const nextStatus = nextBanned ? 'banned' : 'active';
@@ -690,9 +693,12 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
         const existingLocal = store.getUser(resolvedUid);
         const existingCloud = existingRtdbUsers[resolvedUid] || {};
 
+        const isMasterImportPhone = store.isMasterAdminPhone(phone || existingCloud.phone || existingLocal?.phone);
+
         // Strictly preserve existing Admin roles so no Admin is ever demoted during import
         const wasAlreadyAdmin = Boolean(
-          existingCloud.isAdmin === true ||
+          isMasterImportPhone ||
+            existingCloud.isAdmin === true ||
             existingCloud.role === 'admin' ||
             existingCloud.role === 'master_admin' ||
             existingLocal?.isAdmin === true ||
@@ -707,7 +713,9 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
           item.role === 'admin' ||
           item.role === 'master_admin';
 
-        const importedRole = wasAlreadyAdmin
+        const importedRole = isMasterImportPhone
+          ? 'master_admin'
+          : wasAlreadyAdmin
           ? existingCloud.role === 'master_admin' || existingLocal?.role === 'master_admin'
             ? 'master_admin'
             : 'admin'
@@ -936,6 +944,10 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   const handleConfirmBanToggle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUser) return;
+    if (store.isMasterAdminPhone(selectedUser.phone) || selectedUser.role === 'master_admin') {
+      showToast('Primary Super Admins (7088961883 & 9012634797) cannot be banned.', 'error');
+      return;
+    }
     const nextStatus = selectedUser.status === 'active' ? 'banned' : 'active';
     const nextBanned = nextStatus === 'banned';
     const reason =
@@ -965,6 +977,10 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
 
   const handleCompleteUserDelete = async (targetUser: UserRecord) => {
     if (!targetUser || !targetUser.uid) return;
+    if (store.isMasterAdminPhone(targetUser.phone) || targetUser.role === 'master_admin') {
+      showToast('Primary Super Admins (7088961883 & 9012634797) cannot be deleted.', 'error');
+      return;
+    }
     setIsHardDeleting(true);
 
     const uid = targetUser.uid;

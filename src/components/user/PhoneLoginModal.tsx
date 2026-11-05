@@ -117,13 +117,14 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
     return store.getAdminSettings().auth_config?.otpLoginEnabled ?? true;
   });
 
-  // Get active admin signup bonus amount
+  // Get active admin signup bonus amount (minimum ₹200 Welcome Bonus)
   const adminSettings = store.getAdminSettings();
-  const signupBonusAmount =
+  const rawSignupBonus =
     (adminSettings as any).signup_bonus ??
     (adminSettings as any).signupBonus ??
     adminSettings.signupBonusAmount ??
-    100;
+    200;
+  const signupBonusAmount = typeof rawSignupBonus === 'number' && rawSignupBonus >= 200 ? rawSignupBonus : 200;
 
   // Real-time onValue listener to /admin_settings/auth_config/otpLoginEnabled
   useEffect(() => {
@@ -437,7 +438,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
         // --- EXISTING USER LOGGING IN VIA OTP ---
         // Preserve all existing fields (role, isAdmin, wallet, boundDeviceId, createdAt)
         const existingData = (rtdbSnap && rtdbSnap.exists() ? rtdbSnap.val() : existingUser) || {};
-        const isMasterPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
+        const isMasterPhone = store.isMasterAdminPhone(cleanPhone);
         const isExistingAdmin = Boolean(
           isMasterPhone ||
             existingData.isAdmin === true ||
@@ -526,8 +527,16 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
 
         firebaseSync.attachRealtimeUserSync(newUser.uid, cleanPhone);
 
+        const welcomePayload = {
+          uid: newUser.uid,
+          amount: newUser.balance || 200,
+          username: newUser.name || newUser.username
+        };
+        localStorage.setItem('bingo777_welcome_bonus_popup', JSON.stringify(welcomePayload));
+        window.dispatchEvent(new CustomEvent('bingo777_welcome_bonus_awarded', { detail: welcomePayload }));
+
         showToast(
-          `🎉 Account created! Welcome ₹${newUser.balance} Signup Bonus credited to your wallet!`,
+          `🎉 Account created! Welcome ₹${newUser.balance || 200} Bonus credited to your wallet!`,
           'success'
         );
         onSuccess(newUser);

@@ -7,242 +7,249 @@ interface Bingo777LogoProps {
   variant?: 'badge' | 'full' | 'icon';
 }
 
+/**
+ * Stealth Luxury 3D Royal Crown & Tri-Jewel Crest Emblem (Name Hidden)
+ */
 export const Bingo777Logo: React.FC<Bingo777LogoProps> = ({
   size = 'md',
-  showText = false,
   className = '',
-  variant = 'badge'
 }) => {
-  // Dimension mapping
   const sizeMap = {
-    xs: { px: 28, text: 'text-xs', sub: 'text-[8px]' },
-    sm: { px: 36, text: 'text-sm', sub: 'text-[9px]' },
-    md: { px: 44, text: 'text-base', sub: 'text-[10px]' },
-    lg: { px: 56, text: 'text-xl', sub: 'text-xs' },
-    xl: { px: 84, text: 'text-2xl', sub: 'text-sm' }
+    xs: { px: 30 },
+    sm: { px: 38 },
+    md: { px: 46 },
+    lg: { px: 58 },
+    xl: { px: 86 }
   };
 
   const { px } = sizeMap[size];
 
   return (
-    <div className={`inline-flex items-center gap-2 select-none group ${className}`}>
-      {/* 3D Emblems / Badge Container */}
-      <div 
+    <div className={`inline-flex items-center select-none group ${className}`}>
+      <div
         className="relative shrink-0 transition-transform duration-300 group-hover:scale-105"
         style={{ width: px, height: px }}
       >
         <svg
           viewBox="0 0 200 200"
-          className="w-full h-full drop-shadow-[0_8px_16px_rgba(245,158,11,0.35)]"
+          className="w-full h-full drop-shadow-[0_8px_18px_rgba(245,158,11,0.42)]"
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
         >
           <defs>
-            {/* Outer Rim 3D Gold Gradient */}
-            <linearGradient id="b777_gold_rim" x1="0%" y1="0%" x2="100%" y2="100%">
+            {/* 24K Metallic Gold Outer Bevel */}
+            <linearGradient id="crest_gold_rim" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stopColor="#FFFBEB" />
-              <stop offset="25%" stopColor="#FBBF24" />
-              <stop offset="50%" stopColor="#D97706" />
-              <stop offset="75%" stopColor="#F59E0B" />
+              <stop offset="22%" stopColor="#FDE047" />
+              <stop offset="48%" stopColor="#F59E0B" />
+              <stop offset="76%" stopColor="#B45309" />
               <stop offset="100%" stopColor="#78350F" />
             </linearGradient>
 
-            {/* Inner Shield Bevel 3D Gradient */}
-            <linearGradient id="b777_gold_inner" x1="100%" y1="0%" x2="0%" y2="100%">
+            {/* Inner Gold Filigree */}
+            <linearGradient id="crest_gold_inner" x1="100%" y1="0%" x2="0%" y2="100%">
               <stop offset="0%" stopColor="#FEF08A" />
-              <stop offset="50%" stopColor="#B45309" />
-              <stop offset="100%" stopColor="#FDE047" />
+              <stop offset="50%" stopColor="#D97706" />
+              <stop offset="100%" stopColor="#FFFBEB" />
             </linearGradient>
 
-            {/* Deep Casino Ruby & Obsidian Shield Surface */}
-            <radialGradient id="b777_shield_bg" cx="50%" cy="35%" r="70%">
-              <stop offset="0%" stopColor="#991B1B" />
-              <stop offset="45%" stopColor="#450A0A" />
-              <stop offset="85%" stopColor="#0F172A" />
-              <stop offset="100%" stopColor="#020617" />
+            {/* Obsidian & Royal Indigo Velvet Core */}
+            <radialGradient id="crest_obsidian_bg" cx="50%" cy="38%" r="68%">
+              <stop offset="0%" stopColor="#1E1B4B" />
+              <stop offset="52%" stopColor="#0F172A" />
+              <stop offset="88%" stopColor="#020617" />
+              <stop offset="100%" stopColor="#000000" />
             </radialGradient>
 
-            {/* 3D Extrusion Gold for 777 */}
-            <linearGradient id="b777_num_front" x1="0%" y1="0%" x2="0%" y2="100%">
+            {/* Imperial Crown 3D Gold Face */}
+            <linearGradient id="crown_gold_face" x1="0%" y1="0%" x2="0%" y2="100%">
               <stop offset="0%" stopColor="#FFFFFF" />
               <stop offset="20%" stopColor="#FEF08A" />
-              <stop offset="55%" stopColor="#F59E0B" />
-              <stop offset="85%" stopColor="#B45309" />
+              <stop offset="55%" stopColor="#FBBF24" />
+              <stop offset="85%" stopColor="#D97706" />
               <stop offset="100%" stopColor="#78350F" />
             </linearGradient>
 
-            {/* 3D Side Shadows */}
-            <linearGradient id="b777_side_shadow" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#78350F" />
-              <stop offset="100%" stopColor="#451A03" />
+            {/* Ruby Center Gem */}
+            <radialGradient id="gem_ruby" cx="35%" cy="30%" r="70%">
+              <stop offset="0%" stopColor="#FFE4E6" />
+              <stop offset="30%" stopColor="#FB7185" />
+              <stop offset="70%" stopColor="#E11D48" />
+              <stop offset="100%" stopColor="#881337" />
+            </radialGradient>
+
+            {/* Emerald Left Gem */}
+            <radialGradient id="gem_emerald" cx="35%" cy="30%" r="70%">
+              <stop offset="0%" stopColor="#D1FAE5" />
+              <stop offset="30%" stopColor="#34D399" />
+              <stop offset="70%" stopColor="#059669" />
+              <stop offset="100%" stopColor="#064E3B" />
+            </radialGradient>
+
+            {/* Violet Right Gem */}
+            <radialGradient id="gem_violet" cx="35%" cy="30%" r="70%">
+              <stop offset="0%" stopColor="#F3E8FF" />
+              <stop offset="30%" stopColor="#C084FC" />
+              <stop offset="70%" stopColor="#7C3AED" />
+              <stop offset="100%" stopColor="#3B0764" />
+            </radialGradient>
+
+            {/* Solitaire Diamond Facets */}
+            <linearGradient id="diamond_top" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#FFFFFF" />
+              <stop offset="45%" stopColor="#FEF08A" />
+              <stop offset="100%" stopColor="#F59E0B" />
             </linearGradient>
 
-            {/* Specular Glow Filter */}
-            <filter id="b777_gold_glow" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="3" result="blur" />
-              <feComposite in="SourceGraphic" in2="blur" operator="over" />
-            </filter>
+            <linearGradient id="diamond_shade" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#FBBF24" />
+              <stop offset="100%" stopColor="#92400E" />
+            </linearGradient>
 
-            {/* Glossy Top Reflection */}
-            <linearGradient id="b777_gloss" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.45" />
-              <stop offset="50%" stopColor="#FFFFFF" stopOpacity="0.08" />
+            {/* Top Glass Specular Sheen */}
+            <linearGradient id="crest_gloss" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.38" />
+              <stop offset="55%" stopColor="#FFFFFF" stopOpacity="0.06" />
               <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
             </linearGradient>
           </defs>
 
-          {/* 1. Deep 3D Shadow Cast */}
-          <ellipse cx="100" cy="180" rx="72" ry="14" fill="#000000" opacity="0.6" filter="blur(6px)" />
+          {/* 1. Ambient Drop Shadow */}
+          <ellipse cx="100" cy="184" rx="68" ry="12" fill="#000000" opacity="0.65" />
 
-          {/* 2. Outer Shield 3D Metallic Gold Chamfered Base */}
+          {/* 2. Outer Royal Octagonal Shield Frame */}
           <path
-            d="M100 8 L180 34 C180 115 148 162 100 186 C52 162 20 115 20 34 L100 8 Z"
-            fill="url(#b777_gold_rim)"
-            stroke="#92400E"
-            strokeWidth="2"
+            d="M100 6 L176 34 C182 98 156 154 100 188 C44 154 18 98 24 34 L100 6 Z"
+            fill="url(#crest_gold_rim)"
+            stroke="#FEF08A"
+            strokeWidth="1.5"
           />
 
-          {/* 3. Outer Shield 3D Inset Lip */}
+          {/* 3. Dark Recessed Armor Channel */}
           <path
-            d="M100 14 L174 38 C174 112 144 156 100 179 C56 156 26 112 26 38 L100 14 Z"
-            fill="#1E1B4B"
+            d="M100 13 L169 39 C174 96 150 148 100 179 C50 148 26 96 31 39 L100 13 Z"
+            fill="#020617"
           />
 
-          {/* 4. Golden Inner Filigree Ring */}
+          {/* 4. Inner 24K Gold Bevel Ring */}
           <path
-            d="M100 18 L168 42 C168 110 140 151 100 173 C60 151 32 110 32 42 L100 18 Z"
-            fill="url(#b777_gold_inner)"
+            d="M100 18 L163 42 C167 94 145 143 100 172 C55 143 33 94 37 42 L100 18 Z"
+            fill="url(#crest_gold_inner)"
           />
 
-          {/* 5. Deep Ruby Enamel Shield Face */}
+          {/* 5. Deep Obsidian Velvet Shield Face */}
           <path
-            d="M100 24 L162 46 C162 108 136 145 100 166 C64 145 38 108 38 46 L100 24 Z"
-            fill="url(#b777_shield_bg)"
+            d="M100 23 L158 45 C161 92 140 138 100 165 C60 138 39 92 42 45 L100 23 Z"
+            fill="url(#crest_obsidian_bg)"
           />
 
-          {/* 6. Glossy Curved Glass Reflection on Top Shield Half */}
-          <path
-            d="M100 25 L160 47 C155 76 130 92 100 92 C70 92 45 76 40 47 L100 25 Z"
-            fill="url(#b777_gloss)"
-          />
-
-          {/* 7. Arc Ribbon Badge: 'B I N G O' */}
-          <g transform="translate(0, -2)">
-            {/* Ribbon Background Plate */}
-            <path
-              d="M48 64 Q100 48 152 64 L148 80 Q100 66 52 80 Z"
-              fill="url(#b777_gold_rim)"
-              stroke="#78350F"
-              strokeWidth="1.5"
-            />
-            {/* Top Ribbon Highlight */}
-            <path
-              d="M50 65 Q100 49 150 65"
-              stroke="#FFFBEB"
-              strokeWidth="1"
-              strokeLinecap="round"
-            />
-            {/* 'BINGO' Embossed 3D Text along curve */}
-            <text
-              x="100"
-              y="74"
-              textAnchor="middle"
-              fill="#0F172A"
-              fontSize="14"
-              fontWeight="900"
-              fontFamily="sans-serif"
-              letterSpacing="3"
-              style={{ textShadow: '0 1px 0 #FEF08A' }}
-            >
-              B I N G O
-            </text>
+          {/* 6. Subtle Royal Sunburst Rays Inside Shield */}
+          <g opacity="0.16" stroke="#FBBF24" strokeWidth="1.2">
+            <line x1="100" y1="95" x2="100" y2="28" />
+            <line x1="100" y1="95" x2="148" y2="48" />
+            <line x1="100" y1="95" x2="52" y2="48" />
+            <line x1="100" y1="95" x2="154" y2="95" />
+            <line x1="100" y1="95" x2="46" y2="95" />
+            <line x1="100" y1="95" x2="136" y2="142" />
+            <line x1="100" y1="95" x2="64" y2="142" />
           </g>
 
-          {/* 8. 3D Bold '7 7 7' Casino Triple Crown Numbers */}
-          <g filter="url(#b777_gold_glow)">
-            {/* Left '7' 3D Shadow Depth */}
-            <path
-              d="M56 94 H84 L69 146 H54 L69 98 H56 Z"
-              fill="url(#b777_side_shadow)"
-            />
-            {/* Left '7' 3D Front Face */}
-            <path
-              d="M54 92 H82 L66 144 H52 L67 96 H54 Z"
-              fill="url(#b777_num_front)"
-              stroke="#FEF08A"
-              strokeWidth="0.8"
-            />
+          {/* 7. Glossy Curved Top Highlight */}
+          <path
+            d="M100 24 L156 46 C152 75 128 90 100 90 C72 90 48 75 44 46 L100 24 Z"
+            fill="url(#crest_gloss)"
+          />
 
-            {/* Center Dominant '7' 3D Shadow Depth */}
+          {/* 8. 3D Sculpted Golden Wings (Left & Right) */}
+          <path
+            d="M46 84 C44 64 56 50 70 54 C60 64 58 76 68 88 C56 88 50 96 56 106 C48 102 45 94 46 84 Z"
+            fill="url(#crown_gold_face)"
+            opacity="0.92"
+          />
+          <path
+            d="M154 84 C156 64 144 50 130 54 C140 64 142 76 132 88 C144 88 150 96 144 106 C152 102 155 94 154 84 Z"
+            fill="url(#crown_gold_face)"
+            opacity="0.92"
+          />
+
+          {/* 9. Majestic 5-Point Imperial 3D Golden Crown */}
+          <g transform="translate(0, 2)">
+            {/* Crown Base Shadow */}
             <path
-              d="M87 88 H123 L104 150 H87 L104 93 H87 Z"
-              fill="url(#b777_side_shadow)"
+              d="M62 88 L54 54 L80 70 L100 42 L120 70 L146 54 L138 88 Z"
+              fill="#451A03"
+              transform="translate(0, 3)"
             />
-            {/* Center Dominant '7' 3D Front Face (Taller & Majestic) */}
+            {/* Crown Main Body */}
             <path
-              d="M85 85 H121 L101 148 H84 L101 90 H85 Z"
-              fill="url(#b777_num_front)"
+              d="M62 88 L54 54 L80 70 L100 42 L120 70 L146 54 L138 88 Z"
+              fill="url(#crown_gold_face)"
+              stroke="#FFFBEB"
+              strokeWidth="1.2"
+              strokeLinejoin="round"
+            />
+            {/* Crown Jewelled Band */}
+            <rect
+              x="62"
+              y="88"
+              width="76"
+              height="11"
+              rx="4"
+              fill="url(#crest_gold_rim)"
+              stroke="#FEF08A"
+              strokeWidth="1"
+            />
+            {/* Crown Tip Pearls */}
+            <circle cx="54" cy="51" r="3.5" fill="#FFFBEB" />
+            <circle cx="80" cy="66" r="3" fill="#FDE047" />
+            <circle cx="100" cy="38" r="4.5" fill="#FFFFFF" />
+            <circle cx="120" cy="66" r="3" fill="#FDE047" />
+            <circle cx="146" cy="51" r="3.5" fill="#FFFBEB" />
+
+            {/* 3 Signature Tri-Color Jewels Set Into the Crown (Green, Red, Violet) */}
+            <circle cx="76" cy="79" r="5" fill="url(#gem_emerald)" stroke="#FFFBEB" strokeWidth="0.8" />
+            <polygon
+              points="100,66 107,76 100,85 93,76"
+              fill="url(#gem_ruby)"
+              stroke="#FFFFFF"
+              strokeWidth="1"
+            />
+            <circle cx="124" cy="79" r="5" fill="url(#gem_violet)" stroke="#FFFBEB" strokeWidth="0.8" />
+          </g>
+
+          {/* 10. Lower 3D Faceted Royal Diamond & Tri-Star Crest (No Text) */}
+          <g transform="translate(0, 4)">
+            {/* Outer Diamond Shadow */}
+            <polygon points="100,104 126,124 100,152 74,124" fill="#000000" opacity="0.45" />
+            {/* Faceted Diamond Base */}
+            <polygon
+              points="100,101 124,121 100,148 76,121"
+              fill="url(#diamond_top)"
               stroke="#FFFBEB"
               strokeWidth="1.2"
             />
-
-            {/* Right '7' 3D Shadow Depth */}
-            <path
-              d="M124 94 H152 L137 146 H122 L137 98 H124 Z"
-              fill="url(#b777_side_shadow)"
-            />
-            {/* Right '7' 3D Front Face */}
-            <path
-              d="M122 92 H150 L134 144 H120 L135 96 H122 Z"
-              fill="url(#b777_num_front)"
-              stroke="#FEF08A"
-              strokeWidth="0.8"
-            />
+            {/* Diamond Inner Facet Lines */}
+            <polygon points="100,101 124,121 100,125" fill="#FFFFFF" opacity="0.45" />
+            <polygon points="100,125 124,121 100,148" fill="url(#diamond_shade)" opacity="0.85" />
+            <polygon points="100,125 76,121 100,148" fill="#B45309" opacity="0.55" />
+            <polygon points="100,109 113,121 100,137 87,121" fill="url(#gem_ruby)" stroke="#FEF08A" strokeWidth="0.9" />
           </g>
 
-          {/* 9. Sparkling 3D Diamond Sparks / Lens Flares */}
-          {/* Top Left Sparkle */}
-          <g transform="translate(42, 38)">
-            <path d="M0 -7 Q0 0 7 0 Q0 0 0 7 Q0 0 -7 0 Q0 0 0 -7 Z" fill="#FFFBEB" />
-            <circle cx="0" cy="0" r="2" fill="#FBBF24" />
+          {/* 11. Crisp Diamond Specular Sparkles */}
+          <g transform="translate(100, 38)">
+            <path d="M0 -8 Q0 0 8 0 Q0 0 0 8 Q0 0 -8 0 Q0 0 0 -8 Z" fill="#FFFFFF" />
           </g>
-          {/* Center Crown Sparkle */}
-          <g transform="translate(100, 15)">
-            <path d="M0 -9 Q0 0 9 0 Q0 0 0 9 Q0 0 -9 0 Q0 0 0 -9 Z" fill="#FFFFFF" />
-            <circle cx="0" cy="0" r="2.5" fill="#FEF08A" />
+          <g transform="translate(46, 46)">
+            <path d="M0 -5 Q0 0 5 0 Q0 0 0 5 Q0 0 -5 0 Q0 0 0 -5 Z" fill="#FEF08A" />
           </g>
-          {/* Right Sparkle */}
-          <g transform="translate(158, 40)">
-            <path d="M0 -7 Q0 0 7 0 Q0 0 0 7 Q0 0 -7 0 Q0 0 0 -7 Z" fill="#FFFBEB" />
-            <circle cx="0" cy="0" r="2" fill="#FBBF24" />
-          </g>
-          {/* Center 777 Specular Spark */}
-          <g transform="translate(102, 88)">
-            <path d="M0 -5 Q0 0 5 0 Q0 0 0 5 Q0 0 -5 0 Q0 0 0 -5 Z" fill="#FFFFFF" />
+          <g transform="translate(154, 46)">
+            <path d="M0 -5 Q0 0 5 0 Q0 0 0 5 Q0 0 -5 0 Q0 0 0 -5 Z" fill="#FEF08A" />
           </g>
         </svg>
 
-        {/* Ambient Pulsing Halo Light */}
-        <div className="absolute inset-0 rounded-full bg-amber-500/15 filter blur-md -z-10 animate-pulse pointer-events-none" />
+        {/* Ambient Golden Glow */}
+        <div className="absolute inset-0 rounded-full bg-amber-500/15 filter blur-md -z-10 pointer-events-none" />
       </div>
-
-      {/* Optional Wordmark text for Full variant */}
-      {(showText || variant === 'full') && (
-        <div className="flex flex-col justify-center leading-tight">
-          <div className="flex items-center gap-1.5">
-            <span className={`font-brand font-black tracking-wider bg-gradient-to-r from-amber-100 via-amber-300 to-yellow-500 bg-clip-text text-transparent ${sizeMap[size].text}`}>
-              Bingo777
-            </span>
-            <span className="px-1.5 py-0.2 rounded-full bg-gradient-to-r from-amber-500/30 to-yellow-600/30 border border-amber-400/50 text-[8px] font-black text-amber-300 tracking-wider">
-              PRO 3D
-            </span>
-          </div>
-          <span className={`text-amber-400/80 font-bold tracking-wider flex items-center gap-1 ${sizeMap[size].sub}`}>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
-            <span>VIP Gaming Suite</span>
-          </span>
-        </div>
-      )}
     </div>
   );
 };

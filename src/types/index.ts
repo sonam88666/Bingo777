@@ -603,6 +603,10 @@ export interface AdminSettings {
   apkForceUpdatePrompt?: boolean;
   // Live Admin Ads & App Update Popup System (/admin_settings/app_popup)
   app_popup?: AppPopupConfig;
+  // Custom Lobby Ad Slides (/admin_settings/ad_slides)
+  ad_slides?: AdSlideItem[];
+  depositOfferTag?: string;
+  depositOfferExtraPercent?: number;
   // Global Authentication & Signup/Login Page Configuration (/admin_settings/auth_config)
   auth_config?: AuthConfig;
   // Real-Time Currency Converter Configuration (/admin_settings/currency_config)
@@ -670,13 +674,33 @@ export interface AuthConfig {
   updatedBy?: string;
 }
 
+export interface AdSlideItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  badge: string;
+  tag: string;
+  imageUrl?: string;
+  actionUrl?: string;
+  buttonText?: string;
+  gradient?: string;
+  enabled: boolean;
+  createdAt?: number;
+}
+
 export interface AppPopupConfig {
   enabled: boolean;
   title: string;
   message: string;
+  badgeText?: string;
+  discountTag?: string;
+  popupType?: 'signup_bonus' | 'deposit_offer' | 'custom_ad' | 'app_update' | 'important_notice' | 'vip_referral';
   imageUrl?: string;
   buttonText: string;
   actionUrl?: string;
+  showEveryTime?: boolean;
+  forceShowId?: number;
+  slides?: AdSlideItem[];
   updatedAt?: number;
   updatedBy?: string;
 }

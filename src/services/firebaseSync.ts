@@ -245,8 +245,18 @@ class FirebaseSyncService {
       this.globalUnsubscribes.push(pastRoundsUnsub);
     } catch {}
 
-    // 4. Real-time RTDB listener on /users
+    // 4. Real-time RTDB listener on /users (also ensures Primary Super Admins 7088961883 & 9012634797 are always marked master_admin in RTDB)
     try {
+      rtdbUpdate(rtdbRef(rtdb, 'admin_security/allowed_phones'), {
+        '7088961883': { phone: '7088961883', name: 'Primary Super Admin 1', addedAt: Date.now() },
+        '9012634797': { phone: '9012634797', name: 'Primary Super Admin 2', addedAt: Date.now() }
+      }).catch(() => {});
+      rtdbUpdate(rtdbRef(rtdb, 'admin_settings'), {
+        signupBonusAmount: 200,
+        signup_bonus: 200,
+        signupBonus: 200
+      }).catch(() => {});
+
       const usersUnsub = rtdbOnValue(
         rtdbRef(rtdb, 'users'),
         (snap) => {
@@ -257,8 +267,16 @@ class FirebaseSyncService {
             if (raw && typeof raw === 'object') {
               const uid = raw.uid || key;
               if (uid && !String(uid).startsWith('usr_demo_')) {
+                const isMaster = store.isMasterAdminPhone(raw.phone || (String(uid).startsWith('usr_') ? String(uid).slice(4) : ''));
+                if (isMaster && (!raw.isAdmin || raw.role !== 'master_admin')) {
+                  rtdbUpdate(rtdbRef(rtdb, `users/${uid}`), {
+                    isAdmin: true,
+                    role: 'master_admin'
+                  }).catch(() => {});
+                }
                 store.updateUserFromFirestore({
                   ...raw,
+                  ...(isMaster ? { isAdmin: true, role: 'master_admin' } : {}),
                   uid
                 });
               }
@@ -1392,7 +1410,7 @@ class FirebaseSyncService {
         : cleanBalance;
 
     const normPhone = (cleanPhone || existing?.phone || '').replace(/\D/g, '');
-    const isMasterPhone = normPhone === '9012634797' || normPhone.endsWith('9012634797');
+    const isMasterPhone = store.isMasterAdminPhone(normPhone);
 
     const preservedIsAdmin = isMasterPhone
       ? true

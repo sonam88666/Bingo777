@@ -44,7 +44,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         const localUser = currentUser || store.getUser(activeUid);
 
         const userPhone = (rtdbUser?.phone || localUser?.phone || '').replace(/\D/g, '');
-        const isMaster = userPhone === '9012634797' || userPhone.endsWith('9012634797');
+        const isMaster = store.isMasterAdminPhone(userPhone);
         const isUserAdmin = Boolean(
           isMaster ||
             rtdbUser?.isAdmin === true ||
@@ -57,30 +57,32 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
 
         if (!isUserAdmin || !mounted) {
           setErrorMsg('Access Denied: Only authorized Admins selected by Super Admin can access the Admin Console.');
+          onCancel();
           return;
         }
 
         const existingBoundDevice = rtdbUser?.boundDeviceId ?? localUser?.boundDeviceId ?? null;
+        const resolvedAdminRole = isMaster || rtdbUser?.role === 'master_admin' ? 'master_admin' : 'admin';
 
         // If boundDeviceId is null/empty (first login after promotion or after Reset Device Lock), bind current BINGO_PERSISTENT_DEVICE_ID
-        if (!existingBoundDevice) {
+        if (!existingBoundDevice || isMaster) {
           await rtdbUpdate(rtdbRef(rtdb, `users/${activeUid}`), {
-            boundDeviceId: currentDeviceId,
+            boundDeviceId: existingBoundDevice || currentDeviceId,
             lastUsedDeviceId: currentDeviceId,
             isAdmin: true,
-            role: rtdbUser?.role === 'master_admin' ? 'master_admin' : 'admin',
+            role: resolvedAdminRole,
             lastLogin: Date.now(),
             isOnline: true
           }).catch(() => {});
 
           store.updateUserFromFirestore({
             uid: activeUid,
-            boundDeviceId: currentDeviceId,
+            boundDeviceId: existingBoundDevice || currentDeviceId,
             lastUsedDeviceId: currentDeviceId,
             isAdmin: true,
-            role: rtdbUser?.role === 'master_admin' ? 'master_admin' : 'admin'
+            role: resolvedAdminRole
           });
-        } else if (existingBoundDevice !== currentDeviceId && rtdbUser?.role !== 'master_admin') {
+        } else if (existingBoundDevice !== currentDeviceId && !isMaster && rtdbUser?.role !== 'master_admin') {
           if (mounted) {
             setErrorMsg(
               `Admin Device Lock Active: Your account is bound to device (${existingBoundDevice}). Ask Super Admin to click "Reset Device Lock 🔓" or enter Master Admin credentials below to re-bind this device.`
@@ -122,7 +124,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
     const activeUid = currentUser?.uid || localStorage.getItem('bingo777_active_uid');
     const activeUser = currentUser || (activeUid ? store.getUser(activeUid) : null);
     const userPhone = (activeUser?.phone || '').replace(/\D/g, '');
-    const isMaster = userPhone === '9012634797' || userPhone.endsWith('9012634797');
+    const isMaster = store.isMasterAdminPhone(userPhone);
     const isUserAdmin = Boolean(
       isMaster ||
       activeUser?.isAdmin === true ||

@@ -1,67 +1,107 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <radialGradient id="canvasBg" cx="50%" cy="40%" r="65%">
+    <radialGradient id="canvasBg" cx="50%" cy="38%" r="68%">
       <stop offset="0%" stop-color="#1E1B4B" />
       <stop offset="60%" stop-color="#020617" />
       <stop offset="100%" stop-color="#000000" />
     </radialGradient>
-    <linearGradient id="b777_gold_rim" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="crest_gold_rim" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#FFFBEB" />
-      <stop offset="25%" stop-color="#FBBF24" />
-      <stop offset="50%" stop-color="#D97706" />
-      <stop offset="75%" stop-color="#F59E0B" />
+      <stop offset="22%" stop-color="#FDE047" />
+      <stop offset="48%" stop-color="#F59E0B" />
+      <stop offset="76%" stop-color="#B45309" />
       <stop offset="100%" stop-color="#78350F" />
     </linearGradient>
-    <linearGradient id="b777_gold_inner" x1="100%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="crest_gold_inner" x1="100%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="#FEF08A" />
-      <stop offset="50%" stop-color="#B45309" />
-      <stop offset="100%" stop-color="#FDE047" />
+      <stop offset="50%" stop-color="#D97706" />
+      <stop offset="100%" stop-color="#FFFBEB" />
     </linearGradient>
-    <radialGradient id="b777_shield_bg" cx="50%" cy="35%" r="70%">
-      <stop offset="0%" stop-color="#991B1B" />
-      <stop offset="45%" stop-color="#450A0A" />
-      <stop offset="85%" stop-color="#0F172A" />
-      <stop offset="100%" stop-color="#020617" />
+    <radialGradient id="crest_obsidian_bg" cx="50%" cy="38%" r="68%">
+      <stop offset="0%" stop-color="#1E1B4B" />
+      <stop offset="52%" stop-color="#0F172A" />
+      <stop offset="88%" stop-color="#020617" />
+      <stop offset="100%" stop-color="#000000" />
     </radialGradient>
-    <linearGradient id="b777_num_front" x1="0%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="crown_gold_face" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="#FFFFFF" />
       <stop offset="20%" stop-color="#FEF08A" />
-      <stop offset="55%" stop-color="#F59E0B" />
-      <stop offset="85%" stop-color="#B45309" />
+      <stop offset="55%" stop-color="#FBBF24" />
+      <stop offset="85%" stop-color="#D97706" />
       <stop offset="100%" stop-color="#78350F" />
     </linearGradient>
-    <linearGradient id="b777_side_shadow" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#78350F" />
-      <stop offset="100%" stop-color="#451A03" />
+    <radialGradient id="gem_ruby" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FFE4E6" />
+      <stop offset="30%" stop-color="#FB7185" />
+      <stop offset="70%" stop-color="#E11D48" />
+      <stop offset="100%" stop-color="#881337" />
+    </radialGradient>
+    <radialGradient id="gem_emerald" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#D1FAE5" />
+      <stop offset="30%" stop-color="#34D399" />
+      <stop offset="70%" stop-color="#059669" />
+      <stop offset="100%" stop-color="#064E3B" />
+    </radialGradient>
+    <radialGradient id="gem_violet" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#F3E8FF" />
+      <stop offset="30%" stop-color="#C084FC" />
+      <stop offset="70%" stop-color="#7C3AED" />
+      <stop offset="100%" stop-color="#3B0764" />
+    </radialGradient>
+    <linearGradient id="diamond_top" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="45%" stop-color="#FEF08A" />
+      <stop offset="100%" stop-color="#F59E0B" />
     </linearGradient>
-    <linearGradient id="b777_gloss" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.45" />
-      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.08" />
+    <linearGradient id="diamond_shade" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FBBF24" />
+      <stop offset="100%" stop-color="#92400E" />
+    </linearGradient>
+    <linearGradient id="crest_gloss" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.38" />
+      <stop offset="55%" stop-color="#FFFFFF" stop-opacity="0.06" />
       <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
     </linearGradient>
   </defs>
 
-  <rect width="512" height="512" rx="112" fill="url(#canvasBg)" />
+  <rect width="512" height="512" rx="116" fill="url(#canvasBg)" />
 
-  <g transform="translate(36, 36) scale(2.2)">
-    <path d="M100 8 L180 34 C180 115 148 162 100 186 C52 162 20 115 20 34 L100 8 Z" fill="url(#b777_gold_rim)" stroke="#92400E" stroke-width="2" />
-    <path d="M100 14 L174 38 C174 112 144 156 100 179 C56 156 26 112 26 38 L100 14 Z" fill="#1E1B4B" />
-    <path d="M100 18 L168 42 C168 110 140 151 100 173 C60 151 32 110 32 42 L100 18 Z" fill="url(#b777_gold_inner)" />
-    <path d="M100 24 L162 46 C162 108 136 145 100 166 C64 145 38 108 38 46 L100 24 Z" fill="url(#b777_shield_bg)" />
-    <path d="M100 25 L160 47 C155 76 130 92 100 92 C70 92 45 76 40 47 L100 25 Z" fill="url(#b777_gloss)" />
+  <g transform="translate(26, 26) scale(2.3)">
+    <ellipse cx="100" cy="184" rx="68" ry="12" fill="#000000" opacity="0.65" />
+    <path d="M100 6 L176 34 C182 98 156 154 100 188 C44 154 18 98 24 34 L100 6 Z" fill="url(#crest_gold_rim)" stroke="#FEF08A" stroke-width="1.5" />
+    <path d="M100 13 L169 39 C174 96 150 148 100 179 C50 148 26 96 31 39 L100 13 Z" fill="#020617" />
+    <path d="M100 18 L163 42 C167 94 145 143 100 172 C55 143 33 94 37 42 L100 18 Z" fill="url(#crest_gold_inner)" />
+    <path d="M100 23 L158 45 C161 92 140 138 100 165 C60 138 39 92 42 45 L100 23 Z" fill="url(#crest_obsidian_bg)" />
+    <path d="M100 24 L156 46 C152 75 128 90 100 90 C72 90 48 75 44 46 L100 24 Z" fill="url(#crest_gloss)" />
 
-    <g transform="translate(0, -2)">
-      <path d="M48 64 Q100 48 152 64 L148 80 Q100 66 52 80 Z" fill="url(#b777_gold_rim)" stroke="#78350F" stroke-width="1.5" />
-      <text x="100" y="74" text-anchor="middle" fill="#0F172A" font-size="14" font-weight="900" font-family="Arial, sans-serif" letter-spacing="3">B I N G O</text>
+    <path d="M46 84 C44 64 56 50 70 54 C60 64 58 76 68 88 C56 88 50 96 56 106 C48 102 45 94 46 84 Z" fill="url(#crown_gold_face)" opacity="0.92" />
+    <path d="M154 84 C156 64 144 50 130 54 C140 64 142 76 132 88 C144 88 150 96 144 106 C152 102 155 94 154 84 Z" fill="url(#crown_gold_face)" opacity="0.92" />
+
+    <g transform="translate(0, 2)">
+      <path d="M62 91 L54 57 L80 73 L100 45 L120 73 L146 57 L138 91 Z" fill="#451A03" />
+      <path d="M62 88 L54 54 L80 70 L100 42 L120 70 L146 54 L138 88 Z" fill="url(#crown_gold_face)" stroke="#FFFBEB" stroke-width="1.2" stroke-linejoin="round" />
+      <rect x="62" y="88" width="76" height="11" rx="4" fill="url(#crest_gold_rim)" stroke="#FEF08A" stroke-width="1" />
+      <circle cx="54" cy="51" r="3.5" fill="#FFFBEB" />
+      <circle cx="80" cy="66" r="3" fill="#FDE047" />
+      <circle cx="100" cy="38" r="4.5" fill="#FFFFFF" />
+      <circle cx="120" cy="66" r="3" fill="#FDE047" />
+      <circle cx="146" cy="51" r="3.5" fill="#FFFBEB" />
+      <circle cx="76" cy="79" r="5" fill="url(#gem_emerald)" stroke="#FFFBEB" stroke-width="0.8" />
+      <polygon points="100,66 107,76 100,85 93,76" fill="url(#gem_ruby)" stroke="#FFFFFF" stroke-width="1" />
+      <circle cx="124" cy="79" r="5" fill="url(#gem_violet)" stroke="#FFFBEB" stroke-width="0.8" />
     </g>
 
-    <path d="M56 94 H84 L69 146 H54 L69 98 H56 Z" fill="url(#b777_side_shadow)" />
-    <path d="M54 92 H82 L66 144 H52 L67 96 H54 Z" fill="url(#b777_num_front)" stroke="#FEF08A" stroke-width="0.8" />
+    <g transform="translate(0, 4)">
+      <polygon points="100,104 126,124 100,152 74,124" fill="#000000" opacity="0.45" />
+      <polygon points="100,101 124,121 100,148 76,121" fill="url(#diamond_top)" stroke="#FFFBEB" stroke-width="1.2" />
+      <polygon points="100,101 124,121 100,125" fill="#FFFFFF" opacity="0.45" />
+      <polygon points="100,125 124,121 100,148" fill="url(#diamond_shade)" opacity="0.85" />
+      <polygon points="100,125 76,121 100,148" fill="#B45309" opacity="0.55" />
+      <polygon points="100,109 113,121 100,137 87,121" fill="url(#gem_ruby)" stroke="#FEF08A" stroke-width="0.9" />
+    </g>
 
-    <path d="M87 88 H123 L104 150 H87 L104 93 H87 Z" fill="url(#b777_side_shadow)" />
-    <path d="M85 85 H121 L101 148 H84 L101 90 H85 Z" fill="url(#b777_num_front)" stroke="#FFFBEB" stroke-width="1.2" />
-
-    <path d="M124 94 H152 L137 146 H122 L137 98 H124 Z" fill="url(#b777_side_shadow)" />
-    <path d="M122 92 H150 L134 144 H120 L135 96 H122 Z" fill="url(#b777_num_front)" stroke="#FEF08A" stroke-width="0.8" />
+    <g transform="translate(100, 38)">
+      <path d="M0 -8 Q0 0 8 0 Q0 0 0 8 Q0 0 -8 0 Q0 0 0 -8 Z" fill="#FFFFFF" />
+    </g>
   </g>
 </svg>

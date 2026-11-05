@@ -29,9 +29,11 @@ import {
   UserPlus,
   Volume2,
   VolumeX,
-  Music
+  Music,
+  Zap,
+  Upload
 } from 'lucide-react';
-import { AdminSettings, UpiChannel, AppPopupConfig, UserRecord, AuthConfig, CurrencyConverterConfig, AudioSystemConfig } from '../../types';
+import { AdminSettings, UpiChannel, AppPopupConfig, AdSlideItem, UserRecord, AuthConfig, CurrencyConverterConfig, AudioSystemConfig } from '../../types';
 import { SUPPORTED_CURRENCIES, FALLBACK_RATES_FROM_INR } from '../user/WalletView';
 import { store } from '../../services/store';
 import { firebaseSync } from '../../services/firebaseSync';
@@ -107,16 +109,31 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
   const [newUpiLabel, setNewUpiLabel] = useState('');
   const [newUpiSetAsActive, setNewUpiSetAsActive] = useState(false);
 
-  // 📢 Live Admin Ads & App Update Popup System State (/admin_settings/app_popup)
+  // 📢 Live Admin Ads, Offers, Discounts & App Update Popup System State (/admin_settings/app_popup & /admin_settings/ad_slides)
   const [appPopup, setAppPopup] = useState<AppPopupConfig>({
     enabled: false,
-    title: 'Special 100% Deposit Bonus!',
-    message: 'Deposit now and get an instant 100% bonus added to your wallet! Limited time offer.',
-    imageUrl: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?auto=format&fit=crop&w=600&q=80',
-    buttonText: 'Claim Bonus Now',
-    actionUrl: 'deposit'
+    title: 'Special ₹200 Welcome Bonus + 100% Deposit Offer!',
+    message: 'New Sign-Up gets ₹200 instant bonus! Recharge now and get 100% Extra Deposit Bonus credited to your wallet.',
+    badgeText: 'VIP SPECIAL OFFER',
+    discountTag: '100% EXTRA + ₹200 BONUS',
+    popupType: 'deposit_offer',
+    imageUrl: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?auto=format&fit=crop&w=800&q=80',
+    buttonText: 'Claim Offer Now',
+    actionUrl: 'deposit',
+    showEveryTime: false
   });
   const [isSavingPopup, setIsSavingPopup] = useState(false);
+
+  // 🖼️ Custom Lobby Ad Slides State (/admin_settings/ad_slides)
+  const [adSlides, setAdSlides] = useState<AdSlideItem[]>(() => store.getAdminSettings().ad_slides || []);
+  const [newSlideTitle, setNewSlideTitle] = useState('');
+  const [newSlideSubtitle, setNewSlideSubtitle] = useState('');
+  const [newSlideBadge, setNewSlideBadge] = useState('VIP OFFER');
+  const [newSlideTag, setNewSlideTag] = useState('100% DISCOUNT');
+  const [newSlideImageUrl, setNewSlideImageUrl] = useState('');
+  const [newSlideButtonText, setNewSlideButtonText] = useState('Claim Offer');
+  const [newSlideActionUrl, setNewSlideActionUrl] = useState('deposit');
+  const [includeSlidesInPopup, setIncludeSlidesInPopup] = useState(false);
 
   // 🔐 High-Security Admin Access & Device Lock State (/admin_security)
   const [allowedPhones, setAllowedPhones] = useState<Record<string, { phone: string; name?: string; addedAt?: number }>>({});
@@ -174,6 +191,7 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
     });
 
     let unsubPopup: (() => void) | null = null;
+    let unsubAdSlides: (() => void) | null = null;
     let unsubPhones: (() => void) | null = null;
     let unsubDevices: (() => void) | null = null;
     let unsubOtp: (() => void) | null = null;
@@ -185,7 +203,19 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
       unsubPopup = rtdbOnValue(rtdbRef(rtdb, 'admin_settings/app_popup'), (snap) => {
         if (snap.exists()) {
           const val = snap.val() as AppPopupConfig;
-          if (val) setAppPopup(val);
+          if (val) {
+            setAppPopup((prev) => ({ ...prev, ...val }));
+            setIncludeSlidesInPopup(Array.isArray(val.slides) && val.slides.length > 0);
+          }
+        }
+      });
+
+      unsubAdSlides = rtdbOnValue(rtdbRef(rtdb, 'admin_settings/ad_slides'), (snap) => {
+        if (snap.exists()) {
+          const val = snap.val();
+          const list = Array.isArray(val) ? val : val && typeof val === 'object' ? Object.values(val) : [];
+          setAdSlides(list as AdSlideItem[]);
+          store.updateAdminSettings({ ad_slides: list as AdSlideItem[] }, adminId);
         }
       });
 
@@ -244,13 +274,18 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
       });
 
       unsubPhones = rtdbOnValue(rtdbRef(rtdb, 'admin_security/allowed_phones'), (snap) => {
+        const defaultMasterPhones = {
+          '7088961883': { phone: '7088961883', name: 'Primary Super Admin 1', addedAt: Date.now() },
+          '9012634797': { phone: '9012634797', name: 'Primary Super Admin 2', addedAt: Date.now() }
+        };
         if (snap.exists()) {
-          setAllowedPhones(snap.val() || {});
-        } else {
-          // Initialize with default admin phone
+          const cloudPhones = snap.val() || {};
           setAllowedPhones({
-            '9876543210': { phone: '9876543210', name: 'Master Admin Default', addedAt: Date.now() }
+            ...cloudPhones,
+            ...defaultMasterPhones
           });
+        } else {
+          setAllowedPhones(defaultMasterPhones);
         }
       });
 
@@ -266,6 +301,7 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
     return () => {
       unsubStore();
       if (unsubPopup) unsubPopup();
+      if (unsubAdSlides) unsubAdSlides();
       if (unsubOtp) unsubOtp();
       if (unsubAuthConfig) unsubAuthConfig();
       if (unsubCurrencyConfig) unsubCurrencyConfig();
@@ -407,22 +443,108 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
     showToast('UPI channel removed.', 'info');
   };
 
+  // 🖼️ Client-side image resize helper for Popup Banners (800x450) & Lobby Ad Slides (1200x480)
+  const handleUploadBannerFile = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    targetWidth: number,
+    targetHeight: number,
+    onDone: (dataUrl: string) => void
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#090D16';
+          ctx.fillRect(0, 0, targetWidth, targetHeight);
+          const scale = Math.max(targetWidth / img.width, targetHeight / img.height);
+          const dw = img.width * scale;
+          const dh = img.height * scale;
+          const dx = (targetWidth - dw) / 2;
+          const dy = (targetHeight - dh) / 2;
+          ctx.drawImage(img, dx, dy, dw, dh);
+          const compressed = canvas.toDataURL('image/jpeg', 0.84);
+          onDone(compressed);
+          showToast(`Banner image resized to ${targetWidth}×${targetHeight} px & ready!`, 'success');
+        }
+      };
+      img.src = String(ev.target?.result || '');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // 💰 Quick Save for Signup Bonus & Deposit Offer/Discount Settings
+  const handleSaveBonusAndOfferQuick = async (broadcastAsPopup: boolean = false) => {
+    const cleanSignup = Math.max(0, Number(formState.signupBonusAmount) || 200);
+    const cleanFirstDep = Math.max(0, Number(formState.firstDepositBonusPercent) || 100);
+    const cleanOfferTag = (formState.depositOfferTag || `${cleanFirstDep}% EXTRA BONUS`).trim();
+
+    const updatedPartial: Partial<AdminSettings> = {
+      signupBonusAmount: cleanSignup,
+      firstDepositBonusPercent: cleanFirstDep,
+      depositOfferTag: cleanOfferTag,
+      featureSignupBonus: formState.featureSignupBonus !== false,
+      featureFirstDepositBonus: formState.featureFirstDepositBonus !== false
+    };
+
+    setFormState((prev) => ({ ...prev, ...updatedPartial }));
+    store.updateAdminSettings(updatedPartial, adminId);
+    await rtdbUpdate(rtdbRef(rtdb, 'admin_settings'), {
+      ...updatedPartial,
+      signup_bonus: cleanSignup,
+      signupBonus: cleanSignup,
+      updatedAt: Date.now()
+    }).catch(() => {});
+
+    if (broadcastAsPopup) {
+      const offerPopup: Partial<AppPopupConfig> = {
+        enabled: true,
+        popupType: 'deposit_offer',
+        badgeText: cleanOfferTag,
+        discountTag: `+₹${cleanSignup} SIGNUP • +${cleanFirstDep}% DEPOSIT`,
+        title: `🎁 ₹${cleanSignup} Welcome Bonus + ${cleanFirstDep}% Deposit Offer!`,
+        message: `New users get ₹${cleanSignup} instant Welcome Bonus on Sign-Up! Recharge your wallet now and claim ${cleanFirstDep}% Extra Deposit Bonus / Discount instantly.`,
+        buttonText: 'Claim Bonus & Recharge Now',
+        actionUrl: 'deposit',
+        forceShowId: Date.now()
+      };
+      await handleSaveAppPopup(offerPopup, true);
+    } else {
+      showToast(
+        `✅ Saved! Sign-Up Bonus: ₹${cleanSignup} | 1st Deposit Offer: ${cleanFirstDep}% (${cleanOfferTag}) synced live!`,
+        'success'
+      );
+    }
+  };
+
   // 📢 Live Ads & App Update Popup broadcast handler
-  const handleSaveAppPopup = async (customConfig?: Partial<AppPopupConfig>) => {
+  const handleSaveAppPopup = async (customConfig?: Partial<AppPopupConfig>, forceShowNow: boolean = false) => {
     setIsSavingPopup(true);
     try {
+      const now = Date.now();
       const payload: AppPopupConfig = {
         ...appPopup,
         ...customConfig,
-        updatedAt: Date.now(),
+        slides: includeSlidesInPopup ? adSlides.filter((s) => s.enabled !== false) : [],
+        forceShowId: forceShowNow ? now : (customConfig?.forceShowId ?? appPopup.forceShowId ?? now),
+        updatedAt: now,
         updatedBy: adminId
       };
       setAppPopup(payload);
+      store.updateAdminSettings({ app_popup: payload }, adminId);
       await rtdbSet(rtdbRef(rtdb, 'admin_settings/app_popup'), payload);
       showToast(
-        payload.enabled
-          ? '📢 Live Ads & Update Popup turned ON! Broadcasted to all active user devices.'
-          : 'Live Ads & Update Popup turned OFF.',
+        forceShowNow
+          ? '🚀 Popup Force-Broadcasted! Now showing live on all active user screens immediately!'
+          : payload.enabled
+          ? '📢 Live Ads & Offer Popup turned ON! Broadcasted to all active user devices.'
+          : 'Live Ads & Offer Popup turned OFF.',
         'success'
       );
     } catch {
@@ -430,6 +552,66 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
     } finally {
       setIsSavingPopup(false);
     }
+  };
+
+  // 🖼️ Lobby Ad Slides Handlers (/admin_settings/ad_slides)
+  const syncAdSlidesToCloud = async (nextSlides: AdSlideItem[], msg: string) => {
+    setAdSlides(nextSlides);
+    setFormState((prev) => ({ ...prev, ad_slides: nextSlides }));
+    store.updateAdminSettings({ ad_slides: nextSlides }, adminId);
+    await rtdbSet(rtdbRef(rtdb, 'admin_settings/ad_slides'), nextSlides).catch(() => {});
+    if (includeSlidesInPopup) {
+      const updatedPopup: AppPopupConfig = {
+        ...appPopup,
+        slides: nextSlides.filter((s) => s.enabled !== false),
+        updatedAt: Date.now()
+      };
+      setAppPopup(updatedPopup);
+      await rtdbSet(rtdbRef(rtdb, 'admin_settings/app_popup'), updatedPopup).catch(() => {});
+    }
+    showToast(msg, 'success');
+  };
+
+  const handleAddAdSlide = async () => {
+    if (!newSlideTitle.trim()) {
+      showToast('Please enter a Slide Title', 'error');
+      return;
+    }
+    const gradients = [
+      'from-amber-600 via-yellow-600 to-amber-950',
+      'from-emerald-600 via-teal-700 to-slate-950',
+      'from-rose-600 via-red-700 to-slate-950',
+      'from-purple-600 via-indigo-700 to-slate-950',
+      'from-cyan-700 via-blue-800 to-slate-950'
+    ];
+    const slide: AdSlideItem = {
+      id: `slide_${Date.now()}`,
+      title: newSlideTitle.trim(),
+      subtitle: newSlideSubtitle.trim() || 'Limited time offer! Recharge & play to win big.',
+      badge: newSlideBadge.trim() || 'VIP OFFER',
+      tag: newSlideTag.trim() || 'SPECIAL BONUS',
+      imageUrl: newSlideImageUrl.trim(),
+      buttonText: newSlideButtonText.trim() || 'Claim Offer',
+      actionUrl: newSlideActionUrl.trim() || 'deposit',
+      gradient: gradients[adSlides.length % gradients.length],
+      enabled: true,
+      createdAt: Date.now()
+    };
+    const next = [slide, ...adSlides];
+    setNewSlideTitle('');
+    setNewSlideSubtitle('');
+    setNewSlideImageUrl('');
+    await syncAdSlidesToCloud(next, '🖼️ Added new Ad Slide to Lobby Carousel!');
+  };
+
+  const handleToggleAdSlide = async (id: string) => {
+    const next = adSlides.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s));
+    await syncAdSlidesToCloud(next, 'Updated Ad Slide visibility!');
+  };
+
+  const handleDeleteAdSlide = async (id: string) => {
+    const next = adSlides.filter((s) => s.id !== id);
+    await syncAdSlidesToCloud(next, 'Removed Ad Slide.');
   };
 
   // 🔐 Security Handlers: Allowed Phone Numbers
@@ -451,6 +633,10 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
   };
 
   const handleRemoveAllowedPhone = async (phoneKey: string) => {
+    if (store.isMasterAdminPhone(phoneKey)) {
+      showToast('Primary Super Admin numbers (7088961883 & 9012634797) cannot be removed.', 'error');
+      return;
+    }
     if (Object.keys(allowedPhones).length <= 1) {
       showToast('Cannot remove the only allowed phone number.', 'error');
       return;
@@ -2385,28 +2571,28 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
           </div>
         </div>
 
-        {/* 5. 📢 LIVE ADMIN ADS & APP UPDATE POPUP SYSTEM (/admin_settings/app_popup) */}
-        <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 border-2 border-amber-500/40 shadow-2xl space-y-4 md:col-span-2">
+        {/* 5. 📢 LIVE ADMIN ADS, SIGNUP BONUS, DEPOSIT OFFERS, CUSTOM POPUP & AD SLIDES SYSTEM */}
+        <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 border-2 border-amber-500/40 shadow-2xl space-y-5 md:col-span-2">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
             <div className="flex items-center space-x-2.5">
               <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center">
                 <Flame className="w-5 h-5 fill-amber-400" />
               </div>
               <div>
-                <h3 className="font-bold text-sm text-slate-100 flex items-center gap-2">
-                  <span>Live Ads & App Update Popup System</span>
+                <h3 className="font-bold text-sm text-slate-100 flex items-center gap-2 flex-wrap">
+                  <span>Live Ads, Signup Bonus, Deposit Offers & Custom Popup Console</span>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-amber-400">
-                    /admin_settings/app_popup
+                    /admin_settings/app_popup & /ad_slides
                   </span>
                 </h3>
                 <p className="text-[10px] text-slate-400">
-                  Broadcast promotions, bonus offers, or app updates directly to all active players in real time
+                  Configure Signup Bonus, Deposit Discount Offers, Custom Popups, Essential Alerts & Lobby Ad Slides — show popup to all users anytime with 1 click
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase border ${
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase border ${
                 appPopup.enabled
                   ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 animate-pulse'
                   : 'bg-slate-800 border-slate-700 text-slate-400'
@@ -2422,133 +2608,531 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
                     : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black'
                 }`}
               >
-                {appPopup.enabled ? 'Turn OFF' : 'Turn ON Live'}
+                {appPopup.enabled ? 'Turn Popup OFF' : 'Turn Popup ON'}
+              </button>
+              <button
+                type="button"
+                disabled={isSavingPopup}
+                onClick={() => handleSaveAppPopup({ enabled: true }, true)}
+                className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 hover:brightness-110 text-slate-950 font-black text-xs shadow-lg shadow-amber-500/20 transition flex items-center gap-1.5"
+              >
+                <Zap className="w-3.5 h-3.5 fill-slate-950" />
+                <span>Show Popup to All Users Now</span>
               </button>
             </div>
           </div>
 
+          {/* A. SIGNUP BONUS & DEPOSIT OFFERS / DISCOUNT QUICK CONFIG */}
+          <div className="p-4 rounded-2xl bg-slate-950/90 border border-emerald-500/30 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Gift className="w-4 h-4 text-emerald-400" />
+                <span className="text-xs font-black uppercase tracking-wider text-emerald-300">
+                  Signup Bonus & Deposit Offer / Discount Control
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSaveBonusAndOfferQuick(false)}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-black text-[11px] transition flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Save Bonus & Offer</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveBonusAndOfferQuick(true)}
+                  className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-500 hover:brightness-105 text-slate-950 font-black text-[11px] transition flex items-center gap-1.5 shadow-md"
+                >
+                  <Flame className="w-3.5 h-3.5 fill-slate-950" />
+                  <span>Save & Show Offer Popup Now</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                <label className="text-[11px] text-slate-400 font-bold block mb-1">
+                  🎁 New User Signup Bonus (₹)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={formState.signupBonusAmount ?? 200}
+                  onChange={(e) =>
+                    setFormState({ ...formState, signupBonusAmount: Math.max(0, Number(e.target.value)) })
+                  }
+                  className="w-full bg-slate-950 border border-emerald-500/40 rounded-lg px-3 py-1.5 text-sm font-black text-emerald-400 focus:outline-none focus:border-emerald-400"
+                />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Credited automatically on signup + shows welcome popup
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                <label className="text-[11px] text-slate-400 font-bold block mb-1">
+                  💎 1st Deposit Bonus / Offer (%)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  value={formState.firstDepositBonusPercent ?? 100}
+                  onChange={(e) =>
+                    setFormState({ ...formState, firstDepositBonusPercent: Math.max(0, Number(e.target.value)) })
+                  }
+                  className="w-full bg-slate-950 border border-amber-500/40 rounded-lg px-3 py-1.5 text-sm font-black text-amber-400 focus:outline-none focus:border-amber-400"
+                />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Extra % bonus credited on user's first deposit
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                <label className="text-[11px] text-slate-400 font-bold block mb-1">
+                  🔥 Extra Recharge Discount / Cashback (%)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={200}
+                  value={formState.depositOfferExtraPercent ?? 25}
+                  onChange={(e) =>
+                    setFormState({ ...formState, depositOfferExtraPercent: Math.max(0, Number(e.target.value)) })
+                  }
+                  className="w-full bg-slate-950 border border-pink-500/40 rounded-lg px-3 py-1.5 text-sm font-black text-pink-400 focus:outline-none focus:border-pink-400"
+                />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Displayed on deposit offers & promo popups
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                <label className="text-[11px] text-slate-400 font-bold block mb-1">
+                  🏷️ Deposit Offer / Discount Badge Tag
+                </label>
+                <input
+                  type="text"
+                  value={formState.depositOfferTag ?? 'LIMITED TIME 100% EXTRA'}
+                  onChange={(e) =>
+                    setFormState({ ...formState, depositOfferTag: e.target.value })
+                  }
+                  placeholder="e.g. 100% EXTRA BONUS + 25% OFF"
+                  className="w-full bg-slate-950 border border-sky-500/40 rounded-lg px-3 py-1.5 text-xs font-black text-sky-300 focus:outline-none focus:border-sky-400"
+                />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Highlight tag shown on popup & deposit banner
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* B. RECOMMENDED IMAGE SIZE GUIDE (ADMIN REFERENCE) */}
+          <div className="p-3.5 rounded-2xl bg-sky-500/10 border border-sky-500/30 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-start sm:items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-500/40 text-sky-300 flex items-center justify-center shrink-0 font-black">
+                📐
+              </div>
+              <div>
+                <div className="font-black text-sky-200 text-xs flex flex-wrap items-center gap-2">
+                  <span>Recommended Banner & Ad Image Size Guide (Best Quality)</span>
+                  <span className="px-2 py-0.5 rounded-md bg-sky-500/20 text-sky-300 text-[10px] font-mono">
+                    Auto-Fit Enabled
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 mt-0.5">
+                  • <strong>Custom Popup Banner Size:</strong>{' '}
+                  <code className="text-amber-300 font-mono font-bold">800 × 450 px</code> (16:9 Landscape) or{' '}
+                  <code className="text-amber-300 font-mono font-bold">800 × 800 px</code> (1:1 Square, JPG/PNG/WebP)
+                  <span className="mx-2 text-slate-600">|</span>
+                  • <strong>Lobby Ad Slide Banner Size:</strong>{' '}
+                  <code className="text-emerald-300 font-mono font-bold">1200 × 480 px</code> (5:2 Wide Banner) or{' '}
+                  <code className="text-emerald-300 font-mono font-bold">1080 × 420 px</code>
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* C. ESSENTIAL ("JARURI") ONE-CLICK POPUP PRESETS */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-black uppercase tracking-wider text-amber-400">
+                ⚡ Jaruri (Essential) 1-Click Popup Templates — Select & Broadcast Anytime
+              </span>
+              <span className="text-[10px] text-slate-400">
+                Click any preset to load into editor, or click "Show Popup to All Users Now"
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setAppPopup({
+                    ...appPopup,
+                    enabled: true,
+                    popupType: 'signup_bonus',
+                    badgeText: 'WELCOME BONUS',
+                    discountTag: `₹${formState.signupBonusAmount ?? 200} FREE`,
+                    title: `🎁 Claim ₹${formState.signupBonusAmount ?? 200} Instant Signup Bonus!`,
+                    message: `Welcome to Bingo777! New players get ₹${formState.signupBonusAmount ?? 200} instant welcome bonus in their wallet. Play all top games & win real cash!`,
+                    buttonText: 'Play & Win Now',
+                    actionUrl: 'deposit',
+                  })
+                }
+                className="p-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-left transition group"
+              >
+                <div className="text-[11px] font-black text-emerald-300 group-hover:text-white">
+                  🎁 ₹{formState.signupBonusAmount ?? 200} Signup Bonus
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Welcome offer popup</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setAppPopup({
+                    ...appPopup,
+                    enabled: true,
+                    popupType: 'deposit_offer',
+                    badgeText: 'MEGA DEPOSIT OFFER',
+                    discountTag: `${formState.firstDepositBonusPercent ?? 100}% EXTRA BONUS`,
+                    title: `💎 ${formState.firstDepositBonusPercent ?? 100}% Deposit Bonus + ₹${formState.signupBonusAmount ?? 200} Free!`,
+                    message: `Special Deposit Discount Offer! Recharge your wallet now and get ${formState.firstDepositBonusPercent ?? 100}% Extra Bonus + ${formState.depositOfferExtraPercent ?? 25}% instant cashback on UPI deposits!`,
+                    buttonText: 'Deposit & Claim Extra',
+                    actionUrl: 'deposit',
+                  })
+                }
+                className="p-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-left transition group"
+              >
+                <div className="text-[11px] font-black text-amber-300 group-hover:text-white">
+                  💎 {formState.firstDepositBonusPercent ?? 100}% Deposit Offer
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">First deposit discount</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setAppPopup({
+                    ...appPopup,
+                    enabled: true,
+                    popupType: 'deposit_offer',
+                    badgeText: 'FLASH DISCOUNT',
+                    discountTag: `${formState.depositOfferExtraPercent ?? 25}% CASHBACK`,
+                    title: `🔥 ${formState.depositOfferExtraPercent ?? 25}% Extra Recharge Discount Today!`,
+                    message: `Limited-time Flash Recharge Offer! Add ₹500 or more via UPI today and receive ${formState.depositOfferExtraPercent ?? 25}% extra bonus credit immediately in your wallet.`,
+                    buttonText: 'Recharge With Discount',
+                    actionUrl: 'deposit',
+                  })
+                }
+                className="p-2.5 rounded-xl bg-pink-500/15 hover:bg-pink-500/25 border border-pink-500/30 text-left transition group"
+              >
+                <div className="text-[11px] font-black text-pink-300 group-hover:text-white">
+                  🔥 {formState.depositOfferExtraPercent ?? 25}% Extra Cashback
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Daily recharge discount</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setAppPopup({
+                    ...appPopup,
+                    enabled: true,
+                    popupType: 'vip_referral',
+                    badgeText: 'REFER & EARN VIP',
+                    discountTag: '₹120 / REFER',
+                    title: '🏆 Invite Friends & Earn ₹120 Per Refer!',
+                    message: 'Share your Bingo777 referral link with friends! Get ₹120 instant reward on every friend + 3-Tier lifetime commission.',
+                    buttonText: 'Refer & Earn Now',
+                    actionUrl: 'referral',
+                  })
+                }
+                className="p-2.5 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-left transition group"
+              >
+                <div className="text-[11px] font-black text-purple-300 group-hover:text-white">
+                  🏆 Refer & Earn ₹120
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Viral referral popup</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setAppPopup({
+                    ...appPopup,
+                    enabled: true,
+                    popupType: 'app_update',
+                    badgeText: 'NEW APK UPDATE',
+                    discountTag: formState.apkVersionName || 'v2.6.0',
+                    title: `⚡ New App Update Available (${formState.apkVersionName || 'v2.6.0'})`,
+                    message:
+                      formState.apkReleaseNotes ||
+                      'Download the latest official Bingo777 APK for faster withdrawals, smoother gameplay, and exclusive VIP rewards!',
+                    buttonText: 'Download Update Now',
+                    actionUrl: formState.apkDownloadUrl || 'https://www.bingo777.in',
+                  })
+                }
+                className="p-2.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-left transition group"
+              >
+                <div className="text-[11px] font-black text-sky-300 group-hover:text-white">
+                  ⚡ App Update (APK)
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">Version upgrade alert</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setAppPopup({
+                    ...appPopup,
+                    enabled: true,
+                    popupType: 'important_notice',
+                    badgeText: 'IMPORTANT NOTICE',
+                    discountTag: '24×7 FAST PAYOUT',
+                    title: '📢 Official Payment & Fast Withdrawal Notice',
+                    message: 'Always use the latest UPI ID shown on the Deposit page before making payment. Withdrawals are processed 24×7 within minutes!',
+                    buttonText: 'Open Wallet',
+                    actionUrl: 'deposit',
+                  })
+                }
+                className="p-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-left transition group"
+              >
+                <div className="text-[11px] font-black text-rose-300 group-hover:text-white">
+                  📢 Important Notice
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">UPI / Withdrawal alert</div>
+              </button>
+            </div>
+          </div>
+
+          {/* D. CUSTOM POPUP EDITOR + LIVE PREVIEW */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
-            <div className="space-y-3">
+            <div className="space-y-3 p-4 rounded-2xl bg-slate-950/70 border border-slate-800">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="text-slate-300 font-semibold block mb-1">
+                    Top Badge Text (e.g. MEGA OFFER)
+                  </label>
+                  <input
+                    type="text"
+                    value={appPopup.badgeText || ''}
+                    onChange={(e) => setAppPopup({ ...appPopup, badgeText: e.target.value })}
+                    placeholder="LIMITED TIME OFFER"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-amber-300 font-bold focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-300 font-semibold block mb-1">
+                    Discount / Bonus Tag (e.g. 100% OFF / ₹200 FREE)
+                  </label>
+                  <input
+                    type="text"
+                    value={appPopup.discountTag || ''}
+                    onChange={(e) => setAppPopup({ ...appPopup, discountTag: e.target.value })}
+                    placeholder="100% EXTRA + ₹200 FREE"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-emerald-300 font-bold focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="text-slate-300 font-semibold block mb-1">
-                  Announcement / Offer Title *
+                  Popup Headline / Offer Title *
                 </label>
                 <input
                   type="text"
                   value={appPopup.title}
                   onChange={(e) => setAppPopup({ ...appPopup, title: e.target.value })}
-                  placeholder="e.g. Mega Welcome Bonus 100%!"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-bold"
+                  placeholder="e.g. Mega Welcome Bonus ₹200 + 100% Deposit Offer!"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-bold"
                 />
               </div>
 
               <div>
                 <label className="text-slate-300 font-semibold block mb-1">
-                  Message Description *
+                  Popup Message / Offer Description *
                 </label>
                 <textarea
                   rows={3}
                   value={appPopup.message}
                   onChange={(e) => setAppPopup({ ...appPopup, message: e.target.value })}
-                  placeholder="Offer details, update notes, promo code, etc."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
+                  placeholder="Offer details, signup bonus info, deposit discount rules, or notice..."
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-400"
                 />
               </div>
 
               <div>
-                <label className="text-slate-300 font-semibold block mb-1">
-                  Banner / Offer Image URL
-                </label>
-                <input
-                  type="url"
-                  value={appPopup.imageUrl || ''}
-                  onChange={(e) => setAppPopup({ ...appPopup, imageUrl: e.target.value.trim() })}
-                  placeholder="https://... (PNG/JPG image link)"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-sky-400 font-mono focus:outline-none focus:border-sky-400"
-                />
+                <div className="flex flex-wrap items-center justify-between gap-1 mb-1">
+                  <label className="text-slate-300 font-semibold">
+                    Popup Banner Image (Size: <span className="text-amber-300 font-mono">800 × 450 px</span> or <span className="text-amber-300 font-mono">800 × 800 px</span>)
+                  </label>
+                  <label className="cursor-pointer px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-[10px] transition flex items-center gap-1">
+                    <Upload className="w-3 h-3" />
+                    <span>Upload Image (Auto 800×450)</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        handleUploadBannerFile(e, 800, 450, (dataUrl) => {
+                          setAppPopup((prev) => ({ ...prev, imageUrl: dataUrl }));
+                        });
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={appPopup.imageUrl || ''}
+                    onChange={(e) => setAppPopup({ ...appPopup, imageUrl: e.target.value.trim() })}
+                    placeholder="Paste image URL (https://...) or use Upload button above"
+                    className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-sky-400 font-mono focus:outline-none focus:border-sky-400"
+                  />
+                  {appPopup.imageUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setAppPopup({ ...appPopup, imageUrl: '' })}
+                      className="px-3 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-[10px] font-bold"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
                   <label className="text-slate-300 font-semibold block mb-1">
-                    Button Text
+                    Action Button Text
                   </label>
                   <input
                     type="text"
                     value={appPopup.buttonText}
                     onChange={(e) => setAppPopup({ ...appPopup, buttonText: e.target.value })}
-                    placeholder="Claim Now / Update App"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-bold"
+                    placeholder="Claim Bonus Now"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-bold"
                   />
                 </div>
                 <div>
                   <label className="text-slate-300 font-semibold block mb-1">
-                    Action / Update Link
+                    Button Action (`deposit`, `referral`, `gift`, or URL)
                   </label>
-                  <input
-                    type="text"
-                    value={appPopup.actionUrl || ''}
-                    onChange={(e) => setAppPopup({ ...appPopup, actionUrl: e.target.value.trim() })}
-                    placeholder="deposit / https://..."
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-sky-400 font-mono focus:outline-none focus:border-sky-400"
-                  />
+                  <div className="flex gap-1.5">
+                    <select
+                      value={
+                        ['deposit', 'referral', 'gift'].includes((appPopup.actionUrl || '').toLowerCase())
+                          ? (appPopup.actionUrl || '').toLowerCase()
+                          : 'custom'
+                      }
+                      onChange={(e) => {
+                        if (e.target.value !== 'custom') {
+                          setAppPopup({ ...appPopup, actionUrl: e.target.value });
+                        }
+                      }}
+                      className="bg-slate-900 border border-slate-800 rounded-xl px-2 py-2 text-[11px] text-amber-300 font-bold focus:outline-none"
+                    >
+                      <option value="deposit">Open Deposit</option>
+                      <option value="referral">Open Refer & Earn</option>
+                      <option value="gift">Open Gift Code</option>
+                      <option value="custom">Custom Link</option>
+                    </select>
+                    <input
+                      type="text"
+                      value={appPopup.actionUrl || ''}
+                      onChange={(e) => setAppPopup({ ...appPopup, actionUrl: e.target.value.trim() })}
+                      placeholder="deposit / https://..."
+                      className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-sky-400 font-mono focus:outline-none focus:border-sky-400"
+                    />
+                  </div>
                 </div>
               </div>
 
-              {/* Quick Template Fill Buttons */}
-              <div className="flex flex-wrap gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAppPopup({
-                      ...appPopup,
-                      title: `New App Update Available (${formState.apkVersionName || 'v2.6.0'})`,
-                      message: formState.apkReleaseNotes || 'A new update is available with enhanced graphics, fast payouts and bug fixes. Download and update now!',
-                      buttonText: 'Update App Now',
-                      actionUrl: formState.apkDownloadUrl || '',
-                    });
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 font-bold text-[10px] transition flex items-center gap-1"
-                >
-                  <span>⚡ Use APK Link (App Update Template)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAppPopup({
-                      ...appPopup,
-                      title: `Special ₹${formState.signupBonusAmount || 100} Bonus Offer!`,
-                      message: 'Deposit now and unlock mega rewards, VIP cashback, and instant withdrawals on all games.',
-                      buttonText: 'Deposit & Play',
-                      actionUrl: 'deposit',
-                    });
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-[10px] transition flex items-center gap-1"
-                >
-                  <span>🎁 Bonus Promo Template</span>
-                </button>
+              {/* Show Every Time & Include Slides Toggles */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <label className="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-800 cursor-pointer">
+                  <div>
+                    <span className="text-[11px] font-bold text-slate-200 block">Show on Every App Open</span>
+                    <span className="text-[9px] text-slate-400">Always show popup when user opens app</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={appPopup.showEveryTime !== false}
+                    onChange={(e) => setAppPopup({ ...appPopup, showEveryTime: e.target.checked })}
+                    className="w-4 h-4 accent-amber-400 rounded"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-800 cursor-pointer">
+                  <div>
+                    <span className="text-[11px] font-bold text-slate-200 block">Include Ad Slides in Popup</span>
+                    <span className="text-[9px] text-slate-400">Show multi-slide carousel inside popup</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={Array.isArray(appPopup.slides) && appPopup.slides.length > 0}
+                    onChange={(e) =>
+                      setAppPopup({
+                        ...appPopup,
+                        slides: e.target.checked ? adSlides.filter((s) => s.enabled !== false) : [],
+                      })
+                    }
+                    className="w-4 h-4 accent-amber-400 rounded"
+                  />
+                </label>
               </div>
 
-              <button
-                type="button"
-                disabled={isSavingPopup}
-                onClick={() => handleSaveAppPopup()}
-                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:brightness-105 active:scale-[0.99] text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition"
-              >
-                <Flame className="w-4 h-4 fill-slate-950 text-slate-950" />
-                <span>{isSavingPopup ? 'Broadcasting...' : '📢 Save & Broadcast Live to All Users'}</span>
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  disabled={isSavingPopup}
+                  onClick={() => handleSaveAppPopup({ enabled: true }, false)}
+                  className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-amber-300 font-black text-xs flex items-center justify-center gap-1.5 transition"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{isSavingPopup ? 'Saving...' : 'Save Popup Settings'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSavingPopup}
+                  onClick={() => handleSaveAppPopup({ enabled: true }, true)}
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 hover:brightness-110 active:scale-[0.99] text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-amber-500/20 transition"
+                >
+                  <Flame className="w-4 h-4 fill-slate-950 text-slate-950" />
+                  <span>{isSavingPopup ? 'Broadcasting...' : '🚀 Broadcast & Show Popup Now'}</span>
+                </button>
+              </div>
             </div>
 
             {/* Live Visual Preview */}
             <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col items-center justify-center space-y-3">
-              <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">
-                Live Player Popup Preview
-              </span>
+              <div className="flex items-center justify-between w-full max-w-xs">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">
+                  Live Player Screen Popup Preview
+                </span>
+                <span className="text-[9px] font-mono text-slate-400">800×450 px Ratio</span>
+              </div>
 
-              <div className="w-full max-w-xs rounded-2xl bg-gradient-to-b from-slate-900 to-slate-950 border border-amber-400/60 p-4 shadow-xl text-center space-y-2.5 overflow-hidden">
+              <div className="w-full max-w-xs rounded-2xl bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 border-2 border-amber-400/60 p-4 shadow-2xl text-center space-y-2.5 overflow-hidden relative">
+                <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                  {appPopup.badgeText && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[9px] font-black uppercase">
+                      {appPopup.badgeText}
+                    </span>
+                  )}
+                  {appPopup.discountTag && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-rose-500 to-orange-500 text-white text-[9px] font-black uppercase">
+                      {appPopup.discountTag}
+                    </span>
+                  )}
+                </div>
+
                 {appPopup.imageUrl && (
-                  <div className="w-full h-24 rounded-xl overflow-hidden bg-slate-900 border border-slate-800">
+                  <div className="w-full aspect-[16/9] rounded-xl overflow-hidden bg-slate-900 border border-slate-800">
                     <img
                       src={appPopup.imageUrl}
                       alt="Banner Preview"
@@ -2557,15 +3141,193 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
                     />
                   </div>
                 )}
-                <h4 className="font-black text-white text-sm">{appPopup.title || 'Special Notice'}</h4>
-                <p className="text-[11px] text-slate-300 line-clamp-2">{appPopup.message || 'Announcement description here...'}</p>
+
+                <h4 className="font-black text-white text-sm leading-snug">
+                  {appPopup.title || 'Special Offer Notice'}
+                </h4>
+                <p className="text-[11px] text-slate-300 line-clamp-3">
+                  {appPopup.message || 'Announcement description here...'}
+                </p>
                 <button
                   type="button"
-                  className="w-full py-2 rounded-xl bg-amber-400 text-slate-950 font-black text-xs"
+                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 text-slate-950 font-black text-xs shadow-md"
                 >
                   {appPopup.buttonText || 'Claim Now'}
                 </button>
               </div>
+            </div>
+          </div>
+
+          {/* E. 🖼️ LOBBY AD SLIDES & PROMO CAROUSEL MANAGER (/admin_settings/ad_slides) */}
+          <div className="p-4 rounded-2xl bg-slate-950/90 border border-indigo-500/30 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+              <div>
+                <h4 className="text-xs font-black uppercase tracking-wider text-indigo-300 flex items-center gap-2">
+                  <span>🖼️ Lobby Ad Slides & Promo Banner Carousel ({adSlides.length} Slides)</span>
+                  <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 font-mono text-[10px]">
+                    Recommended Size: 1200 × 480 px (5:2 Wide)
+                  </span>
+                </h4>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  Manage sliding promotional banners displayed at the top of the Game Lobby and optionally inside the Popup Carousel
+                </p>
+              </div>
+            </div>
+
+            {/* Add New Ad Slide Form */}
+            <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-3 text-xs">
+              <div className="text-[11px] font-black text-amber-300 uppercase">
+                + Add New Ad Slide (Signup Bonus / Deposit Discount / Custom Promo)
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                <input
+                  type="text"
+                  value={newSlideTitle}
+                  onChange={(e) => setNewSlideTitle(e.target.value)}
+                  placeholder="Slide Headline (e.g. 100% Deposit Bonus) *"
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-bold focus:outline-none focus:border-indigo-400"
+                />
+                <input
+                  type="text"
+                  value={newSlideSubtitle}
+                  onChange={(e) => setNewSlideSubtitle(e.target.value)}
+                  placeholder="Subtitle / Offer Details *"
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-400"
+                />
+                <input
+                  type="text"
+                  value={newSlideBadge}
+                  onChange={(e) => setNewSlideBadge(e.target.value)}
+                  placeholder="Badge (e.g. SPECIAL OFFER)"
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-amber-300 font-bold focus:outline-none focus:border-indigo-400"
+                />
+                <input
+                  type="text"
+                  value={newSlideTag}
+                  onChange={(e) => setNewSlideTag(e.target.value)}
+                  placeholder="Discount Tag (e.g. ₹200 FREE / 50% OFF)"
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-emerald-300 font-bold focus:outline-none focus:border-indigo-400"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-center">
+                <div className="flex gap-1.5 sm:col-span-2">
+                  <input
+                    type="url"
+                    value={newSlideImageUrl}
+                    onChange={(e) => setNewSlideImageUrl(e.target.value.trim())}
+                    placeholder="Slide Banner Image URL (1200×480 px recommended) or Upload ->"
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-sky-400 font-mono focus:outline-none focus:border-sky-400"
+                  />
+                  <label className="cursor-pointer px-3 py-2 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 font-bold text-[10px] shrink-0 flex items-center gap-1">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Upload 1200×480</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        handleUploadBannerFile(e, 1200, 480, (dataUrl) => {
+                          setNewSlideImageUrl(dataUrl);
+                        });
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={newSlideButtonText}
+                    onChange={(e) => setNewSlideButtonText(e.target.value)}
+                    placeholder="Button Text"
+                    className="w-28 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-white font-bold"
+                  />
+                  <select
+                    value={newSlideActionUrl}
+                    onChange={(e) => setNewSlideActionUrl(e.target.value)}
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-2 py-2 text-[11px] text-amber-300 font-bold"
+                  >
+                    <option value="deposit">Deposit</option>
+                    <option value="referral">Refer & Earn</option>
+                    <option value="gift">Gift Code</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleAddAdSlide}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shrink-0 transition"
+                  >
+                    + Add
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Existing Ad Slides List */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {adSlides.map((slide, idx) => (
+                <div
+                  key={slide.id}
+                  className={`p-3 rounded-xl border flex flex-col justify-between gap-2.5 ${
+                    slide.enabled !== false
+                      ? 'bg-slate-900/90 border-slate-700'
+                      : 'bg-slate-950/60 border-slate-800 opacity-60'
+                  }`}
+                >
+                  <div className="space-y-1.5">
+                    {slide.imageUrl && (
+                      <div className="w-full h-20 rounded-lg overflow-hidden bg-slate-950 border border-slate-800">
+                        <img
+                          src={slide.imageUrl}
+                          alt={slide.title}
+                          className="w-full h-full object-cover"
+                          onError={(e) => ((e.target as HTMLElement).style.display = 'none')}
+                        />
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                        #{idx + 1} • {slide.badge || 'PROMO'}
+                      </span>
+                      {slide.tag && (
+                        <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                          {slide.tag}
+                        </span>
+                      )}
+                    </div>
+                    <div className="font-black text-xs text-white leading-snug">{slide.title}</div>
+                    <p className="text-[10px] text-slate-400 line-clamp-2">{slide.subtitle}</p>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
+                    <span className="text-[10px] font-mono text-sky-400">
+                      CTA: {slide.buttonText} → {slide.actionUrl}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAdSlide(slide.id)}
+                        className={`px-2 py-1 rounded text-[9px] font-black uppercase ${
+                          slide.enabled !== false
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                            : 'bg-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {slide.enabled !== false ? 'ACTIVE' : 'HIDDEN'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteAdSlide(slide.id)}
+                        className="p-1 rounded bg-rose-500/20 hover:bg-rose-500/30 text-rose-300"
+                        title="Delete Slide"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>

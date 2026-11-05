@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, 
   Key,
-  X
+  X,
+  Gift,
+  Sparkles,
+  CheckCircle2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ToastProvider, useToast } from './components/common/Toast';
@@ -34,7 +37,7 @@ import { TelegramFloatingWidget } from './components/common/TelegramFloatingWidg
 import { GameErrorBoundary } from './components/common/ErrorBoundary';
 import { store } from './services/store';
 import { firebaseSync } from './services/firebaseSync';
-import { auth, rtdb, rtdbRef, rtdbOnValue, rtdbUpdate, onAuthStateChanged, getPersistentDeviceId } from './firebase';
+import { auth, rtdb, rtdbRef, rtdbGet, rtdbOnValue, rtdbUpdate, onAuthStateChanged, getPersistentDeviceId } from './firebase';
 import { UserRecord, DeviceRecord, GameId, RoundSettlementNotice } from './types';
 import { AdminSettingsProvider, useAdminSettings } from './context/AdminSettingsContext';
 import { captureAndPersistReferralCode } from './services/referralAttribution';
@@ -82,6 +85,50 @@ function MainApp() {
   const [showBetHistoryModal, setShowBetHistoryModal] = useState(false);
   const [walletInitialTab, setWalletInitialTab] = useState<'deposit' | 'withdraw' | 'records'>('deposit');
   const [settlementQueue, setSettlementQueue] = useState<RoundSettlementNotice[]>([]);
+  const [welcomeBonusPopup, setWelcomeBonusPopup] = useState<{ uid: string; amount: number; username: string } | null>(null);
+
+  // Listen for new user Sign-Up ₹200 Welcome Bonus award and show celebratory popup on screen
+  useEffect(() => {
+    const checkStoredWelcomePopup = () => {
+      try {
+        const raw = localStorage.getItem('bingo777_welcome_bonus_popup');
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.uid && !localStorage.getItem(`bingo777_welcome_popup_shown_${parsed.uid}`)) {
+          setWelcomeBonusPopup({
+            uid: parsed.uid,
+            amount: Number(parsed.amount) || 200,
+            username: parsed.username || 'Player'
+          });
+        }
+      } catch {}
+    };
+
+    const handleWelcomeAwarded = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail && detail.uid && !localStorage.getItem(`bingo777_welcome_popup_shown_${detail.uid}`)) {
+        setWelcomeBonusPopup({
+          uid: detail.uid,
+          amount: Number(detail.amount) || 200,
+          username: detail.username || 'Player'
+        });
+      } else {
+        checkStoredWelcomePopup();
+      }
+    };
+
+    checkStoredWelcomePopup();
+    window.addEventListener('bingo777_welcome_bonus_awarded', handleWelcomeAwarded);
+    return () => window.removeEventListener('bingo777_welcome_bonus_awarded', handleWelcomeAwarded);
+  }, [currentUser?.uid]);
+
+  const handleCloseWelcomeBonusPopup = () => {
+    if (welcomeBonusPopup?.uid) {
+      localStorage.setItem(`bingo777_welcome_popup_shown_${welcomeBonusPopup.uid}`, 'true');
+    }
+    localStorage.removeItem('bingo777_welcome_bonus_popup');
+    setWelcomeBonusPopup(null);
+  };
 
   // Store Sync & User Session Persistence
   const [storeTick, setStoreTick] = useState(0);
@@ -339,55 +386,72 @@ function MainApp() {
   };
 
   const handleOpenAdminPortal = async () => {
-    const persistentDeviceId = getPersistentDeviceId();
-    const activeUid = currentUser?.uid || localStorage.getItem('bingo777_active_uid');
-    const liveUser = currentUser || (activeUid ? store.getUser(activeUid) : null);
-    const cleanPhone = (liveUser?.phone || '').replace(/\D/g, '');
-
-    const isMasterAdmin = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
-    const isSelectedAdmin = Boolean(
-      liveUser && (
-        isMasterAdmin ||
-        liveUser.isAdmin === true ||
-        liveUser.role === 'admin' ||
-        liveUser.role === 'master_admin'
-      )
-    );
-
-    // STRICT SECURITY GUARD: Only authorized Admins selected by Super Admin or 9012634797 can open Admin Console.
-    // Random users get zero access no matter how many times they tap!
-    if (!isSelectedAdmin || !liveUser) {
+    // STRICT REQUIREMENT: Must be logged in first. Tapping before login does nothing.
+    if (!currentUser || !currentUser.uid) {
       return;
     }
 
+    const persistentDeviceId = getPersistentDeviceId();
+    const liveUser = store.getUser(currentUser.uid) || currentUser;
+    const cleanPhone = (liveUser?.phone || '').replace(/\D/g, '');
+    const isMasterAdmin = store.isMasterAdminPhone(cleanPhone);
+
+    // Fetch live record from Firebase RTDB to verify Admin status & device lock in real time
+    let rtdbUser: Record<string, any> | null = null;
+    try {
+      const snap = await rtdbGet(rtdbRef(rtdb, `users/${liveUser.uid}`));
+      if (snap.exists()) {
+        rtdbUser = snap.val();
+      }
+    } catch {}
+
+    const rtdbPhone = (rtdbUser?.phone || cleanPhone).replace(/\D/g, '');
+    const isMasterByCloud = store.isMasterAdminPhone(rtdbPhone);
+    const isMaster = isMasterAdmin || isMasterByCloud;
+
+    const isSelectedAdmin = Boolean(
+      isMaster ||
+        (rtdbUser
+          ? rtdbUser.isAdmin === true || rtdbUser.role === 'admin' || rtdbUser.role === 'master_admin'
+          : liveUser.isAdmin === true || liveUser.role === 'admin' || liveUser.role === 'master_admin')
+    );
+
+    // STRICT SECURITY GUARD: Only Main Admins (7088961883, 9012634797) or users explicitly promoted by them can open Admin Console.
+    // All other users get zero response no matter how many times they tap!
+    if (!isSelectedAdmin || !liveUser || liveUser.isBanned || liveUser.status === 'banned' || rtdbUser?.isBanned) {
+      return;
+    }
+
+    const activeBoundDevice = rtdbUser?.boundDeviceId ?? liveUser.boundDeviceId ?? null;
+
     // STRICT DEVICE LOCK SECURITY: An Admin account cannot be opened on unauthorized devices!
-    if (liveUser.boundDeviceId && liveUser.boundDeviceId !== persistentDeviceId) {
+    if (activeBoundDevice && activeBoundDevice !== persistentDeviceId) {
       showToast(
-        `Device Security Lock: Admin Console is bound to another authorized device (${liveUser.boundDeviceId}). Unauthorized device access is blocked.`,
+        `Device Security Lock: Admin Console is bound to another authorized device (${activeBoundDevice}). Unauthorized device access is blocked.`,
         'error'
       );
       return;
     }
 
     // Auto-bind device on first login after promotion or after Super Admin clicks "Reset Device Lock"
-    if (!liveUser.boundDeviceId) {
+    if (!activeBoundDevice || isMaster) {
       await rtdbUpdate(rtdbRef(rtdb, `users/${liveUser.uid}`), {
-        boundDeviceId: persistentDeviceId,
+        boundDeviceId: activeBoundDevice || persistentDeviceId,
         lastUsedDeviceId: persistentDeviceId,
         isAdmin: true,
-        role: isMasterAdmin ? 'master_admin' : 'admin',
+        role: isMaster ? 'master_admin' : 'admin',
         lastLogin: Date.now(),
         isOnline: true
       }).catch(() => {});
 
       store.updateUserFromFirestore({
         uid: liveUser.uid,
-        boundDeviceId: persistentDeviceId,
+        boundDeviceId: activeBoundDevice || persistentDeviceId,
         lastUsedDeviceId: persistentDeviceId,
         isAdmin: true,
-        role: isMasterAdmin ? 'master_admin' : 'admin'
+        role: isMaster ? 'master_admin' : 'admin'
       });
-      liveUser.boundDeviceId = persistentDeviceId;
+      liveUser.boundDeviceId = activeBoundDevice || persistentDeviceId;
     }
 
     const token = 'BINGO_MASTER_2026_KEY';
@@ -421,7 +485,7 @@ function MainApp() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950">
       {/* VIEW 1: MASTER ADMIN COMMAND CENTER */}
-      {viewMode === 'master_admin' ? (
+      {viewMode === 'master_admin' && currentUser && store.isUserAdmin(currentUser.uid) ? (
         <div>
           {/* Quick return button banner in admin mode */}
           <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 flex items-center justify-between text-xs">
@@ -449,7 +513,6 @@ function MainApp() {
         <div className="flex-1 flex flex-col min-h-screen bg-slate-950">
           <UserAuthModal
             canClose={false}
-            onOpenAdmin={handleOpenAdminPortal}
             onSuccess={(u) => {
               localStorage.setItem('bingo777_active_uid', u.uid);
               setCurrentUser(u);
@@ -771,8 +834,8 @@ function MainApp() {
           />
         )}
 
-        {/* High-Security Hidden Admin Login Modal */}
-        {showAdminLogin && (
+        {/* High-Security Hidden Admin Login Modal — strictly guarded for logged-in authorized Admins only */}
+        {showAdminLogin && currentUser && store.isUserAdmin(currentUser.uid) && (
           <AdminLoginModal
             currentUser={currentUser}
             onSuccess={handleAdminLoginSuccess}
@@ -782,6 +845,77 @@ function MainApp() {
               setShowAdminLogin(false);
             }}
           />
+        )}
+
+        {/* Celebratory ₹200 Welcome Bonus Credited Popup Modal on Sign Up */}
+        {welcomeBonusPopup && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.85, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 16 }}
+              transition={{ type: 'spring', stiffness: 360, damping: 25 }}
+              className="relative w-full max-w-sm rounded-3xl bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 border-2 border-amber-400/80 shadow-[0_0_50px_rgba(245,158,11,0.35)] p-6 text-center overflow-hidden space-y-4"
+            >
+              {/* Ambient Gold Glow */}
+              <div className="pointer-events-none absolute -top-16 left-1/2 -translate-x-1/2 w-56 h-56 rounded-full bg-amber-500/20 blur-3xl" />
+
+              <button
+                type="button"
+                onClick={handleCloseWelcomeBonusPopup}
+                className="absolute top-3.5 right-3.5 w-8 h-8 rounded-full bg-slate-800/90 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              {/* 3D Gift Emblem */}
+              <div className="relative mx-auto w-20 h-20 rounded-3xl bg-gradient-to-br from-amber-300 via-amber-500 to-amber-700 p-0.5 shadow-xl shadow-amber-500/30">
+                <div className="w-full h-full rounded-[22px] bg-slate-950 flex items-center justify-center relative">
+                  <Gift className="w-10 h-10 text-amber-400 animate-bounce" />
+                  <Sparkles className="w-4 h-4 text-amber-200 absolute top-2 right-2 animate-pulse" />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="inline-flex items-center space-x-1.5 px-3 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] font-black uppercase tracking-wider">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                  <span>Welcome Bonus Credited!</span>
+                </div>
+                <h3 className="font-brand font-black text-xl text-white pt-1">
+                  Congratulations, {welcomeBonusPopup.username}! 🎉
+                </h3>
+                <p className="text-xs text-slate-300">
+                  Your new account is ready and your instant Welcome Bonus has been added to your wallet!
+                </p>
+              </div>
+
+              {/* ₹200 Bonus Display Box */}
+              <div className="py-4 px-5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-400/20 to-amber-500/15 border border-amber-400/50 shadow-inner space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-widest text-amber-300 block">
+                  Instant Sign-Up Reward
+                </span>
+                <div className="font-mono font-black text-4xl bg-gradient-to-b from-amber-200 via-amber-400 to-amber-500 bg-clip-text text-transparent drop-shadow">
+                  +₹{welcomeBonusPopup.amount}
+                </div>
+                <span className="text-[11px] text-emerald-300 font-bold block">
+                  ✓ Added to Main Wallet Balance
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCloseWelcomeBonusPopup}
+                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 hover:brightness-110 active:scale-95 text-slate-950 font-black text-sm shadow-lg shadow-amber-500/30 transition"
+              >
+                Claim &amp; Start Playing 🚀
+              </button>
+            </motion.div>
+          </motion.div>
         )}
 
         {/* Bet & Game History Modal */}
@@ -855,10 +989,14 @@ function MainApp() {
 
       {/* Live Admin Ads & App Update Popup Banner (Only when logged in) */}
       {currentUser && (
-        <AppPopupModal onOpenDeposit={() => {
-          setWalletInitialTab('deposit');
-          setActiveNavTab('wallet');
-        }} />
+        <AppPopupModal
+          onOpenDeposit={() => {
+            setWalletInitialTab('deposit');
+            setActiveNavTab('wallet');
+          }}
+          onOpenReferral={() => setShowReferralModal(true)}
+          onOpenGift={() => setShowGiftModal(true)}
+        />
       )}
     </div>
   );

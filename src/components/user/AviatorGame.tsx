@@ -507,18 +507,20 @@ export const AviatorGame: React.FC<AviatorGameProps> = ({
             <span>Provably Fair SHA-256</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setShowAdminAnalytics((prev) => !prev)}
-            className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold flex items-center space-x-1.5 transition ${
-              showAdminAnalytics
-                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
-                : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-amber-300 hover:border-amber-500/40'
-            }`}
-          >
-            <BarChart3 className="w-3.5 h-3.5" />
-            <span>Live Telemetry</span>
-          </button>
+          {store.isUserAdmin() && (
+            <button
+              type="button"
+              onClick={() => setShowAdminAnalytics((prev) => !prev)}
+              className={`px-2.5 py-1 rounded-xl border text-[11px] font-bold flex items-center space-x-1.5 transition ${
+                showAdminAnalytics
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
+                  : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-amber-300 hover:border-amber-500/40'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Live Telemetry</span>
+            </button>
+          )}
 
           <div className="px-3 py-1 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 font-brand font-black text-xs flex items-center space-x-1.5">
             <Plane

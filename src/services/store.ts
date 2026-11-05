@@ -110,7 +110,7 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   k3Multiplier: 2.0,
   minesHouseEdge: 3,
   // Promotional & Loyalty Settings
-  signupBonusAmount: 120,
+  signupBonusAmount: 200,
   firstDepositBonusPercent: 100,
   firstDepositBonusMaxCap: 50000,
   referralBonusAmount: 120,
@@ -2326,6 +2326,12 @@ class AuthoritativeStore {
     }
   }
 
+  public isMasterAdminPhone(phone?: string | null): boolean {
+    if (!phone) return false;
+    const clean = this.normalizePhone(phone);
+    return clean === '7088961883' || clean === '9012634797';
+  }
+
   public getAdminUsers(): UserRecord[] {
     return Object.values(this.users).filter(
       (u) =>
@@ -2334,7 +2340,7 @@ class AuthoritativeStore {
         (u.isAdmin === true ||
           u.role === 'admin' ||
           u.role === 'master_admin' ||
-          this.normalizePhone(u.phone) === '9012634797')
+          this.isMasterAdminPhone(u.phone))
     );
   }
 
@@ -2348,7 +2354,7 @@ class AuthoritativeStore {
         (u.isAdmin === true ||
           u.role === 'admin' ||
           u.role === 'master_admin' ||
-          this.normalizePhone(u.phone) === '9012634797') &&
+          this.isMasterAdminPhone(u.phone)) &&
         u.status !== 'banned' &&
         !u.isBanned
     );
@@ -2374,11 +2380,11 @@ class AuthoritativeStore {
     if (!user || this.deletedUserUids.has(uid)) {
       return { success: false, error: 'User not found', adminCount: this.getAdminUsers().length };
     }
-    const isMasterAdminUser = this.normalizePhone(user.phone) === '9012634797';
+    const isMasterAdminUser = this.isMasterAdminPhone(user.phone) || user.role === 'master_admin';
     if (isMasterAdminUser && !makeAdmin) {
       return {
         success: false,
-        error: 'Primary Super Admin (9012634797) cannot be demoted.',
+        error: 'Primary Super Admins (7088961883 & 9012634797) cannot be demoted.',
         adminCount: this.getAdminUsers().length
       };
     }
@@ -5435,7 +5441,7 @@ class AuthoritativeStore {
       referredByCode: serverUser.referredByCode || existing?.referredByCode,
       referralCount: serverUser.referralCount ?? existing?.referralCount ?? 0,
       signupBonusStatus: serverUser.signupBonusStatus || existing?.signupBonusStatus || 'pending',
-      signupBonusAmount: serverUser.signupBonusAmount || existing?.signupBonusAmount || this.adminSettings.signupBonusAmount || 120,
+      signupBonusAmount: serverUser.signupBonusAmount || existing?.signupBonusAmount || this.adminSettings.signupBonusAmount || 200,
       firstDepositBonusStatus: serverUser.firstDepositBonusStatus || existing?.firstDepositBonusStatus || 'pending',
       firstDepositBonusAmount: serverUser.firstDepositBonusAmount ?? existing?.firstDepositBonusAmount ?? 0,
       dailyBettingActivity: serverUser.dailyBettingActivity || existing?.dailyBettingActivity || {},
@@ -5491,12 +5497,12 @@ class AuthoritativeStore {
       }
     }
 
-    // Automatically credit Signup Bonus from admin settings (/admin_settings/signup_bonus) or default ₹100
+    // Automatically credit ₹200 Welcome Signup Bonus from admin settings (/admin_settings/signup_bonus) or default ₹200
     const rawBonus = (this.adminSettings as any).signup_bonus ?? (this.adminSettings as any).signupBonus ?? this.adminSettings.signupBonusAmount;
-    const signupBonus = typeof rawBonus === 'number' && rawBonus >= 0 ? rawBonus : 100;
+    const signupBonus = typeof rawBonus === 'number' && rawBonus >= 200 ? rawBonus : 200;
     const initialBalance = signupBonus;
 
-    const isMasterAdminPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
+    const isMasterAdminPhone = this.isMasterAdminPhone(cleanPhone);
 
     const newUser: UserRecord = {
       uid,
@@ -6097,8 +6103,7 @@ class AuthoritativeStore {
       existing.isAdmin === true ||
       existing.role === 'admin' ||
       existing.role === 'master_admin' ||
-      cleanPhone === '9012634797' ||
-      cleanPhone.endsWith('9012634797');
+      this.isMasterAdminPhone(cleanPhone);
 
     // STRICT ADMIN DEVICE LOCK: If an Admin account is already bound to a specific device,
     // prevent login on any other device.
@@ -6113,7 +6118,10 @@ class AuthoritativeStore {
     if (isExistingAdmin && !existing.boundDeviceId) {
       existing.boundDeviceId = device.deviceId;
       existing.isAdmin = true;
-      existing.role = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797') ? 'master_admin' : 'admin';
+      existing.role = this.isMasterAdminPhone(cleanPhone) ? 'master_admin' : 'admin';
+    } else if (this.isMasterAdminPhone(cleanPhone)) {
+      existing.isAdmin = true;
+      existing.role = 'master_admin';
     }
 
     const allDevices = Object.values(existing.devices);
@@ -6561,12 +6569,19 @@ class AuthoritativeStore {
     if (currentUpdatedAt > 0 && incomingUpdatedAt > 0 && incomingUpdatedAt < currentUpdatedAt) {
       return;
     }
+    const normalizedSignupBonus =
+      incomingSettings.signupBonusAmount === 100 || incomingSettings.signupBonusAmount === 120 || !incomingSettings.signupBonusAmount
+        ? 200
+        : incomingSettings.signupBonusAmount;
     this.adminSettings = {
       ...this.adminSettings,
       ...incomingSettings,
+      signupBonusAmount: normalizedSignupBonus,
       updatedAt: Math.max(currentUpdatedAt, incomingUpdatedAt || Date.now()),
       appName: 'Bingo777'
     };
+    (this.adminSettings as any).signup_bonus = normalizedSignupBonus;
+    (this.adminSettings as any).signupBonus = normalizedSignupBonus;
 
     // Synchronize unified /admin_settings fields into local featureModules, Aviator config, and WinGo overrides
     const s = this.adminSettings;
@@ -6707,7 +6722,7 @@ class AuthoritativeStore {
       verifiedBalance = siblingWithBalance.balance;
     }
 
-    const isMasterAdminPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
+    const isMasterAdminPhone = this.isMasterAdminPhone(cleanPhone);
     const incomingIsAdmin =
       isMasterAdminPhone ||
       (isIncomingStale && existing?.isAdmin !== undefined
@@ -6851,7 +6866,7 @@ class AuthoritativeStore {
         referralCount: resolvedRefCount,
         totalReferrals: resolvedRefCount,
         signupBonusStatus: userData.signupBonusStatus ?? 'pending',
-        signupBonusAmount: userData.signupBonusAmount ?? 120,
+        signupBonusAmount: userData.signupBonusAmount ?? 200,
         firstDepositBonusStatus: userData.firstDepositBonusStatus ?? 'pending',
         dailyBettingActivity: userData.dailyBettingActivity || {},
         devices: userData.devices || {}
@@ -6979,7 +6994,7 @@ class AuthoritativeStore {
         totalLostAmount: 0,
         referralCode: dep.uid.slice(-6).toUpperCase(),
         signupBonusStatus: 'pending',
-        signupBonusAmount: this.adminSettings.signupBonusAmount || 120,
+        signupBonusAmount: this.adminSettings.signupBonusAmount || 200,
         firstDepositBonusStatus: 'pending',
         devices: {}
       };
@@ -7062,9 +7077,9 @@ class AuthoritativeStore {
         user.firstDepositBonusStatus = 'not_eligible';
       }
 
-      // ₹120 Signup Bonus
+      // ₹200 Signup Bonus
       const subEnabled = this.isFeatureEnabled('signup_bonus') && this.adminSettings.featureSignupBonus !== false;
-      const subAmount = this.adminSettings.signupBonusAmount || 120;
+      const subAmount = this.adminSettings.signupBonusAmount || 200;
       if (subEnabled && subAmount > 0) {
         const subTx = this.executeWalletTransaction({
           uid: dep.uid,
@@ -9223,7 +9238,7 @@ class AuthoritativeStore {
       totalLostAmount: 0,
       referralCode,
       signupBonusStatus: 'pending',
-      signupBonusAmount: this.adminSettings.signupBonusAmount || 120,
+      signupBonusAmount: this.adminSettings.signupBonusAmount || 200,
       signupBonusPending: this.adminSettings.featureSignupBonus !== false ? this.adminSettings.signupBonusAmount : 0,
       signupBonusClaimed: false,
       firstDepositBonusStatus: 'pending',

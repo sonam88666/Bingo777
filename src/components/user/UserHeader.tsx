@@ -39,6 +39,7 @@ export const UserHeader: React.FC<UserHeaderProps> = ({
   const [showBalance, setShowBalance] = useState(true);
   const [isMuted, setIsMuted] = useState(soundFx.getMuted());
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [tapCount, setTapCount] = useState(0);
 
   useEffect(() => {
     return soundFx.subscribe(() => {
@@ -80,32 +81,48 @@ export const UserHeader: React.FC<UserHeaderProps> = ({
 
   const cleanPhone = (user?.phone || '').replace(/\D/g, '');
   const isUserAdmin = Boolean(
-    user && (
-      cleanPhone === '9012634797' ||
-      cleanPhone.endsWith('9012634797') ||
-      user.isAdmin === true ||
-      user.role === 'admin' ||
-      user.role === 'master_admin'
-    )
+    user &&
+      !user.isBanned &&
+      user.status !== 'banned' &&
+      (store.isMasterAdminPhone(cleanPhone) ||
+        user.isAdmin === true ||
+        user.role === 'admin' ||
+        user.role === 'master_admin')
   );
+
+  const handleHeaderSecretTap = () => {
+    // STRICT SECURITY: If not logged in as 7088961883, 9012634797, or a promoted Admin, tapping does nothing at all!
+    if (!isUserAdmin || !onOpenAdmin) return;
+    const nextCount = tapCount + 1;
+    if (nextCount >= 5) {
+      setTapCount(0);
+      onOpenAdmin();
+    } else {
+      setTapCount(nextCount);
+    }
+  };
 
   const displayBalance = Number(user?.wallet ?? user?.balance ?? 0);
 
   return (
     <header className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur-2xl border-b border-amber-500/20 px-3 sm:px-5 py-2.5 transition-all shadow-lg shadow-black/40">
       <div className="max-w-xl mx-auto flex items-center justify-between gap-2">
-        {/* Brand & 3D Logo */}
-        <div className="flex items-center space-x-2">
-          <Bingo777Logo size="md" variant="badge" />
+        {/* Brand & 3D Stealth Emblem Logo (Name Hidden) */}
+        <div className="flex items-center space-x-2.5">
+          <div onClick={isUserAdmin ? handleHeaderSecretTap : undefined} className={isUserAdmin ? 'cursor-pointer' : ''}>
+            <Bingo777Logo size="md" variant="badge" />
+          </div>
           <div>
             <div className="flex items-center space-x-1.5">
-              <span className="font-brand font-black text-base sm:text-lg tracking-wider bg-gradient-to-r from-amber-200 via-yellow-400 to-amber-200 bg-clip-text text-transparent block leading-tight">
-                Bingo777
-              </span>
-              {user && (
-                <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 border border-amber-400/40 text-[9px] font-black text-amber-300 flex items-center space-x-0.5">
-                  <Crown className="w-2.5 h-2.5" />
-                  <span>VIP{user.vipLevel}</span>
+              {user ? (
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-[10px] font-black text-amber-300 flex items-center space-x-1 shadow-sm">
+                  <Crown className="w-3 h-3 text-amber-400" />
+                  <span>VIP {user.vipLevel}</span>
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-400/30 text-[10px] font-black text-amber-300 flex items-center space-x-1">
+                  <Crown className="w-3 h-3 text-amber-400" />
+                  <span>ROYAL VIP</span>
                 </span>
               )}
               {isUserAdmin && onOpenAdmin && (
@@ -120,7 +137,7 @@ export const UserHeader: React.FC<UserHeaderProps> = ({
                 </button>
               )}
             </div>
-            <span className="text-[9px] text-amber-300/80 font-bold tracking-wider flex items-center space-x-1">
+            <span className="text-[9px] text-amber-300/80 font-bold tracking-wider flex items-center space-x-1 mt-0.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               <span>Real Live Platform</span>
             </span>

@@ -223,7 +223,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
         clientDev.deviceName || clientDev.deviceModel || `${clientDev.os} (${clientDev.browser})`;
       const now = Date.now();
       const userSnap = await rtdbGet(rtdbRef(rtdb, `users/${uid}`));
-      const isMasterAdminPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
+      const isMasterAdminPhone = store.isMasterAdminPhone(cleanPhone);
       if (userSnap.exists()) {
         const existingData = userSnap.val() || {};
         const isExistingAdmin = Boolean(
@@ -289,15 +289,16 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       } else {
         // Snapshot does not exist -> initialize default fields safely
         const adminSettings = store.getAdminSettings();
-        const signupBonus =
+        const rawBonus =
           (adminSettings as any).signup_bonus ??
           (adminSettings as any).signupBonus ??
           adminSettings.signupBonusAmount ??
-          100;
+          200;
+        const signupBonus = typeof rawBonus === 'number' && rawBonus >= 200 ? rawBonus : 200;
         const initialWallet =
-          typeof fallbackUser.wallet === 'number'
+          typeof fallbackUser.wallet === 'number' && fallbackUser.wallet >= 200
             ? fallbackUser.wallet
-            : typeof fallbackUser.balance === 'number'
+            : typeof fallbackUser.balance === 'number' && fallbackUser.balance >= 200
             ? fallbackUser.balance
             : signupBonus;
 
@@ -345,6 +346,8 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
             [currentDeviceId]: currentDeviceEntry
           },
           referralCode: fallbackUser.referralCode || '',
+          signupBonusStatus: 'credited',
+          signupBonusAmount: initialWallet,
           createdAt: fallbackUser.createdAt || now,
           lastLogin: now,
           lastActive: now,
@@ -424,7 +427,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       const existingCandidate =
         (firebaseUid ? store.getUser(firebaseUid) : undefined) || store.findUserByPhone(cleanPhone);
 
-      const isMasterPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
+      const isMasterPhone = store.isMasterAdminPhone(cleanPhone);
       const isUserAdminAccount = Boolean(
         isMasterPhone ||
           (existingCandidate &&
@@ -587,7 +590,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       device.status = 'approved';
 
       const existingLocal = store.findUserByPhone(cleanPhone);
-      const isMasterPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
+      const isMasterPhone = store.isMasterAdminPhone(cleanPhone);
       const isSelectedAdmin = Boolean(
         isMasterPhone ||
           (existingLocal &&
@@ -668,7 +671,15 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       await clearPendingReferralCode().catch(() => {});
       firebaseSync.attachRealtimeUserSync(finalUser.uid, cleanPhone);
 
-      showToast(`Welcome! ₹${finalUser.balance} Signup Bonus credited to your wallet.`, 'success');
+      const welcomePayload = {
+        uid: finalUser.uid,
+        amount: finalUser.balance || 200,
+        username: finalUser.name || finalUser.username
+      };
+      localStorage.setItem('bingo777_welcome_bonus_popup', JSON.stringify(welcomePayload));
+      window.dispatchEvent(new CustomEvent('bingo777_welcome_bonus_awarded', { detail: welcomePayload }));
+
+      showToast(`🎉 Welcome! ₹${finalUser.balance || 200} Welcome Bonus credited to your wallet.`, 'success');
       onSuccess(finalUser);
       onClose();
     } finally {
@@ -795,7 +806,15 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       await clearPendingReferralCode().catch(() => {});
       firebaseSync.attachRealtimeUserSync(finalUser.uid, cleanPhone);
 
-      showToast(`Account created! Welcome ₹${finalUser.balance} Signup Bonus credited to your wallet.`, 'success');
+      const welcomePayload = {
+        uid: finalUser.uid,
+        amount: finalUser.balance || 200,
+        username: finalUser.name || finalUser.username
+      };
+      localStorage.setItem('bingo777_welcome_bonus_popup', JSON.stringify(welcomePayload));
+      window.dispatchEvent(new CustomEvent('bingo777_welcome_bonus_awarded', { detail: welcomePayload }));
+
+      showToast(`🎉 Account created! Welcome ₹${finalUser.balance || 200} Bonus credited to your wallet.`, 'success');
       onSuccess(finalUser);
       onClose();
     } finally {

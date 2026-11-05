@@ -31,7 +31,7 @@ export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ admi
   const referrals = store.getReferrals();
 
   const [signupBonusEnabled, setSignupBonusEnabled] = useState<boolean>(currentSettings.featureSignupBonus !== false);
-  const [signupBonusAmount, setSignupBonusAmount] = useState<number>(currentSettings.signupBonusAmount || 120);
+  const [signupBonusAmount, setSignupBonusAmount] = useState<number>(currentSettings.signupBonusAmount || 200);
 
   const [firstDepositEnabled, setFirstDepositEnabled] = useState<boolean>(currentSettings.featureFirstDepositBonus !== false);
   const [firstDepositPercent, setFirstDepositPercent] = useState<number>(currentSettings.firstDepositBonusPercent || 100);
@@ -333,12 +333,52 @@ export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ admi
             </div>
           </div>
 
-          <button
-            type="submit"
-            className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-sm shadow-lg shadow-amber-500/20 transition active:scale-[0.99]"
-          >
-            Save Settings
-          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="submit"
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-sm shadow-lg shadow-amber-500/20 transition active:scale-[0.99]"
+            >
+              Save Bonus Settings
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                const updated = {
+                  signupBonusAmount: Math.max(0, Number(signupBonusAmount)),
+                  firstDepositBonusPercent: Math.max(0, Number(firstDepositPercent)),
+                  referralBonusAmount: Math.max(0, Number(referralBonusAmount)),
+                  referralDailyBetRequirement: Math.max(10, Number(qualifyingBetAmount)),
+                  referralRequiredDays: Math.max(1, Number(qualificationDays)),
+                  checkInBonuses: checkInBonuses.map((v) => Math.max(0, Number(v))),
+                  featureSignupBonus: signupBonusEnabled,
+                  featureFirstDepositBonus: firstDepositEnabled,
+                  featureReferrals: referralEnabled,
+                  app_popup: {
+                    ...(store.getAdminSettings().app_popup || {}),
+                    enabled: true,
+                    popupType: 'deposit_offer' as const,
+                    badgeText: 'MEGA BONUS OFFER',
+                    discountTag: `₹${signupBonusAmount} FREE + ${firstDepositPercent}% EXTRA`,
+                    title: `🎁 ₹${signupBonusAmount} Signup Bonus + ${firstDepositPercent}% Deposit Offer!`,
+                    message: `Claim ₹${signupBonusAmount} Welcome Signup Bonus + ${firstDepositPercent}% Extra Deposit Bonus + ₹${referralBonusAmount} Per Refer right now!`,
+                    buttonText: 'Deposit & Claim Bonus',
+                    actionUrl: 'deposit',
+                    showEveryTime: true,
+                    forceShowId: Date.now(),
+                    updatedAt: Date.now(),
+                  },
+                };
+                store.updateAdminSettings(updated, adminId);
+                await firebaseSync.pushAdminSettingsToRtdb(store.getAdminSettings()).catch(() => {});
+                await apiClient.updateSettings(updated, adminId, tokenToUse).catch(() => {});
+                showToast('Bonus Settings Saved & Offer Popup Shown Live on All User Screens!', 'success');
+              }}
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-emerald-400 via-teal-500 to-cyan-500 hover:brightness-105 text-slate-950 font-black text-sm shadow-lg shadow-emerald-500/20 transition active:scale-[0.99]"
+            >
+              🚀 Save & Show Offer Popup to Users Now
+            </button>
+          </div>
         </form>
       )}
 

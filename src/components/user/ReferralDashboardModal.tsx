@@ -59,10 +59,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
   }, [user.uid]);
 
   const referralCode = user.referralCode || 'BINGO777';
-  const shareUrl =
-    typeof window !== 'undefined' && window.location?.origin
-      ? `${window.location.origin}/?ref=${encodeURIComponent(referralCode)}`
-      : `https://bingo777.in/?ref=${encodeURIComponent(referralCode)}`;
+  const shareUrl = `https://www.bingo777.in/?ref=${encodeURIComponent(referralCode)}`;
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(referralCode);
@@ -76,8 +73,8 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
     if (typeof navigator !== 'undefined' && navigator.share) {
       try {
         await navigator.share({
-          title: 'Bingo777 Refer & Earn',
-          text: `Download & Play on Bingo777 using my Refer Code: ${referralCode} to claim your Welcome Bonus!`,
+          title: 'VIP Gaming Invite',
+          text: `Download & Play using my Refer Code: ${referralCode} to claim your Welcome Bonus!`,
           url: shareUrl
         });
         return;
@@ -85,7 +82,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
         // User cancelled share sheet; link is already copied
       }
     }
-    showToast('Referral invitation link copied!', 'info');
+    showToast(`Referral invite link (${shareUrl}) copied!`, 'info');
   };
 
   const handleClaimMlmCommission = () => {

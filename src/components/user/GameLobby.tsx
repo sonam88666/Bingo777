@@ -93,14 +93,37 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
     return () => clearInterval(timer);
   }, []);
 
+  const liveSettings = store.getAdminSettings();
+  const customAdSlides = Array.isArray(liveSettings.ad_slides)
+    ? liveSettings.ad_slides
+        .filter((s) => s && s.enabled !== false)
+        .map((s) => ({
+          id: s.id,
+          gameId: undefined as GameId | undefined,
+          title: s.title || 'SPECIAL OFFER',
+          subtitle: s.subtitle || 'Claim exclusive rewards and instant bonuses now!',
+          code: s.tag || 'SPECIAL',
+          badge: s.badge || 'VIP OFFER',
+          gradient: s.gradient || 'from-amber-600 via-yellow-600 to-amber-950',
+          tag: s.tag || 'LIMITED OFFER',
+          imageUrl: s.imageUrl || '',
+          buttonText: s.buttonText || 'Claim Offer',
+          actionUrl: s.actionUrl || 'deposit'
+        }))
+    : [];
+
   const rawBanners = [
+    ...customAdSlides,
     {
-      title: 'FIRST RECHARGE +100% BONUS',
-      subtitle: 'Double your wallet instantly. Credited on UPI recharge with Admin verification.',
-      code: 'WELCOME100',
-      badge: 'VIP PROMOTION',
+      title: `FIRST RECHARGE +${liveSettings.firstDepositBonusPercent || 100}% BONUS`,
+      subtitle: `New Sign-Up ₹${liveSettings.signupBonusAmount || 200} Welcome Bonus + ${liveSettings.firstDepositBonusPercent || 100}% Instant Deposit Bonus!`,
+      code: 'WELCOME200',
+      badge: liveSettings.depositOfferTag || 'VIP PROMOTION',
       gradient: 'from-amber-600 via-yellow-600 to-amber-950',
-      tag: 'INSTANT CREDIT'
+      tag: `+₹${liveSettings.signupBonusAmount || 200} SIGNUP`,
+      imageUrl: '',
+      buttonText: 'Recharge & Play',
+      actionUrl: 'deposit'
     },
     {
       gameId: 'aviator' as GameId,
@@ -109,7 +132,10 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
       code: 'HOT CRASH',
       badge: 'TRENDING 100X',
       gradient: 'from-rose-600 via-red-700 to-slate-950',
-      tag: 'HIGH ROLLER'
+      tag: 'HIGH ROLLER',
+      imageUrl: '',
+      buttonText: 'Play Aviator',
+      actionUrl: 'deposit'
     },
     {
       gameId: 'trx_wingo' as GameId,
@@ -118,7 +144,10 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
       code: 'CRYPTO LOTRE',
       badge: 'BLOCKCHAIN FAIR',
       gradient: 'from-cyan-700 via-blue-800 to-slate-950',
-      tag: 'TRON HASH'
+      tag: 'TRON HASH',
+      imageUrl: '',
+      buttonText: 'Recharge & Play',
+      actionUrl: 'deposit'
     },
     {
       gameId: 'wingo' as GameId,
@@ -127,7 +156,10 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
       code: 'PROVABLY FAIR',
       badge: 'MOST POPULAR',
       gradient: 'from-emerald-600 via-teal-700 to-slate-950',
-      tag: 'ROUND 24/7'
+      tag: 'ROUND 24/7',
+      imageUrl: '',
+      buttonText: 'Recharge & Play',
+      actionUrl: 'deposit'
     },
     {
       gameId: 'dragon_tiger' as GameId,
@@ -136,7 +168,10 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
       code: '3D CASINO',
       badge: 'NEW 3D TABLE',
       gradient: 'from-red-700 via-amber-600 to-slate-950',
-      tag: '50X SUITED TIE'
+      tag: '50X SUITED TIE',
+      imageUrl: '',
+      buttonText: 'Recharge & Play',
+      actionUrl: 'deposit'
     }
   ];
 
@@ -352,7 +387,7 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
         </motion.div>
       )}
 
-      {/* 2. Luxury Animated Hero Carousel Banner */}
+      {/* 2. Luxury Animated Hero Carousel Banner (Supports Admin Custom Ad Slides & 1200x480 Banner Images) */}
       {showHeroCarousel && activeBanner && (
         <motion.div
           initial={{ opacity: 0, scale: 0.98, y: 8 }}
@@ -360,9 +395,20 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
           transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1], delay: 0.05 }}
           className={`relative overflow-hidden rounded-3xl bg-gradient-to-r ${activeBanner.gradient} p-5 sm:p-6 shadow-2xl transition-colors duration-700 border border-amber-400/30`}
         >
+          {(activeBanner as any).imageUrl && (
+            <div className="absolute inset-0 z-0">
+              <img
+                src={(activeBanner as any).imageUrl}
+                alt={activeBanner.title}
+                className="w-full h-full object-cover object-center opacity-45"
+                onError={(e) => ((e.target as HTMLElement).style.display = 'none')}
+              />
+              <div className="absolute inset-0 bg-gradient-to-r from-slate-950/90 via-slate-950/65 to-transparent" />
+            </div>
+          )}
           <AnimatePresence mode="wait">
             <motion.div
-              key={activeBanner.title}
+              key={`${activeBanner.title}_${activeBannerIndex}`}
               initial={{ opacity: 0, x: 12 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -12 }}
@@ -378,7 +424,7 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
                 </span>
               </div>
 
-              <h2 className="font-brand font-black text-xl sm:text-2xl text-slate-100 tracking-wide leading-tight">
+              <h2 className="font-brand font-black text-xl sm:text-2xl text-slate-100 tracking-wide leading-tight drop-shadow">
                 {activeBanner.title}
               </h2>
 
@@ -389,10 +435,16 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
               <div className="pt-2 flex items-center space-x-2">
                 {user ? (
                   <button
-                    onClick={onOpenDeposit}
+                    onClick={() => {
+                      const act = String((activeBanner as any).actionUrl || 'deposit').trim().toLowerCase();
+                      if (act === 'referral' && onOpenReferral) onOpenReferral();
+                      else if (act === 'gift' && onOpenGiftCode) onOpenGiftCode();
+                      else if (act.startsWith('http')) window.open((activeBanner as any).actionUrl, '_blank', 'noopener,noreferrer');
+                      else onOpenDeposit();
+                    }}
                     className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold text-xs shadow-lg active:scale-95 transition border border-amber-500/30 flex items-center space-x-1.5"
                   >
-                    <span>Recharge & Play</span>
+                    <span>{(activeBanner as any).buttonText || 'Recharge & Play'}</span>
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                 ) : (
