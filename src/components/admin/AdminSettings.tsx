@@ -34,6 +34,7 @@ import {
 import { AdminSettings, UpiChannel, AppPopupConfig, UserRecord, AuthConfig, CurrencyConverterConfig, AudioSystemConfig } from '../../types';
 import { SUPPORTED_CURRENCIES, FALLBACK_RATES_FROM_INR } from '../user/WalletView';
 import { store } from '../../services/store';
+import { firebaseSync } from '../../services/firebaseSync';
 import { soundFx } from '../../services/soundFx';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
@@ -660,6 +661,7 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     store.updateAdminSettings(formState, adminId);
+    await firebaseSync.pushAdminSettingsToRtdb(store.getAdminSettings()).catch(() => {});
     await apiClient
       .updateSettings(formState as unknown as Record<string, unknown>, adminId)
       .catch(() => {});
@@ -670,6 +672,7 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
     const updated = { ...formState, maintenanceMode: nextState };
     setFormState(updated);
     store.updateAdminSettings(updated, adminId);
+    await firebaseSync.pushAdminSettingsToRtdb(store.getAdminSettings()).catch(() => {});
     await apiClient
       .toggleMaintenanceMode(
         nextState,

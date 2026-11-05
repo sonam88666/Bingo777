@@ -2632,15 +2632,25 @@ class AuthoritativeStore {
         ? params.metadata.knownLiveBalance
         : 0;
 
-    let resolvedLiveBalance = Math.max(
-      typeof user.balance === 'number' && Number.isFinite(user.balance) && user.balance > 0 ? user.balance : 0,
-      siblingUser && typeof siblingUser.balance === 'number' && Number.isFinite(siblingUser.balance) && siblingUser.balance > 0
-        ? siblingUser.balance
-        : 0,
-      knownLiveBal
-    );
+    const currentPrimaryBal =
+      typeof user.balance === 'number' && Number.isFinite(user.balance)
+        ? user.balance
+        : typeof user.wallet === 'number' && Number.isFinite(user.wallet)
+        ? user.wallet
+        : 0;
 
-    if (resolvedLiveBalance < cleanAmount && params.category === 'debit') {
+    let resolvedLiveBalance =
+      params.type === 'admin_adjustment'
+        ? Math.max(0, currentPrimaryBal)
+        : Math.max(
+            currentPrimaryBal > 0 ? currentPrimaryBal : 0,
+            siblingUser && typeof siblingUser.balance === 'number' && Number.isFinite(siblingUser.balance) && siblingUser.balance > 0
+              ? siblingUser.balance
+              : 0,
+            knownLiveBal
+          );
+
+    if (params.type !== 'admin_adjustment' && resolvedLiveBalance < cleanAmount && params.category === 'debit') {
       const ledgerBal = this.computeVerifiedLedgerBalance(params.uid);
       if (ledgerBal > resolvedLiveBalance) {
         resolvedLiveBalance = ledgerBal;
@@ -2654,6 +2664,7 @@ class AuthoritativeStore {
 
     const balanceBefore = Math.max(0, Math.round(resolvedLiveBalance * 100) / 100);
     user.balance = balanceBefore;
+    user.wallet = balanceBefore;
 
     // Strict balance check for debits
     if (params.category === 'debit') {
@@ -2682,11 +2693,16 @@ class AuthoritativeStore {
       return { success: false, error: 'Negative wallet balance prevented by integrity governor' };
     }
 
+    const nowUpdateTs = Date.now();
     user.balance = balanceAfter;
-    user.lastActive = Date.now();
+    user.wallet = balanceAfter;
+    user.updatedAt = nowUpdateTs;
+    user.lastActive = nowUpdateTs;
     if (siblingUser) {
       siblingUser.balance = balanceAfter;
-      siblingUser.lastActive = Date.now();
+      siblingUser.wallet = balanceAfter;
+      siblingUser.updatedAt = nowUpdateTs;
+      siblingUser.lastActive = nowUpdateTs;
     }
 
     const seal = this.computeTransactionSeal({
@@ -2708,7 +2724,7 @@ class AuthoritativeStore {
       balanceAfter,
       referenceId: params.referenceId,
       description: params.description,
-      timestamp: Date.now(),
+      timestamp: nowUpdateTs,
       status,
       metadata: params.metadata,
       integritySeal: seal
@@ -2718,6 +2734,9 @@ class AuthoritativeStore {
     if (this.transactions.length > 5000) {
       this.transactions.pop();
     }
+
+    this.savePermanentUsersRegistry();
+    this.saveToStorage();
 
     if (this.onTransactionSaved) {
       try { this.onTransactionSaved(transaction); } catch (e) { console.warn('onTransactionSaved error:', e); }
@@ -6537,9 +6556,15 @@ class AuthoritativeStore {
 
   public ingestCloudAdminSettings(incomingSettings: Partial<AdminSettings>) {
     if (!incomingSettings || typeof incomingSettings !== 'object') return;
+    const currentUpdatedAt = Number(this.adminSettings.updatedAt || 0);
+    const incomingUpdatedAt = Number(incomingSettings.updatedAt || 0);
+    if (currentUpdatedAt > 0 && incomingUpdatedAt > 0 && incomingUpdatedAt < currentUpdatedAt) {
+      return;
+    }
     this.adminSettings = {
       ...this.adminSettings,
       ...incomingSettings,
+      updatedAt: Math.max(currentUpdatedAt, incomingUpdatedAt || Date.now()),
       appName: 'Bingo777'
     };
 
@@ -6626,6 +6651,13 @@ class AuthoritativeStore {
     if (!userData.uid || this.deletedUserUids.has(userData.uid)) return;
 
     const existing = this.users[userData.uid];
+    const existingUpdatedAt = Number(existing?.updatedAt || 0);
+    const incomingUpdatedAt = Number((userData as any).updatedAt || 0);
+    const isIncomingStale =
+      existingUpdatedAt > 0 &&
+      ((incomingUpdatedAt > 0 && incomingUpdatedAt < existingUpdatedAt) ||
+        (incomingUpdatedAt === 0 && Date.now() - existingUpdatedAt < 120000));
+
     const cleanPhone =
       this.normalizePhone(userData.phone) ||
       (existing ? this.normalizePhone(existing.phone) : '') ||
@@ -6638,15 +6670,30 @@ class AuthoritativeStore {
         )
       : undefined;
 
-    const rawIncomingBal =
-      typeof userData.wallet === 'number' && Number.isFinite(userData.wallet)
-        ? userData.wallet
-        : typeof userData.balance === 'number' && Number.isFinite(userData.balance)
-        ? userData.balance
-        : undefined;
+    const hasIncomingWallet = typeof userData.wallet === 'number' && Number.isFinite(userData.wallet);
+    const hasIncomingBalance = typeof userData.balance === 'number' && Number.isFinite(userData.balance);
+
+    let rawIncomingBal: number | undefined;
+    if (hasIncomingWallet && hasIncomingBalance) {
+      if (userData.wallet === userData.balance) {
+        rawIncomingBal = userData.balance;
+      } else if (existing && userData.wallet === existing.wallet && userData.balance !== existing.balance) {
+        rawIncomingBal = userData.balance;
+      } else if (existing && userData.balance === existing.balance && userData.wallet !== existing.wallet) {
+        rawIncomingBal = userData.wallet;
+      } else {
+        rawIncomingBal = userData.wallet;
+      }
+    } else if (hasIncomingWallet) {
+      rawIncomingBal = userData.wallet;
+    } else if (hasIncomingBalance) {
+      rawIncomingBal = userData.balance;
+    }
 
     let verifiedBalance =
-      rawIncomingBal !== undefined
+      isIncomingStale && existing && typeof existing.balance === 'number' && Number.isFinite(existing.balance)
+        ? Math.max(0, Math.round(existing.balance * 100) / 100)
+        : rawIncomingBal !== undefined
         ? Math.max(0, Math.round(Number(rawIncomingBal) * 100) / 100)
         : existing && typeof existing.balance === 'number' && Number.isFinite(existing.balance)
         ? Math.max(0, Math.round(existing.balance * 100) / 100)
@@ -6663,7 +6710,9 @@ class AuthoritativeStore {
     const isMasterAdminPhone = cleanPhone === '9012634797' || cleanPhone.endsWith('9012634797');
     const incomingIsAdmin =
       isMasterAdminPhone ||
-      (userData.isAdmin !== undefined
+      (isIncomingStale && existing?.isAdmin !== undefined
+        ? Boolean(existing.isAdmin)
+        : userData.isAdmin !== undefined
         ? Boolean(userData.isAdmin)
         : userData.role === 'admin' || userData.role === 'master_admin'
         ? true
@@ -6678,27 +6727,39 @@ class AuthoritativeStore {
       : 'user';
 
     const incomingIsBanned =
-      userData.isBanned !== undefined
+      isIncomingStale && existing?.isBanned !== undefined
+        ? Boolean(existing.isBanned)
+        : userData.isBanned !== undefined
         ? Boolean(userData.isBanned)
         : userData.status === 'banned' || userData.status === 'blocked'
         ? true
         : existing?.isBanned ?? false;
 
-    const resolvedStatus: UserRecord['status'] = incomingIsBanned
-      ? userData.status && userData.status !== 'active'
-        ? userData.status
-        : 'banned'
-      : userData.status === 'banned' && userData.isBanned === false
-      ? 'active'
-      : userData.status || existing?.status || 'active';
+    const resolvedStatus: UserRecord['status'] =
+      isIncomingStale && existing?.status
+        ? existing.status
+        : incomingIsBanned
+        ? userData.status && userData.status !== 'active'
+          ? userData.status
+          : 'banned'
+        : userData.status === 'banned' && userData.isBanned === false
+        ? 'active'
+        : userData.status || existing?.status || 'active';
 
-    const resolvedName = userData.name || userData.username || existing?.name || existing?.username || `Player_${userData.uid.slice(-4)}`;
+    const resolvedName =
+      (isIncomingStale && (existing?.name || existing?.username)) ||
+      userData.name ||
+      userData.username ||
+      existing?.name ||
+      existing?.username ||
+      `Player_${userData.uid.slice(-4)}`;
     const resolvedTotalDep = Number(
       userData.totalDeposit ?? userData.totalDeposited ?? existing?.totalDeposit ?? existing?.totalDeposited ?? 0
     );
     const resolvedTotalWith = Number(
       userData.totalWithdraw ?? userData.totalWithdrawn ?? existing?.totalWithdraw ?? existing?.totalWithdrawn ?? 0
     );
+    const resolvedUpdatedAt = Math.max(existingUpdatedAt, incomingUpdatedAt || 0);
 
     if (existing) {
       const resolvedRefCount = Math.max(
@@ -6713,7 +6774,7 @@ class AuthoritativeStore {
         phone: cleanPhone || existing.phone,
         username: resolvedName,
         name: resolvedName,
-        passwordHash: userData.passwordHash || existing.passwordHash,
+        passwordHash: (isIncomingStale ? existing.passwordHash : userData.passwordHash) || existing.passwordHash,
         referralCode: userData.referralCode || existing.referralCode,
         referredBy: userData.referredBy || existing.referredBy,
         referredByCode: userData.referredByCode || existing.referredByCode,
@@ -6725,12 +6786,22 @@ class AuthoritativeStore {
         totalDeposited: resolvedTotalDep,
         totalWithdraw: resolvedTotalWith,
         totalWithdrawn: resolvedTotalWith,
-        vipLevel: typeof userData.vipLevel === 'number' ? userData.vipLevel : existing.vipLevel,
+        vipLevel:
+          isIncomingStale && typeof existing.vipLevel === 'number'
+            ? existing.vipLevel
+            : typeof userData.vipLevel === 'number'
+            ? userData.vipLevel
+            : existing.vipLevel,
         status: resolvedStatus,
         isBanned: incomingIsBanned,
         isAdmin: incomingIsAdmin,
         role: resolvedRole,
-        boundDeviceId: userData.boundDeviceId !== undefined ? userData.boundDeviceId : existing.boundDeviceId,
+        boundDeviceId:
+          isIncomingStale && existing.boundDeviceId !== undefined
+            ? existing.boundDeviceId
+            : userData.boundDeviceId !== undefined
+            ? userData.boundDeviceId
+            : existing.boundDeviceId,
         lastUsedDeviceId: userData.lastUsedDeviceId || existing.lastUsedDeviceId,
         registrationDeviceId: userData.registrationDeviceId || existing.registrationDeviceId,
         deviceName: userData.deviceName || existing.deviceName,
@@ -6738,7 +6809,8 @@ class AuthoritativeStore {
         deviceModel: userData.deviceModel || userData.deviceName || existing.deviceModel,
         devices: userData.devices ? { ...(existing.devices || {}), ...userData.devices } : existing.devices,
         lastActive: userData.lastLogin || userData.lastActive || existing.lastActive || Date.now(),
-        lastLogin: userData.lastLogin || existing.lastLogin || Date.now()
+        lastLogin: userData.lastLogin || existing.lastLogin || Date.now(),
+        updatedAt: resolvedUpdatedAt || Date.now()
       };
     } else {
       const resolvedRefCount = Math.max(userData.referralCount ?? 0, userData.totalReferrals ?? 0);
@@ -6768,6 +6840,7 @@ class AuthoritativeStore {
         createdAt: userData.createdAt || Date.now(),
         lastActive: userData.lastLogin || userData.lastActive || Date.now(),
         lastLogin: userData.lastLogin || userData.createdAt || Date.now(),
+        updatedAt: resolvedUpdatedAt || Date.now(),
         isOnline: userData.isOnline ?? false,
         totalBetsCount: userData.totalBetsCount ?? 0,
         totalWonAmount: userData.totalWonAmount ?? 0,
@@ -7828,9 +7901,28 @@ class AuthoritativeStore {
   }
 
   public adjustUserBalance(uid: string, delta: number, reason: string, adminId: string): boolean {
-    const user = this.users[uid];
+    const user = this.users[uid] || this.getUser(uid);
     if (!user) return false;
-    const amount = Math.abs(delta);
+    if (!this.users[uid]) {
+      this.users[uid] = user;
+    }
+    if (!Number.isFinite(delta) || delta === 0) {
+      return true;
+    }
+    const currentBal = Math.max(0, Number(user.balance ?? user.wallet ?? 0));
+    const amount = delta < 0 ? Math.min(Math.abs(delta), currentBal) : Math.abs(delta);
+    if (amount <= 0) {
+      user.balance = 0;
+      user.wallet = 0;
+      user.updatedAt = Date.now();
+      this.savePermanentUsersRegistry();
+      this.saveToStorage();
+      if (this.onUserSaved) {
+        try { this.onUserSaved(user); } catch {}
+      }
+      this.notify();
+      return true;
+    }
     const category = delta >= 0 ? 'credit' : 'debit';
 
     const tx = this.executeWalletTransaction({
@@ -7838,7 +7930,7 @@ class AuthoritativeStore {
       type: 'admin_adjustment',
       category,
       amount,
-      referenceId: `adj_${Date.now()}`,
+      referenceId: `adj_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       description: `Admin Adjustment: ${reason}`,
       status: 'completed',
       metadata: { adminId, reason }
@@ -7860,6 +7952,45 @@ class AuthoritativeStore {
     });
     this.notify();
     return true;
+  }
+
+  public setUserExactBalance(
+    uid: string,
+    targetBalance: number,
+    reason: string,
+    adminId: string
+  ): { success: boolean; newBalance: number; delta: number; error?: string } {
+    const user = this.users[uid] || this.getUser(uid);
+    if (!user) {
+      return { success: false, newBalance: 0, delta: 0, error: 'User not found' };
+    }
+    if (!this.users[uid]) {
+      this.users[uid] = user;
+    }
+    const cleanTarget = Math.max(0, Math.round(Number(targetBalance || 0) * 100) / 100);
+    const currentBal = Math.max(0, Math.round(Number(user.balance ?? user.wallet ?? 0) * 100) / 100);
+    const delta = Math.round((cleanTarget - currentBal) * 100) / 100;
+
+    if (delta !== 0) {
+      this.adjustUserBalance(uid, delta, reason, adminId);
+    }
+
+    // Explicitly guarantee exact wallet & balance match
+    user.balance = cleanTarget;
+    user.wallet = cleanTarget;
+    user.updatedAt = Date.now();
+    user.lastActive = Date.now();
+    this.savePermanentUsersRegistry();
+    this.saveToStorage();
+    if (this.onUserSaved) {
+      try {
+        this.onUserSaved(user);
+      } catch (e) {
+        console.warn('onUserSaved error:', e);
+      }
+    }
+    this.notify();
+    return { success: true, newBalance: cleanTarget, delta };
   }
 
   public updateUserBalance(uid: string, delta: number, reason: string, customType?: TransactionType): boolean {
@@ -8386,6 +8517,8 @@ class AuthoritativeStore {
     if (!user) return false;
     const prevStatus = user.status;
     user.status = status;
+    user.isBanned = status === 'banned' || status === 'suspended';
+    user.updatedAt = Date.now();
 
     const actionMap: Record<UserRecord['status'], string> = {
       active: 'USER_ACTIVATED',
@@ -8396,6 +8529,7 @@ class AuthoritativeStore {
     };
 
     this.savePermanentUsersRegistry();
+    this.saveToStorage();
     if (this.onUserSaved) {
       try { this.onUserSaved(user); } catch (e) { console.warn('onUserSaved error:', e); }
     }
@@ -9149,6 +9283,7 @@ class AuthoritativeStore {
 
     if (updates.username && updates.username.trim()) {
       user.username = updates.username.trim();
+      user.name = updates.username.trim();
     }
     if (updates.phone) {
       const cleanPhone = updates.phone.replace(/\D/g, '').slice(-10);
@@ -9165,9 +9300,12 @@ class AuthoritativeStore {
     }
     if (updates.status) {
       user.status = updates.status;
+      user.isBanned = updates.status === 'banned' || updates.status === 'blocked' || updates.status === 'suspended';
     }
+    user.updatedAt = Date.now();
 
     this.savePermanentUsersRegistry();
+    this.saveToStorage();
     if (typeof window !== 'undefined') {
       fetch('/api/auth/register', {
         method: 'POST',

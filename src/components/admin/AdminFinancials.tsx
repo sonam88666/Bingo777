@@ -11,8 +11,10 @@ import {
 } from 'lucide-react';
 import { DepositRecord, WithdrawalRecord } from '../../types';
 import { store } from '../../services/store';
+import { firebaseSync } from '../../services/firebaseSync';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
+import { rtdb, rtdbRef, rtdbUpdate } from '../../firebase';
 
 interface AdminFinancialsProps {
   adminId: string;
@@ -29,10 +31,16 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
   const [mode, setMode] = useState<'deposits' | 'withdrawals'>(initialMode);
   const [filterTab, setFilterTab] = useState<'pending' | 'approved' | 'rejected'>('pending');
   const [searchTerm, setSearchTerm] = useState('');
+  const [, setTick] = useState(0);
 
   useEffect(() => {
     setMode(initialMode);
   }, [initialMode]);
+
+  useEffect(() => {
+    const unsub = store.subscribe(() => setTick((t) => t + 1));
+    return unsub;
+  }, []);
 
   // Detail & Action Modals
   const [inspectingDeposit, setInspectingDeposit] = useState<DepositRecord | null>(null);
@@ -119,10 +127,23 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
         return;
       }
 
+      const updatedUser = store.getUser(dep.uid);
+      if (updatedUser) {
+        const nextBal = Number(updatedUser.balance ?? updatedUser.wallet ?? 0);
+        const nextTotalDep = Number(updatedUser.totalDeposit ?? updatedUser.totalDeposited ?? 0);
+        await rtdbUpdate(rtdbRef(rtdb, `users/${dep.uid}`), {
+          wallet: nextBal,
+          balance: nextBal,
+          totalDeposit: nextTotalDep,
+          totalDeposited: nextTotalDep,
+          updatedAt: Date.now()
+        }).catch(() => {});
+        await firebaseSync.pushUserToFirestore(updatedUser).catch(() => {});
+      }
+
       // Synchronize with backend API server
       await apiClient.approveDeposit(dep.id, adminId, tokenToUse, dep, finalInrToCredit).catch(() => {});
 
-      const updatedUser = store.getUser(dep.uid);
       showToast(
         dep.paymentMethod === 'USDT'
           ? `Approved $${dep.usdtAmount || ''} USDT deposit & credited ₹${finalInrToCredit.toLocaleString('en-IN')} INR to ${dep.username} (${dep.uid})!`
@@ -163,6 +184,19 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
     setIsSubmitting(true);
     try {
       const ok = store.approveWithdrawal(wth.id, adminId);
+      const updatedUser = store.getUser(wth.uid);
+      if (updatedUser) {
+        const nextBal = Number(updatedUser.balance ?? updatedUser.wallet ?? 0);
+        const nextTotalWit = Number(updatedUser.totalWithdraw ?? updatedUser.totalWithdrawn ?? 0);
+        await rtdbUpdate(rtdbRef(rtdb, `users/${wth.uid}`), {
+          wallet: nextBal,
+          balance: nextBal,
+          totalWithdraw: nextTotalWit,
+          totalWithdrawn: nextTotalWit,
+          updatedAt: Date.now()
+        }).catch(() => {});
+        await firebaseSync.pushUserToFirestore(updatedUser).catch(() => {});
+      }
       await apiClient.approveWithdrawal(wth.id, adminId, tokenToUse, wth).catch(() => {});
       if (ok) {
         showToast(
@@ -187,6 +221,16 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
     setIsSubmitting(true);
     try {
       const ok = store.rejectWithdrawal(rejectingWithdrawal.id, adminId, reason);
+      const updatedUser = store.getUser(rejectingWithdrawal.uid);
+      if (updatedUser) {
+        const nextBal = Number(updatedUser.balance ?? updatedUser.wallet ?? 0);
+        await rtdbUpdate(rtdbRef(rtdb, `users/${rejectingWithdrawal.uid}`), {
+          wallet: nextBal,
+          balance: nextBal,
+          updatedAt: Date.now()
+        }).catch(() => {});
+        await firebaseSync.pushUserToFirestore(updatedUser).catch(() => {});
+      }
       await apiClient
         .rejectWithdrawal(rejectingWithdrawal.id, adminId, reason, tokenToUse, rejectingWithdrawal)
         .catch(() => {});

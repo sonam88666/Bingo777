@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "node server.ts",
-    "build": "vite build && rm -rf dist/assets/aistudio",
+    "build": "vite build && rm -rf dist/assets/aistudio && mkdir -p android/app/src/main/assets/public && rm -rf android/app/src/main/assets/public/* && cp -r dist/* android/app/src/main/assets/public/",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",

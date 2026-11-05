@@ -469,10 +469,20 @@ class FirebaseSyncService {
     await this.ensureAuth();
 
     try {
+      // Pull authoritative RTDB state first so stale local cache never overwrites Admin updates
+      await this.pullUsersFromRtdb();
+
       const localUsers = Object.values(store.getUsers());
       for (const u of localUsers) {
         if (u && u.uid && !u.uid.startsWith('usr_demo_')) {
-          await this.pushUserToFirestore(u);
+          try {
+            const snap = await rtdbGet(rtdbRef(rtdb, `users/${u.uid}`));
+            if (!snap.exists()) {
+              await this.pushUserToFirestore(u);
+            }
+          } catch {
+            // Ignore transient network read errors
+          }
         }
       }
 
@@ -1313,16 +1323,21 @@ class FirebaseSyncService {
               uid,
               phone: data.phone || fallbackPhone || undefined,
               username: data.username || undefined,
+              name: data.name || data.username || undefined,
               passwordHash: data.passwordHash || undefined,
+              wallet: typeof data.wallet === 'number' ? data.wallet : undefined,
               balance: typeof data.balance === 'number' ? data.balance : undefined,
               vipLevel: typeof data.vipLevel === 'number' ? data.vipLevel : undefined,
               status: data.status || 'active',
+              isBanned: typeof data.isBanned === 'boolean' ? data.isBanned : undefined,
+              isAdmin: typeof data.isAdmin === 'boolean' ? data.isAdmin : undefined,
               role: data.role || undefined,
               totalBetsCount: data.totalBetsCount,
               totalWonAmount: data.totalWonAmount,
               totalLostAmount: data.totalLostAmount,
               referralCode: data.referralCode || undefined,
-              devices: data.devices || undefined
+              devices: data.devices || undefined,
+              updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : undefined
             });
           } else {
             const localUser = store.getUser(uid);
@@ -1358,7 +1373,7 @@ class FirebaseSyncService {
     const cleanBalance = Math.max(0, Number(user.balance ?? user.wallet ?? 0));
     const currentDeviceId = store.getOrCreateClientDevice().deviceId;
 
-    // 1. Fetch existing record in RTDB first so we NEVER overwrite role, isAdmin, boundDeviceId, or createdAt
+    // 1. Fetch existing record in RTDB first so we NEVER overwrite role, isAdmin, boundDeviceId, createdAt, or newer Admin wallet updates
     let existing: Record<string, any> | null = null;
     try {
       const snap = await rtdbGet(rtdbRef(rtdb, `users/${user.uid}`));
@@ -1366,6 +1381,15 @@ class FirebaseSyncService {
         existing = snap.val();
       }
     } catch {}
+
+    const existingCloudTs = Number(existing?.updatedAt || 0);
+    const localUserTs = Number(user.updatedAt || 0);
+    const isCloudStrictlyNewer = existingCloudTs > 0 && (localUserTs === 0 || existingCloudTs > localUserTs + 1500);
+
+    const resolvedBalance =
+      isCloudStrictlyNewer && typeof (existing?.wallet ?? existing?.balance) === 'number'
+        ? Math.max(0, Number(existing?.wallet ?? existing?.balance ?? 0))
+        : cleanBalance;
 
     const normPhone = (cleanPhone || existing?.phone || '').replace(/\D/g, '');
     const isMasterPhone = normPhone === '9012634797' || normPhone.endsWith('9012634797');
@@ -1402,20 +1426,27 @@ class FirebaseSyncService {
       Number(user.totalWithdraw ?? user.totalWithdrawn ?? 0)
     );
 
+    const nowWriteTs = Math.max(Date.now(), existingCloudTs, localUserTs);
+
     const userPayload: Record<string, any> = {
       uid: user.uid,
       name: user.name || user.username || existing?.name || existing?.username || `Player_${user.uid.slice(-4)}`,
       username: user.username || user.name || existing?.username || `Player_${user.uid.slice(-4)}`,
       phone: cleanPhone || existing?.phone || '',
-      wallet: cleanBalance,
-      balance: cleanBalance,
+      wallet: resolvedBalance,
+      balance: resolvedBalance,
       totalDeposit: totalDepositVal,
       totalDeposited: totalDepositVal,
       totalWithdraw: totalWithdrawVal,
       totalWithdrawn: totalWithdrawVal,
       vipLevel: Math.min(10, Math.max(0, Number(user.vipLevel ?? existing?.vipLevel) || 1)),
-      status: user.status || existing?.status || 'active',
-      isBanned: typeof user.isBanned === 'boolean' ? user.isBanned : (user.status === 'blocked' || Boolean(existing?.isBanned)),
+      status: (isCloudStrictlyNewer ? existing?.status : user.status) || existing?.status || 'active',
+      isBanned:
+        isCloudStrictlyNewer && typeof existing?.isBanned === 'boolean'
+          ? existing.isBanned
+          : typeof user.isBanned === 'boolean'
+          ? user.isBanned
+          : user.status === 'blocked' || user.status === 'banned' || Boolean(existing?.isBanned),
       role: preservedRole,
       isAdmin: preservedIsAdmin,
       boundDeviceId: preservedBoundDeviceId,
@@ -1431,7 +1462,7 @@ class FirebaseSyncService {
       lastLogin: user.lastLogin || Date.now(),
       isOnline: true,
       devices: user.devices || existing?.devices || {},
-      updatedAt: Date.now()
+      updatedAt: nowWriteTs
     };
 
     if (user.passwordHash || existing?.passwordHash) {
@@ -1708,7 +1739,10 @@ class FirebaseSyncService {
     let latestPeriod = store.getCurrentRound()?.period;
 
     try {
-      // Pull from RTDB first so cloud changes are never overwritten by stale local cache
+      const rtdbUserUids = new Set<string>();
+      let hasRtdbSettings = false;
+
+      // Pull from RTDB first as the primary real-time source of truth
       try {
         const rtdbUsersSnap = await rtdbGet(rtdbRef(rtdb, 'users'));
         if (rtdbUsersSnap.exists()) {
@@ -1717,7 +1751,12 @@ class FirebaseSyncService {
             Object.entries(val).forEach(([key, raw]: [string, any]) => {
               const uid = raw?.uid || key;
               if (uid && !String(uid).startsWith('usr_demo_')) {
-                store.updateUserFromFirestore({ ...raw, uid });
+                rtdbUserUids.add(uid);
+                store.updateUserFromFirestore({
+                  ...raw,
+                  uid,
+                  updatedAt: Number(raw?.updatedAt || Date.now())
+                });
                 if (uid === activeUid && typeof (raw.wallet ?? raw.balance) === 'number') {
                   newBalance = Number(raw.wallet ?? raw.balance);
                 }
@@ -1729,20 +1768,80 @@ class FirebaseSyncService {
         if (rtdbSettingsSnap.exists()) {
           const sVal = rtdbSettingsSnap.val();
           if (sVal && typeof sVal === 'object') {
-            store.ingestCloudAdminSettings(sVal as Partial<AdminSettings>);
+            hasRtdbSettings = true;
+            store.ingestCloudAdminSettings({
+              ...(sVal as Partial<AdminSettings>),
+              updatedAt: Number(sVal.updatedAt || Date.now())
+            });
+          }
+        }
+        const rtdbDepsSnap = await rtdbGet(rtdbRef(rtdb, 'deposits'));
+        if (rtdbDepsSnap.exists()) {
+          const dVal = rtdbDepsSnap.val();
+          if (dVal && typeof dVal === 'object') {
+            Object.entries(dVal).forEach(([key, raw]: [string, any]) => {
+              if (raw && typeof raw === 'object' && (raw.id || key)) {
+                store.ingestCloudDeposit({
+                  id: raw.id || key,
+                  uid: raw.uid,
+                  username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
+                  phone: raw.phone || '',
+                  amount: Number(raw.amount) || 0,
+                  usdtAmount: raw.usdtAmount ? Number(raw.usdtAmount) : undefined,
+                  paymentMethod: raw.paymentMethod || raw.method || 'UPI',
+                  referenceId: raw.referenceId || raw.utrOrRef || '',
+                  upiReceiverId: raw.upiReceiverId || '',
+                  status: raw.status || 'pending',
+                  submittedAt: typeof raw.submittedAt === 'number' ? raw.submittedAt : Date.now(),
+                  reviewedAt: raw.reviewedAt || undefined,
+                  reviewedBy: raw.reviewedBy || undefined,
+                  adminNote: raw.adminNote || undefined
+                });
+              }
+            });
+          }
+        }
+        const rtdbWithSnap = await rtdbGet(rtdbRef(rtdb, 'withdrawals'));
+        if (rtdbWithSnap.exists()) {
+          const wVal = rtdbWithSnap.val();
+          if (wVal && typeof wVal === 'object') {
+            Object.entries(wVal).forEach(([key, raw]: [string, any]) => {
+              if (raw && typeof raw === 'object' && (raw.id || key)) {
+                store.ingestCloudWithdrawal({
+                  id: raw.id || key,
+                  uid: raw.uid,
+                  username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
+                  phone: raw.phone || '',
+                  amount: Number(raw.amount) || 0,
+                  usdtAmount: raw.usdtAmount ? Number(raw.usdtAmount) : undefined,
+                  payoutMethod: raw.payoutMethod || (raw.method === 'BANK' ? 'Bank Transfer' : 'UPI'),
+                  accountDetails: raw.accountDetails || { upiId: raw.destination || '' },
+                  status: raw.status || 'pending',
+                  requestedAt: typeof raw.requestedAt === 'number' ? raw.requestedAt : Date.now(),
+                  processedAt: raw.processedAt || undefined,
+                  processedBy: raw.processedBy || undefined,
+                  rejectionReason: raw.rejectionReason || undefined
+                });
+              }
+            });
           }
         }
       } catch {}
 
-      // Pull from Firestore
+      // Pull from Firestore only for records not already newer in RTDB
       const usersSnap = await getDocs(collection(db, 'users'));
       usersSnap.forEach((docSnap) => {
         const data = docSnap.data() as Partial<UserRecord>;
         const uid = data.uid || docSnap.id;
         if (uid && !uid.startsWith('usr_demo_')) {
-          store.updateUserFromFirestore({ ...data, uid });
-          if (uid === activeUid && typeof data.balance === 'number') {
-            newBalance = data.balance;
+          const existingLocal = store.getUser(uid);
+          const fsUpdatedAt = Number((data as any).updatedAt || 0);
+          const rtdbOrLocalUpdatedAt = Number(existingLocal?.updatedAt || 0);
+          if (!rtdbUserUids.has(uid) || (fsUpdatedAt > 0 && fsUpdatedAt > rtdbOrLocalUpdatedAt)) {
+            store.updateUserFromFirestore({ ...data, uid });
+            if (uid === activeUid && typeof (data.wallet ?? data.balance) === 'number') {
+              newBalance = Number(data.wallet ?? data.balance);
+            }
           }
         }
       });
@@ -1823,9 +1922,11 @@ class FirebaseSyncService {
         }
       });
 
-      const settingsSnap = await getDoc(doc(db, 'admin_settings', 'config'));
-      if (settingsSnap.exists()) {
-        store.ingestCloudAdminSettings(settingsSnap.data() as Partial<AdminSettings>);
+      if (!hasRtdbSettings) {
+        const settingsSnap = await getDoc(doc(db, 'admin_settings', 'config'));
+        if (settingsSnap.exists()) {
+          store.ingestCloudAdminSettings(settingsSnap.data() as Partial<AdminSettings>);
+        }
       }
 
       if (activeUid) {

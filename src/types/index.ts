@@ -56,6 +56,7 @@ export interface UserRecord {
   signupBonusPending?: number;
   firstDepositBonusClaimed?: boolean;
   lastLogin?: number;
+  updatedAt?: number;
   passwordHash?: string;
 }
 

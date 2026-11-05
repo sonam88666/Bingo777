@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Gift,
   Plus,
@@ -19,6 +19,12 @@ interface AdminGiftCodesProps {
 export const AdminGiftCodes: React.FC<AdminGiftCodesProps> = ({ adminId, masterToken }) => {
   const { showToast } = useToast();
   const [filterTab, setFilterTab] = useState<'all' | 'active' | 'expired' | 'used'>('all');
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const unsub = store.subscribe(() => setTick((t) => t + 1));
+    return unsub;
+  }, []);
 
   // Create / Edit Modal
   const [showModal, setShowModal] = useState<boolean>(false);

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Gift,
   Percent,
@@ -8,6 +8,7 @@ import {
   Clock
 } from 'lucide-react';
 import { store } from '../../services/store';
+import { firebaseSync } from '../../services/firebaseSync';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
 
@@ -19,6 +20,12 @@ interface AdminBonusesReferralProps {
 export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ adminId, masterToken }) => {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'settings' | 'referral_list' | 'history'>('settings');
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const unsub = store.subscribe(() => setTick((t) => t + 1));
+    return unsub;
+  }, []);
 
   const currentSettings = store.getAdminSettings();
   const referrals = store.getReferrals();
@@ -55,6 +62,7 @@ export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ admi
       adminId,
       `Toggled ${program} from Bonuses & Referral screen`
     );
+    firebaseSync.pushAdminSettingsToRtdb(store.getAdminSettings()).catch(() => {});
     apiClient.toggleFeature(program, nextState, true, 'Bonus toggle update', adminId, tokenToUse).catch(() => {});
     showToast(`${program.replace(/_/g, ' ').toUpperCase()} ${nextState ? 'Enabled' : 'Disabled'}`, 'info');
   };
@@ -74,6 +82,7 @@ export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ admi
     };
 
     store.updateAdminSettings(updated, adminId);
+    await firebaseSync.pushAdminSettingsToRtdb(store.getAdminSettings()).catch(() => {});
     await apiClient.updateSettings(updated, adminId, tokenToUse).catch(() => {});
     showToast('Bonus & Referral settings saved and synchronized!', 'success');
   };

@@ -207,7 +207,11 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   const withdrawalsList = store.getWithdrawals();
 
   // Compute user helper metrics (wallet, totalDeposit, totalWithdraw, device IDs, admin & banned status)
-  const getUserWallet = (u: UserRecord): number => Number(u.wallet ?? u.balance ?? 0);
+  const getUserWallet = (u: UserRecord): number => {
+    const bal = typeof u.balance === 'number' && Number.isFinite(u.balance) ? u.balance : undefined;
+    const wal = typeof u.wallet === 'number' && Number.isFinite(u.wallet) ? u.wallet : undefined;
+    return Number(bal ?? wal ?? 0);
+  };
 
   const getUserTotalDeposit = (u: UserRecord): number => {
     const storedDep = Number(u.totalDeposit ?? u.totalDeposited ?? 0);
@@ -826,46 +830,56 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
 
   const handleExecuteBalanceAdjustment = async (e: React.FormEvent) => {
     e.preventDefault();
-    const target = walletEditTargetUser || selectedUser;
+    const rawTarget = walletEditTargetUser || selectedUser;
+    const target = rawTarget ? usersMap[rawTarget.uid] || store.getUser(rawTarget.uid) || rawTarget : null;
     if (!target || !balanceModalMode) return;
-    if (adjustAmount < 0 || (balanceModalMode !== 'set' && adjustAmount <= 0)) {
+    const cleanInputAmount = Number(adjustAmount);
+    if (!Number.isFinite(cleanInputAmount) || cleanInputAmount < 0 || (balanceModalMode !== 'set' && cleanInputAmount <= 0)) {
       showToast('Please enter a valid amount', 'error');
       return;
     }
     const reasonText = adjustReason.trim() || 'Admin wallet update';
 
     const currentBal = getUserWallet(target);
-    const delta =
-      balanceModalMode === 'set'
-        ? adjustAmount - currentBal
-        : balanceModalMode === 'credit'
-        ? adjustAmount
-        : -adjustAmount;
-
-    if (delta === 0) {
-      setBalanceModalMode(null);
-      setWalletEditTargetUser(null);
+    if (balanceModalMode === 'debit' && cleanInputAmount > currentBal) {
+      showToast(`Cannot deduct ₹${cleanInputAmount} (Available: ₹${currentBal.toFixed(2)})`, 'error');
       return;
     }
 
-    const ok = store.adjustUserBalance(target.uid, delta, reasonText, adminId);
-    if (ok) {
-      const nextWallet = Math.max(0, Math.round((currentBal + delta) * 100) / 100);
+    const nextWallet =
+      balanceModalMode === 'set'
+        ? Math.max(0, Math.round(cleanInputAmount * 100) / 100)
+        : balanceModalMode === 'credit'
+        ? Math.max(0, Math.round((currentBal + cleanInputAmount) * 100) / 100)
+        : Math.max(0, Math.round((currentBal - cleanInputAmount) * 100) / 100);
+
+    const res = store.setUserExactBalance(target.uid, nextWallet, reasonText, adminId);
+    if (res.success) {
+      const nowTs = Date.now();
       await rtdbUpdate(rtdbRef(rtdb, `users/${target.uid}`), {
         wallet: nextWallet,
         balance: nextWallet,
-        updatedAt: Date.now()
+        updatedAt: nowTs
       }).catch(() => {});
-      await apiClient.adjustBalance(target.uid, delta, reasonText, adminId, tokenToUse).catch(() => {});
+      const updatedUser = store.getUser(target.uid);
+      if (updatedUser) {
+        await firebaseSync.pushUserToFirestore(updatedUser).catch(() => {});
+      }
+      if (res.delta !== 0) {
+        await apiClient.adjustBalance(target.uid, res.delta, reasonText, adminId, tokenToUse).catch(() => {});
+      }
       showToast(
-        `Updated wallet for ${target.name || target.username} to ₹${nextWallet.toLocaleString('en-IN')}`,
+        `✅ Updated wallet for ${target.name || target.username} to ₹${nextWallet.toLocaleString('en-IN', {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 2
+        })}`,
         'success'
       );
       setBalanceModalMode(null);
       setWalletEditTargetUser(null);
       setAdjustReason('');
     } else {
-      showToast('Cannot deduct more than available wallet balance', 'error');
+      showToast(res.error || 'Failed to update wallet balance', 'error');
     }
   };
 
@@ -906,6 +920,9 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
         isBanned: editStatus === 'banned' || editStatus === 'blocked',
         updatedAt: Date.now()
       }).catch(() => {});
+      if (res.user) {
+        await firebaseSync.pushUserToFirestore(res.user).catch(() => {});
+      }
       await apiClient
         .updateUserStatus(selectedUser.uid, editStatus, editReason || 'Admin edit', adminId, tokenToUse)
         .catch(() => {});
@@ -932,6 +949,10 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
         status: nextStatus,
         updatedAt: Date.now()
       }).catch(() => {});
+      const updatedUser = store.getUser(selectedUser.uid);
+      if (updatedUser) {
+        await firebaseSync.pushUserToFirestore(updatedUser).catch(() => {});
+      }
       await apiClient.updateUserStatus(selectedUser.uid, nextStatus, reason, adminId, tokenToUse).catch(() => {});
       showToast(
         `User ${selectedUser.uid} is now ${nextStatus.toUpperCase()}`,
@@ -975,23 +996,29 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
     }
   };
 
-  // ============================================================================
-  // DEDICATED SUB-SCREEN: USER DETAILS
-  // ============================================================================
-  if (selectedUser) {
-    const totalUserDeposits = getUserTotalDeposit(selectedUser);
-    const totalUserWithdrawals = getUserTotalWithdraw(selectedUser);
-    const userTransactions = store.getTransactions(selectedUser.uid);
-    const userBets = store.getLiveBets().filter((b) => b.uid === selectedUser.uid);
-    const userReferrals = store
-      .getReferrals()
-      .filter((r) => r.referrerUid === selectedUser.uid || r.referredUid === selectedUser.uid);
-    const devicesList = Object.values(selectedUser.devices || {});
-    const selectedIsAdmin = isUserAdmin(selectedUser);
+  const activeWalletTarget = walletEditTargetUser
+    ? usersMap[walletEditTargetUser.uid] || walletEditTargetUser
+    : selectedUser;
 
-    return (
-      <div className="space-y-4">
-        {/* Sub-screen Back Bar */}
+  // ============================================================================
+  // UNIFIED RENDER: USER DETAILS SUB-SCREEN OR MAIN USER LIST + SHARED MODALS
+  // ============================================================================
+  return (
+    <div className="space-y-2.5">
+      {selectedUser ? (() => {
+        const totalUserDeposits = getUserTotalDeposit(selectedUser);
+        const totalUserWithdrawals = getUserTotalWithdraw(selectedUser);
+        const userTransactions = store.getTransactions(selectedUser.uid);
+        const userBets = store.getLiveBets().filter((b) => b.uid === selectedUser.uid);
+        const userReferrals = store
+          .getReferrals()
+          .filter((r) => r.referrerUid === selectedUser.uid || r.referredUid === selectedUser.uid);
+        const devicesList = Object.values(selectedUser.devices || {});
+        const selectedIsAdmin = isUserAdmin(selectedUser);
+
+        return (
+          <div className="space-y-4">
+            {/* Sub-screen Back Bar */}
         <div className="flex items-center justify-between">
           <button
             type="button"
@@ -1693,18 +1720,11 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
             </div>
           </div>
         )}
-      </div>
-    );
-  }
-
-  // ============================================================================
-  // MAIN SCREEN: CLEAN & COMPACT USER LIST + FILTER BAR
-  // ============================================================================
-  const activeWalletTarget = walletEditTargetUser || selectedUser;
-
-  return (
-    <div className="space-y-2.5">
-      {/* 1. COMPACT TOP SEARCH + SORT + QUICK TOOLBAR */}
+          </div>
+        );
+      })() : (
+        <div className="space-y-2.5">
+          {/* 1. COMPACT TOP SEARCH + SORT + QUICK TOOLBAR */}
       <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Instant Search Bar by Username, Phone Number, UID, or Device Name */}
@@ -2189,6 +2209,8 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
               </button>
             </div>
           ))}
+        </div>
+      )}
         </div>
       )}
 
