@@ -15,7 +15,8 @@ import {
   rtdbOnValue,
   rtdbUpdate,
   rtdbRemove,
-  rtdbRunTransaction
+  rtdbRunTransaction,
+  isFirestoreAvailable
 } from '../firebase';
 import { onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
 import { getDocs } from 'firebase/firestore';
@@ -575,7 +576,8 @@ class FirebaseSyncService {
       }
     } catch {}
 
-    // 2. Firestore real-time round sync
+    // 2. Firestore real-time round sync (only if Firestore is enabled)
+    if (!isFirestoreAvailable()) return;
     try {
       await this.ensureAuth();
       const docId = round.isResolved ? `resolved_${round.gameType}` : round.gameType;
@@ -592,7 +594,7 @@ class FirebaseSyncService {
   }
 
   public async attachRealtimeGameRoundsSync() {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || !isFirestoreAvailable()) return;
     await this.ensureAuth();
 
     try {
@@ -615,7 +617,7 @@ class FirebaseSyncService {
   }
 
   public async attachRealtimeGlobalEntitiesSync() {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || !isFirestoreAvailable()) return;
     await this.ensureAuth();
 
     // 1. Real-time Firestore listener for ALL Users
@@ -866,6 +868,7 @@ class FirebaseSyncService {
       }
     } catch {}
 
+    if (!isFirestoreAvailable()) return;
     try {
       await this.ensureAuth();
       await setDoc(doc(db, 'aviator_rounds', 'latest'), payload, { merge: true });
@@ -940,7 +943,9 @@ class FirebaseSyncService {
               const settledOrUpdatedAt = Number(rawBet.settledAt || rawBet.updatedAt || rawBet.timestamp || 0);
               if (status !== 'pending' && settledOrUpdatedAt > 0 && now - settledOrUpdatedAt > ONE_HOUR_MS) {
                 await rtdbRemove(rtdbRef(rtdb, `live_bets/${betKey}`)).catch(() => {});
-                await deleteDoc(doc(db, 'live_bets', betKey)).catch(() => {});
+                if (isFirestoreAvailable()) {
+                  await deleteDoc(doc(db, 'live_bets', betKey)).catch(() => {});
+                }
                 purgedLiveBets++;
               }
             }
@@ -1175,7 +1180,7 @@ class FirebaseSyncService {
   }
 
   public async attachRealtimeAdminSettingsSync() {
-    if (typeof window === 'undefined' || this.activeRtdbSettingsUnsubscribe) return;
+    if (typeof window === 'undefined' || this.activeRtdbSettingsUnsubscribe || !isFirestoreAvailable()) return;
     await this.ensureAuth();
 
     try {
@@ -1213,6 +1218,7 @@ class FirebaseSyncService {
       await rtdbUpdate(rtdbRef(rtdb, 'admin_settings'), cleanPayload);
     } catch {}
 
+    if (!isFirestoreAvailable()) return;
     try {
       await this.ensureAuth();
       await setDoc(doc(db, 'admin_settings', 'config'), cleanPayload, { merge: true });
@@ -1328,7 +1334,8 @@ class FirebaseSyncService {
       );
     } catch {}
 
-    // 2. Firestore live listener on /users/{uid}
+    // 2. Firestore live listener on /users/{uid} (only if Firestore is enabled)
+    if (!isFirestoreAvailable()) return;
     await this.ensureAuth();
     try {
       const userDocRef = doc(db, 'users', uid);
@@ -1500,6 +1507,8 @@ class FirebaseSyncService {
       console.warn('[FirebaseSync] RTDB pushUser notice:', e);
     }
 
+    if (!isFirestoreAvailable()) return true;
+
     // 2. Write to Firestore (/users/{uid}) with merge: true
     await this.ensureAuth();
     try {
@@ -1552,6 +1561,7 @@ class FirebaseSyncService {
       await rtdbSet(rtdbRef(rtdb, `transactions/${tx.id}`), payload);
     } catch {}
 
+    if (!isFirestoreAvailable()) return;
     await this.ensureAuth();
     try {
       await setDoc(doc(db, 'transactions', tx.id), payload, { merge: true });
@@ -1587,6 +1597,7 @@ class FirebaseSyncService {
       await rtdbSet(rtdbRef(rtdb, `deposits/${dep.id}`), payload);
     } catch {}
 
+    if (!isFirestoreAvailable()) return;
     await this.ensureAuth();
     try {
       await setDoc(doc(db, 'deposits', dep.id), payload, { merge: true });
@@ -1628,6 +1639,7 @@ class FirebaseSyncService {
       await rtdbSet(rtdbRef(rtdb, `withdrawals/${w.id}`), payload);
     } catch {}
 
+    if (!isFirestoreAvailable()) return;
     await this.ensureAuth();
     try {
       await setDoc(doc(db, 'withdrawals', w.id), payload, { merge: true });
@@ -1661,6 +1673,7 @@ class FirebaseSyncService {
       await rtdbSet(rtdbRef(rtdb, `live_bets/${bet.betId}`), payload);
     } catch {}
 
+    if (!isFirestoreAvailable()) return;
     await this.ensureAuth();
     try {
       await setDoc(doc(db, 'live_bets', bet.betId), payload, { merge: true });
@@ -1697,6 +1710,7 @@ class FirebaseSyncService {
       await rtdbSet(rtdbRef(rtdb, `referrals/${ref.id}`), payload);
     } catch {}
 
+    if (!isFirestoreAvailable()) return;
     await this.ensureAuth();
     try {
       await setDoc(doc(db, 'referrals', ref.id), payload, { merge: true });
@@ -1846,104 +1860,106 @@ class FirebaseSyncService {
         }
       } catch {}
 
-      // Pull from Firestore only for records not already newer in RTDB
-      const usersSnap = await getDocs(collection(db, 'users'));
-      usersSnap.forEach((docSnap) => {
-        const data = docSnap.data() as Partial<UserRecord>;
-        const uid = data.uid || docSnap.id;
-        if (uid && !uid.startsWith('usr_demo_')) {
-          const existingLocal = store.getUser(uid);
-          const fsUpdatedAt = Number((data as any).updatedAt || 0);
-          const rtdbOrLocalUpdatedAt = Number(existingLocal?.updatedAt || 0);
-          if (!rtdbUserUids.has(uid) || (fsUpdatedAt > 0 && fsUpdatedAt > rtdbOrLocalUpdatedAt)) {
-            store.updateUserFromFirestore({ ...data, uid });
-            if (uid === activeUid && typeof (data.wallet ?? data.balance) === 'number') {
-              newBalance = Number(data.wallet ?? data.balance);
+      // Pull from Firestore only if Firestore is enabled and for records not already newer in RTDB
+      if (isFirestoreAvailable()) {
+        const usersSnap = await getDocs(collection(db, 'users'));
+        usersSnap.forEach((docSnap) => {
+          const data = docSnap.data() as Partial<UserRecord>;
+          const uid = data.uid || docSnap.id;
+          if (uid && !uid.startsWith('usr_demo_')) {
+            const existingLocal = store.getUser(uid);
+            const fsUpdatedAt = Number((data as any).updatedAt || 0);
+            const rtdbOrLocalUpdatedAt = Number(existingLocal?.updatedAt || 0);
+            if (!rtdbUserUids.has(uid) || (fsUpdatedAt > 0 && fsUpdatedAt > rtdbOrLocalUpdatedAt)) {
+              store.updateUserFromFirestore({ ...data, uid });
+              if (uid === activeUid && typeof (data.wallet ?? data.balance) === 'number') {
+                newBalance = Number(data.wallet ?? data.balance);
+              }
             }
           }
-        }
-      });
+        });
 
-      const depSnap = await getDocs(collection(db, 'deposits'));
-      depSnap.forEach((docSnap) => {
-        const raw = docSnap.data();
-        if (raw && (raw.id || docSnap.id)) {
-          store.ingestCloudDeposit({
-            id: raw.id || docSnap.id,
-            uid: raw.uid,
-            username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
-            phone: raw.phone || '',
-            amount: Number(raw.amount) || 0,
-            usdtAmount: raw.usdtAmount ? Number(raw.usdtAmount) : undefined,
-            paymentMethod: raw.paymentMethod || raw.method || 'UPI',
-            referenceId: raw.referenceId || raw.utrOrRef || '',
-            upiReceiverId: raw.upiReceiverId || '',
-            status: raw.status || 'pending',
-            submittedAt: typeof raw.submittedAt === 'number' ? raw.submittedAt : Date.now(),
-            reviewedAt: raw.reviewedAt || undefined,
-            reviewedBy: raw.reviewedBy || undefined,
-            adminNote: raw.adminNote || undefined
-          });
-        }
-      });
+        const depSnap = await getDocs(collection(db, 'deposits'));
+        depSnap.forEach((docSnap) => {
+          const raw = docSnap.data();
+          if (raw && (raw.id || docSnap.id)) {
+            store.ingestCloudDeposit({
+              id: raw.id || docSnap.id,
+              uid: raw.uid,
+              username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
+              phone: raw.phone || '',
+              amount: Number(raw.amount) || 0,
+              usdtAmount: raw.usdtAmount ? Number(raw.usdtAmount) : undefined,
+              paymentMethod: raw.paymentMethod || raw.method || 'UPI',
+              referenceId: raw.referenceId || raw.utrOrRef || '',
+              upiReceiverId: raw.upiReceiverId || '',
+              status: raw.status || 'pending',
+              submittedAt: typeof raw.submittedAt === 'number' ? raw.submittedAt : Date.now(),
+              reviewedAt: raw.reviewedAt || undefined,
+              reviewedBy: raw.reviewedBy || undefined,
+              adminNote: raw.adminNote || undefined
+            });
+          }
+        });
 
-      const wSnap = await getDocs(collection(db, 'withdrawals'));
-      wSnap.forEach((docSnap) => {
-        const raw = docSnap.data();
-        if (raw && (raw.id || docSnap.id)) {
-          store.ingestCloudWithdrawal({
-            id: raw.id || docSnap.id,
-            uid: raw.uid,
-            username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
-            phone: raw.phone || '',
-            amount: Number(raw.amount) || 0,
-            usdtAmount: raw.usdtAmount ? Number(raw.usdtAmount) : undefined,
-            payoutMethod: raw.payoutMethod || (raw.method === 'BANK' ? 'Bank Transfer' : 'UPI'),
-            accountDetails: raw.accountDetails || { upiId: raw.destination || '' },
-            status: raw.status || 'pending',
-            requestedAt: typeof raw.requestedAt === 'number' ? raw.requestedAt : Date.now(),
-            processedAt: raw.processedAt || undefined,
-            processedBy: raw.processedBy || undefined,
-            rejectionReason: raw.rejectionReason || undefined
-          });
-        }
-      });
+        const wSnap = await getDocs(collection(db, 'withdrawals'));
+        wSnap.forEach((docSnap) => {
+          const raw = docSnap.data();
+          if (raw && (raw.id || docSnap.id)) {
+            store.ingestCloudWithdrawal({
+              id: raw.id || docSnap.id,
+              uid: raw.uid,
+              username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
+              phone: raw.phone || '',
+              amount: Number(raw.amount) || 0,
+              usdtAmount: raw.usdtAmount ? Number(raw.usdtAmount) : undefined,
+              payoutMethod: raw.payoutMethod || (raw.method === 'BANK' ? 'Bank Transfer' : 'UPI'),
+              accountDetails: raw.accountDetails || { upiId: raw.destination || '' },
+              status: raw.status || 'pending',
+              requestedAt: typeof raw.requestedAt === 'number' ? raw.requestedAt : Date.now(),
+              processedAt: raw.processedAt || undefined,
+              processedBy: raw.processedBy || undefined,
+              rejectionReason: raw.rejectionReason || undefined
+            });
+          }
+        });
 
-      const txSnap = await getDocs(collection(db, 'transactions'));
-      txSnap.forEach((docSnap) => {
-        const raw = docSnap.data();
-        if (raw && (raw.id || docSnap.id) && raw.uid) {
-          store.ingestCloudTransaction({
-            id: raw.id || docSnap.id,
-            uid: raw.uid,
-            type: raw.type,
-            category: raw.category,
-            amount: Number(raw.amount) || 0,
-            balanceBefore: Number(raw.balanceBefore) || 0,
-            balanceAfter: Number(raw.balanceAfter) || 0,
-            referenceId: raw.referenceId || '',
-            description: raw.description || '',
-            timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
-            status: raw.status || 'completed',
-            metadata: raw.metadata || undefined,
-            integritySeal: raw.integritySeal || undefined
-          });
-        }
-      });
+        const txSnap = await getDocs(collection(db, 'transactions'));
+        txSnap.forEach((docSnap) => {
+          const raw = docSnap.data();
+          if (raw && (raw.id || docSnap.id) && raw.uid) {
+            store.ingestCloudTransaction({
+              id: raw.id || docSnap.id,
+              uid: raw.uid,
+              type: raw.type,
+              category: raw.category,
+              amount: Number(raw.amount) || 0,
+              balanceBefore: Number(raw.balanceBefore) || 0,
+              balanceAfter: Number(raw.balanceAfter) || 0,
+              referenceId: raw.referenceId || '',
+              description: raw.description || '',
+              timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
+              status: raw.status || 'completed',
+              metadata: raw.metadata || undefined,
+              integritySeal: raw.integritySeal || undefined
+            });
+          }
+        });
 
-      const roundsSnap = await getDocs(collection(db, 'wingo_rounds'));
-      roundsSnap.forEach((docSnap) => {
-        const val = docSnap.data();
-        if (val && val.period && val.gameType && !String(val.period).startsWith('20261013')) {
-          store.ingestCloudRound(val as Partial<GameRound>);
-          if (val.period && !val.isResolved) latestPeriod = val.period;
-        }
-      });
+        const roundsSnap = await getDocs(collection(db, 'wingo_rounds'));
+        roundsSnap.forEach((docSnap) => {
+          const val = docSnap.data();
+          if (val && val.period && val.gameType && !String(val.period).startsWith('20261013')) {
+            store.ingestCloudRound(val as Partial<GameRound>);
+            if (val.period && !val.isResolved) latestPeriod = val.period;
+          }
+        });
 
-      if (!hasRtdbSettings) {
-        const settingsSnap = await getDoc(doc(db, 'admin_settings', 'config'));
-        if (settingsSnap.exists()) {
-          store.ingestCloudAdminSettings(settingsSnap.data() as Partial<AdminSettings>);
+        if (!hasRtdbSettings) {
+          const settingsSnap = await getDoc(doc(db, 'admin_settings', 'config'));
+          if (settingsSnap.exists()) {
+            store.ingestCloudAdminSettings(settingsSnap.data() as Partial<AdminSettings>);
+          }
         }
       }
 
@@ -2039,12 +2055,14 @@ class FirebaseSyncService {
       await Promise.all(rtdbRemovals);
 
       // 3. Firestore Document Deletions
-      try {
-        await deleteDoc(doc(db, 'users', uid)).catch(() => {});
-        await deleteDoc(doc(db, 'users', uid, 'private', 'info')).catch(() => {});
-      } catch {}
+      if (isFirestoreAvailable()) {
+        try {
+          await deleteDoc(doc(db, 'users', uid)).catch(() => {});
+          await deleteDoc(doc(db, 'users', uid, 'private', 'info')).catch(() => {});
+        } catch {}
+      }
 
-      return { success: true, message: `User ${uid} successfully wiped from Firebase Realtime Database & Firestore.` };
+      return { success: true, message: `User ${uid} successfully wiped from Firebase Realtime Database.` };
     } catch (err: any) {
       console.warn('[FirebaseSync] hardDeleteUserFromFirebase warning:', err);
       return { success: true, message: `User ${uid} purged from accessible database paths.` };

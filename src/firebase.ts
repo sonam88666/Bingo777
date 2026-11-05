@@ -15,6 +15,7 @@ import {
 } from 'firebase/auth';
 import {
   initializeFirestore,
+  setLogLevel,
   doc,
   getDocFromServer,
   setDoc,
@@ -40,17 +41,27 @@ import {
 } from 'firebase/database';
 import firebaseConfig from '../firebase-applet-config.json';
 
+// Suppress noisy @firebase/firestore 10s backend timeout logs when running on RTDB-primary projects
+try {
+  setLogLevel('silent');
+} catch {}
+
 const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(
   app,
   {
-    experimentalForceLongPolling: true
+    experimentalAutoDetectLongPolling: true
   },
   firebaseConfig.firestoreDatabaseId
 );
 export const rtdb = firebaseConfig.databaseURL ? getDatabase(app, firebaseConfig.databaseURL) : getDatabase(app);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+let firestoreAvailable = false;
+export function isFirestoreAvailable(): boolean {
+  return firestoreAvailable;
+}
 
 // Single permanent device identifier stored in localStorage.getItem('BINGO_PERSISTENT_DEVICE_ID')
 // Generated once if it does not exist; never overwritten on refresh or logout.
@@ -78,20 +89,18 @@ export function getPersistentDeviceId(): string {
 // Configure Firebase Auth persistence immediately on initialization
 if (typeof window !== 'undefined') {
   getPersistentDeviceId();
-  setPersistence(auth, browserLocalPersistence).catch((err) => {
-    console.warn('[Firebase] setPersistence warning:', err);
-  });
+  setPersistence(auth, browserLocalPersistence).catch(() => {});
 
-  const validateConnection = async () => {
-    try {
-      await getDocFromServer(doc(db, 'test', 'connection'));
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('the client is offline')) {
-        console.error('Please check your Firebase configuration.');
-      }
-    }
-  };
-  validateConnection();
+  // If no Realtime Database URL is configured, probe Firestore availability silently
+  if (!firebaseConfig.databaseURL) {
+    getDocFromServer(doc(db, 'test', 'connection'))
+      .then(() => {
+        firestoreAvailable = true;
+      })
+      .catch(() => {
+        firestoreAvailable = false;
+      });
+  }
 }
 
 export enum OperationType {
