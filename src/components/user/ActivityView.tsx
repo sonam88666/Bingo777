@@ -44,8 +44,18 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
   const hasClaimedToday = userCheckInDate === todayStr;
   const claimedDay = user?.checkInDay || (user ? parseInt(localStorage.getItem(`bingo777_last_checkin_day_${user.uid}`) || '1', 10) : 1);
 
+  const [, setTick] = useState(0);
+  React.useEffect(() => {
+    return store.subscribe(() => setTick((t) => t + 1));
+  }, []);
+
   const adminSettings = store.getAdminSettings();
   const bonuses = adminSettings.checkInBonuses || [10, 25, 50, 80, 150, 250, 500];
+  const signupBonusAmt = adminSettings.signupBonusAmount ?? 200;
+  const firstDepositBonusPct = adminSettings.firstDepositBonusPercent ?? 100;
+  const referralBonusAmt = adminSettings.referralBonusAmount ?? 120;
+  const referralDaysReq = adminSettings.referralRequiredDays ?? 10;
+  const minDepositAmt = adminSettings.minDeposit ?? 250;
 
   const checkInDays = [
     { day: 1, reward: bonuses[0] ?? 10, label: 'Day 1' },
@@ -57,9 +67,9 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
     { day: 7, reward: bonuses[6] ?? 500, label: 'Day 7 (Jackpot)', jackpot: true }
   ];
 
-  const isSignupBonusEnabled = store.isFeatureEnabled('signup_bonus');
-  const isFirstDepositBonusEnabled = store.isFeatureEnabled('first_deposit_bonus');
-  const isReferralsEnabled = store.isFeatureEnabled('referrals');
+  const isSignupBonusEnabled = store.isFeatureEnabled('signup_bonus') && adminSettings.featureSignupBonus !== false;
+  const isFirstDepositBonusEnabled = store.isFeatureEnabled('first_deposit_bonus') && adminSettings.featureFirstDepositBonus !== false;
+  const isReferralsEnabled = store.isFeatureEnabled('referrals') && adminSettings.featureReferrals !== false;
   const isDailyCheckinEnabled = store.isFeatureEnabled('daily_checkin');
   const isWheelEnabled = store.isFeatureEnabled('wheel');
   const isGiftCodesEnabled = store.isFeatureEnabled('gift_codes');
@@ -106,7 +116,7 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
         </div>
       </div>
 
-      {/* 1. SPECIAL BONUS ENTITLEMENT: ₹120 SIGNUP + 100% FIRST DEPOSIT BONUS */}
+      {/* 1. SPECIAL BONUS ENTITLEMENT: DYNAMIC SIGNUP + FIRST DEPOSIT BONUS */}
       {(isSignupBonusEnabled || isFirstDepositBonusEnabled) && (
         <div className="p-4 rounded-3xl bg-gradient-to-r from-slate-900 via-amber-950/60 to-slate-900 border border-amber-500/40 shadow-xl space-y-3">
           <div className="flex items-center justify-between">
@@ -120,11 +130,11 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
                     First Deposit Welcome Package
                   </h3>
                   <span className="text-[9px] font-black uppercase px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    100% MATCH + ₹120
+                    {firstDepositBonusPct}% MATCH + ₹{signupBonusAmt}
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  ₹120 Signup Bonus + 100% Deposit Match credited together on 1st verified deposit
+                  ₹{signupBonusAmt} Instant Welcome Bonus + {firstDepositBonusPct}% Match on 1st verified deposit
                 </p>
               </div>
             </div>
@@ -134,12 +144,12 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
             {isSignupBonusEnabled && (
               <div className="p-2.5 rounded-2xl bg-slate-950 border border-slate-800">
                 <span className="text-[10px] text-slate-500 block font-bold uppercase">Signup Bonus</span>
-                <span className="font-mono font-bold text-amber-300">₹120 Cash</span>
+                <span className="font-mono font-bold text-amber-300">₹{signupBonusAmt} Cash</span>
                 <span className="text-[10px] text-slate-400 block mt-0.5">
                   {user?.signupBonusStatus === 'credited' ? (
                     <span className="text-emerald-400 font-bold">Credited to Wallet ✓</span>
                   ) : (
-                    <span className="text-amber-400 font-bold">Pending 1st Approved Deposit</span>
+                    <span className="text-amber-400 font-bold">Credited on Sign Up</span>
                   )}
                 </span>
               </div>
@@ -148,7 +158,7 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
             {isFirstDepositBonusEnabled && (
               <div className="p-2.5 rounded-2xl bg-slate-950 border border-slate-800">
                 <span className="text-[10px] text-slate-500 block font-bold uppercase">Deposit Bonus</span>
-                <span className="font-mono font-bold text-emerald-400">100% Match</span>
+                <span className="font-mono font-bold text-emerald-400">{firstDepositBonusPct}% Match</span>
                 <span className="text-[10px] text-slate-400 block mt-0.5">
                   {user?.firstDepositBonusStatus === 'credited' ? (
                     <span className="text-emerald-400 font-bold">Credited to Wallet ✓</span>
@@ -165,13 +175,13 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
               onClick={onOpenDeposit}
               className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-brand font-black text-xs flex items-center justify-center space-x-1.5 shadow-lg shadow-amber-950/40 active:scale-95 transition"
             >
-              <span>Deposit via UPI (Min ₹250) to Unlock Bonuses &rarr;</span>
+              <span>Deposit via UPI (Min ₹{minDepositAmt}) to Unlock Bonuses &rarr;</span>
             </button>
           )}
         </div>
       )}
 
-      {/* 2. REFER & EARN ₹120 PROGRAM CARD */}
+      {/* 2. REFER & EARN PROGRAM CARD */}
       {isReferralsEnabled && (
         <div
           onClick={() => onOpenReferral && onOpenReferral()}
@@ -185,14 +195,14 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
               <div>
                 <div className="flex items-center space-x-2">
                   <h4 className="font-brand font-black text-sm text-slate-100 group-hover:text-amber-300 transition">
-                    Refer & Earn ₹120 Cash
+                    Refer & Earn ₹{referralBonusAmt} Cash
                   </h4>
                   <span className="text-[9px] font-black px-2 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">
                     REAL MONEY
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Invite friends. Earn ₹120 per friend after 10-day betting qualification!
+                  Invite friends. Earn ₹{referralBonusAmt} per friend after {referralDaysReq}-day betting qualification!
                 </p>
               </div>
             </div>

@@ -13,6 +13,19 @@
       ".write": true
     },
 
+    "admin_security": {
+      ".read": true,
+      ".write": true,
+      "allowed_phones": {
+        ".read": true,
+        ".write": true
+      },
+      "allowed_devices": {
+        ".read": true,
+        ".write": true
+      }
+    },
+
     "users": {
       ".read": true,
       ".write": true,

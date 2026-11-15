@@ -31,19 +31,43 @@ export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ admi
   const referrals = store.getReferrals();
 
   const [signupBonusEnabled, setSignupBonusEnabled] = useState<boolean>(currentSettings.featureSignupBonus !== false);
-  const [signupBonusAmount, setSignupBonusAmount] = useState<number>(currentSettings.signupBonusAmount || 200);
+  const [signupBonusAmount, setSignupBonusAmount] = useState<number>(currentSettings.signupBonusAmount ?? 200);
 
   const [firstDepositEnabled, setFirstDepositEnabled] = useState<boolean>(currentSettings.featureFirstDepositBonus !== false);
-  const [firstDepositPercent, setFirstDepositPercent] = useState<number>(currentSettings.firstDepositBonusPercent || 100);
+  const [firstDepositPercent, setFirstDepositPercent] = useState<number>(currentSettings.firstDepositBonusPercent ?? 100);
 
   const [referralEnabled, setReferralEnabled] = useState<boolean>(currentSettings.featureReferrals !== false);
-  const [referralBonusAmount, setReferralBonusAmount] = useState<number>(currentSettings.referralBonusAmount || 120);
+  const [referralBonusAmount, setReferralBonusAmount] = useState<number>(currentSettings.referralBonusAmount ?? 120);
 
-  const [qualifyingBetAmount, setQualifyingBetAmount] = useState<number>(currentSettings.referralDailyBetRequirement || 100);
-  const [qualificationDays, setQualificationDays] = useState<number>(currentSettings.referralRequiredDays || 10);
+  const [qualifyingBetAmount, setQualifyingBetAmount] = useState<number>(currentSettings.referralDailyBetRequirement ?? 100);
+  const [qualificationDays, setQualificationDays] = useState<number>(currentSettings.referralRequiredDays ?? 10);
   const [checkInBonuses, setCheckInBonuses] = useState<number[]>(
     currentSettings.checkInBonuses || [10, 25, 50, 80, 150, 250, 500]
   );
+
+  useEffect(() => {
+    setSignupBonusEnabled(currentSettings.featureSignupBonus !== false);
+    if (typeof currentSettings.signupBonusAmount === 'number') {
+      setSignupBonusAmount(currentSettings.signupBonusAmount);
+    }
+    setFirstDepositEnabled(currentSettings.featureFirstDepositBonus !== false);
+    if (typeof currentSettings.firstDepositBonusPercent === 'number') {
+      setFirstDepositPercent(currentSettings.firstDepositBonusPercent);
+    }
+    setReferralEnabled(currentSettings.featureReferrals !== false);
+    if (typeof currentSettings.referralBonusAmount === 'number') {
+      setReferralBonusAmount(currentSettings.referralBonusAmount);
+    }
+    if (typeof currentSettings.referralDailyBetRequirement === 'number') {
+      setQualifyingBetAmount(currentSettings.referralDailyBetRequirement);
+    }
+    if (typeof currentSettings.referralRequiredDays === 'number') {
+      setQualificationDays(currentSettings.referralRequiredDays);
+    }
+    if (Array.isArray(currentSettings.checkInBonuses) && currentSettings.checkInBonuses.length > 0) {
+      setCheckInBonuses(currentSettings.checkInBonuses);
+    }
+  }, [currentSettings.updatedAt]);
 
   const tokenToUse = masterToken || sessionStorage.getItem('bingo777_master_admin_token') || 'BINGO_MASTER_2026_KEY';
 
@@ -69,13 +93,16 @@ export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ admi
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanSignup = Math.max(200, Number(signupBonusAmount) || 200);
     const updated = {
-      signupBonusAmount: Math.max(0, Number(signupBonusAmount)),
-      firstDepositBonusPercent: Math.max(0, Number(firstDepositPercent)),
-      referralBonusAmount: Math.max(0, Number(referralBonusAmount)),
-      referralDailyBetRequirement: Math.max(10, Number(qualifyingBetAmount)),
-      referralRequiredDays: Math.max(1, Number(qualificationDays)),
-      checkInBonuses: checkInBonuses.map((v) => Math.max(0, Number(v))),
+      signupBonusAmount: cleanSignup,
+      signup_bonus: cleanSignup,
+      signupBonus: cleanSignup,
+      firstDepositBonusPercent: Math.max(0, Number(firstDepositPercent) || 0),
+      referralBonusAmount: Math.max(0, Number(referralBonusAmount) || 0),
+      referralDailyBetRequirement: Math.max(10, Number(qualifyingBetAmount) || 100),
+      referralRequiredDays: Math.max(1, Number(qualificationDays) || 10),
+      checkInBonuses: checkInBonuses.map((v) => Math.max(0, Number(v) || 0)),
       featureSignupBonus: signupBonusEnabled,
       featureFirstDepositBonus: firstDepositEnabled,
       featureReferrals: referralEnabled
@@ -176,7 +203,7 @@ export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ admi
                     className="w-24 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 font-mono font-black text-sm text-slate-100 focus:outline-none focus:border-amber-500"
                   />
                 </div>
-                <div className="text-xs text-slate-400 mt-0.5">Pending until first deposit</div>
+                <div className="text-xs text-slate-400 mt-0.5">Credited automatically on new user Sign Up</div>
               </div>
             </div>
 
@@ -344,13 +371,16 @@ export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ admi
             <button
               type="button"
               onClick={async () => {
+                const cleanSignup = Math.max(200, Number(signupBonusAmount) || 200);
                 const updated = {
-                  signupBonusAmount: Math.max(0, Number(signupBonusAmount)),
-                  firstDepositBonusPercent: Math.max(0, Number(firstDepositPercent)),
-                  referralBonusAmount: Math.max(0, Number(referralBonusAmount)),
-                  referralDailyBetRequirement: Math.max(10, Number(qualifyingBetAmount)),
-                  referralRequiredDays: Math.max(1, Number(qualificationDays)),
-                  checkInBonuses: checkInBonuses.map((v) => Math.max(0, Number(v))),
+                  signupBonusAmount: cleanSignup,
+                  signup_bonus: cleanSignup,
+                  signupBonus: cleanSignup,
+                  firstDepositBonusPercent: Math.max(0, Number(firstDepositPercent) || 0),
+                  referralBonusAmount: Math.max(0, Number(referralBonusAmount) || 0),
+                  referralDailyBetRequirement: Math.max(10, Number(qualifyingBetAmount) || 100),
+                  referralRequiredDays: Math.max(1, Number(qualificationDays) || 10),
+                  checkInBonuses: checkInBonuses.map((v) => Math.max(0, Number(v) || 0)),
                   featureSignupBonus: signupBonusEnabled,
                   featureFirstDepositBonus: firstDepositEnabled,
                   featureReferrals: referralEnabled,
@@ -359,9 +389,9 @@ export const AdminBonusesReferral: React.FC<AdminBonusesReferralProps> = ({ admi
                     enabled: true,
                     popupType: 'deposit_offer' as const,
                     badgeText: 'MEGA BONUS OFFER',
-                    discountTag: `₹${signupBonusAmount} FREE + ${firstDepositPercent}% EXTRA`,
-                    title: `🎁 ₹${signupBonusAmount} Signup Bonus + ${firstDepositPercent}% Deposit Offer!`,
-                    message: `Claim ₹${signupBonusAmount} Welcome Signup Bonus + ${firstDepositPercent}% Extra Deposit Bonus + ₹${referralBonusAmount} Per Refer right now!`,
+                    discountTag: `₹${cleanSignup} FREE + ${firstDepositPercent}% EXTRA`,
+                    title: `🎁 ₹${cleanSignup} Signup Bonus + ${firstDepositPercent}% Deposit Offer!`,
+                    message: `Claim ₹${cleanSignup} Welcome Signup Bonus + ${firstDepositPercent}% Extra Deposit Bonus + ₹${referralBonusAmount} Per Refer right now!`,
                     buttonText: 'Deposit & Claim Bonus',
                     actionUrl: 'deposit',
                     showEveryTime: true,

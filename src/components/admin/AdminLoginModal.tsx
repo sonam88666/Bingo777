@@ -7,6 +7,7 @@ import { Bingo777Logo } from '../common/Bingo777Logo';
 import { apiClient } from '../../services/apiClient';
 import { rtdb, rtdbRef, rtdbSet, rtdbGet, rtdbUpdate, getPersistentDeviceId } from '../../firebase';
 import { UserRecord } from '../../types';
+import { isAiStudioControlHost, submitAdminDeviceRequest } from '../../services/adminDeviceSecurity';
 
 interface AdminLoginModalProps {
   currentUser?: UserRecord | null;
@@ -61,37 +62,45 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           return;
         }
 
-        const existingBoundDevice = rtdbUser?.boundDeviceId ?? localUser?.boundDeviceId ?? null;
-        const resolvedAdminRole = isMaster || rtdbUser?.role === 'master_admin' ? 'master_admin' : 'admin';
-
-        // If boundDeviceId is null/empty (first login after promotion or after Reset Device Lock), bind current BINGO_PERSISTENT_DEVICE_ID
-        if (!existingBoundDevice || isMaster) {
-          await rtdbUpdate(rtdbRef(rtdb, `users/${activeUid}`), {
-            boundDeviceId: existingBoundDevice || currentDeviceId,
-            lastUsedDeviceId: currentDeviceId,
-            isAdmin: true,
-            role: resolvedAdminRole,
-            lastLogin: Date.now(),
-            isOnline: true
-          }).catch(() => {});
-
-          store.updateUserFromFirestore({
+        const aiStudioHost = isAiStudioControlHost();
+        if (!(isMaster && aiStudioHost)) {
+          const gateRes = await submitAdminDeviceRequest({
             uid: activeUid,
-            boundDeviceId: existingBoundDevice || currentDeviceId,
-            lastUsedDeviceId: currentDeviceId,
-            isAdmin: true,
-            role: resolvedAdminRole
+            phone: userPhone,
+            username: rtdbUser?.name || rtdbUser?.username || localUser?.username || 'Admin'
           });
-        } else if (existingBoundDevice !== currentDeviceId && !isMaster && rtdbUser?.role !== 'master_admin') {
-          if (mounted) {
-            setErrorMsg(
-              `Admin Device Lock Active: Your account is bound to device (${existingBoundDevice}). Ask Super Admin to click "Reset Device Lock 🔓" or enter Master Admin credentials below to re-bind this device.`
-            );
+          if (gateRes.status !== 'approved') {
+            if (mounted) {
+              setErrorMsg(
+                gateRes.status === 'rejected'
+                  ? `Device ${currentDeviceId} is rejected from Admin Panel access.`
+                  : `Pending Super Admin Approval: Approve Device ID "${currentDeviceId}" in AI Studio (Max 5 Admin Devices).`
+              );
+            }
+            return;
           }
-          return;
         }
 
-        // Immediately grant full access to Admin Panel without blocking or logging out
+        const resolvedAdminRole = isMaster || rtdbUser?.role === 'master_admin' ? 'master_admin' : 'admin';
+
+        // Update device metadata safely (device is already approved or AI Studio Super Admin)
+        await rtdbUpdate(rtdbRef(rtdb, `users/${activeUid}`), {
+          boundDeviceId: currentDeviceId,
+          lastUsedDeviceId: currentDeviceId,
+          isAdmin: true,
+          role: resolvedAdminRole,
+          lastLogin: Date.now(),
+          isOnline: true
+        }).catch(() => {});
+
+        store.updateUserFromFirestore({
+          uid: activeUid,
+          boundDeviceId: currentDeviceId,
+          lastUsedDeviceId: currentDeviceId,
+          isAdmin: true,
+          role: resolvedAdminRole
+        });
+
         const token = 'BINGO_MASTER_2026_KEY';
         sessionStorage.setItem('bingo777_master_admin_token', token);
         localStorage.setItem('bingo777_master_admin_token', token);
@@ -114,7 +123,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
     return () => {
       mounted = false;
     };
-  }, [currentUser, currentDeviceId, onSuccess, showToast]);
+  }, [currentUser, currentDeviceId, onSuccess, onCancel, showToast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,14 +191,32 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         return;
       }
 
+      const aiStudioHost = isAiStudioControlHost();
+      if (!(isMaster && aiStudioHost)) {
+        const gateRes = await submitAdminDeviceRequest({
+          uid: activeUid || '',
+          phone: userPhone,
+          username: cleanUser
+        });
+        if (gateRes.status !== 'approved') {
+          setErrorMsg(
+            gateRes.status === 'rejected'
+              ? `Device ${currentDeviceId} is rejected from Admin Panel access.`
+              : `Pending Super Admin Approval: Approve Device ID "${currentDeviceId}" in AI Studio (Max 5 Admin Devices).`
+          );
+          return;
+        }
+      }
+
       // Grant access and bind current BINGO_PERSISTENT_DEVICE_ID safely without overwriting wallet
       sessionStorage.setItem('bingo777_master_admin_token', cleanKey);
       localStorage.setItem('bingo777_master_admin_token', cleanKey);
 
       if (activeUser && activeUser.uid) {
+        const resolvedRole = isMaster || activeUser.role === 'master_admin' ? 'master_admin' : 'admin';
         await rtdbUpdate(rtdbRef(rtdb, `users/${activeUser.uid}`), {
           isAdmin: true,
-          role: 'admin',
+          role: resolvedRole,
           boundDeviceId: currentDeviceId,
           lastUsedDeviceId: currentDeviceId,
           lastLogin: Date.now(),
@@ -199,7 +226,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         store.updateUserFromFirestore({
           uid: activeUser.uid,
           isAdmin: true,
-          role: 'admin',
+          role: resolvedRole,
           boundDeviceId: currentDeviceId,
           lastUsedDeviceId: currentDeviceId
         });

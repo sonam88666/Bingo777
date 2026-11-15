@@ -1,13 +1,26 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Smartphone,
   CheckCircle2,
   XCircle,
-  Search
+  Search,
+  ShieldCheck,
+  Trash2,
+  Lock
 } from 'lucide-react';
 import { UserRecord, DeviceRecord } from '../../types';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
+import { rtdb, rtdbRef, rtdbOnValue, getPersistentDeviceId } from '../../firebase';
+import {
+  MAX_ADMIN_DEVICES,
+  AdminAllowedDeviceRecord,
+  normalizeAdminDeviceMap,
+  getApprovedAdminDevices,
+  approveAdminDeviceSlot,
+  rejectAdminDeviceSlot,
+  revokeAdminDeviceSlot
+} from '../../services/adminDeviceSecurity';
 
 interface AdminDeviceApprovalProps {
   adminId: string;
@@ -21,14 +34,79 @@ interface FlatDeviceItem {
 export const AdminDeviceApproval: React.FC<AdminDeviceApprovalProps> = ({ adminId }) => {
   const { showToast } = useToast();
   const [, setTick] = useState(0);
-  React.useEffect(() => {
-    return store.subscribe(() => setTick((t) => t + 1));
+  const [adminDeviceMap, setAdminDeviceMap] = useState<Record<string, AdminAllowedDeviceRecord>>({});
+
+  useEffect(() => {
+    const unsubStore = store.subscribe(() => setTick((t) => t + 1));
+    const unsubRtdb = rtdbOnValue(
+      rtdbRef(rtdb, 'admin_security/allowed_devices'),
+      (snap) => {
+        setAdminDeviceMap(snap.exists() ? normalizeAdminDeviceMap(snap.val()) : {});
+      },
+      () => {}
+    );
+    return () => {
+      unsubStore();
+      unsubRtdb();
+    };
   }, []);
 
   const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('pending');
   const [searchTerm, setSearchTerm] = useState('');
   const [rejectingItem, setRejectingItem] = useState<FlatDeviceItem | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+
+  const allAdminDevices = Object.values(adminDeviceMap).sort(
+    (a, b) => (b.requestedAt || b.approvedAt || b.pairedAt || 0) - (a.requestedAt || a.approvedAt || a.pairedAt || 0)
+  );
+  const approvedAdminDevices = getApprovedAdminDevices(adminDeviceMap);
+  const pendingAdminDevices = allAdminDevices.filter((d) => d.status === 'pending');
+  const currentHardwareId = getPersistentDeviceId();
+
+  const handleApproveAdminDev = async (dev: AdminAllowedDeviceRecord) => {
+    const res = await approveAdminDeviceSlot(dev, adminId);
+    if (res.success) {
+      showToast(
+        `Approved Admin Device ${dev.deviceId} (${res.approvedCount}/${MAX_ADMIN_DEVICES} slots used).`,
+        'success'
+      );
+    } else {
+      showToast(res.error || `Max ${MAX_ADMIN_DEVICES} Admin Devices allowed.`, 'error');
+    }
+  };
+
+  const handlePairCurrentAdminDevice = async () => {
+    const clientDev = store.getOrCreateClientDevice();
+    const res = await approveAdminDeviceSlot(
+      {
+        deviceId: currentHardwareId,
+        deviceName: clientDev.deviceName || clientDev.deviceModel || 'Admin Hardware Device',
+        deviceModel: clientDev.deviceModel || clientDev.deviceName || 'Admin Hardware Device',
+        browser: clientDev.browser,
+        os: clientDev.os,
+        username: adminId
+      },
+      adminId
+    );
+    if (res.success) {
+      showToast(
+        `Current Device (${currentHardwareId}) approved (${res.approvedCount}/${MAX_ADMIN_DEVICES} slots).`,
+        'success'
+      );
+    } else {
+      showToast(res.error || `Max ${MAX_ADMIN_DEVICES} Admin Devices reached.`, 'error');
+    }
+  };
+
+  const handleRejectAdminDev = async (devId: string) => {
+    await rejectAdminDeviceSlot(devId, adminId, 'Rejected by Super Admin from AI Studio');
+    showToast(`Rejected Admin Device ${devId}.`, 'info');
+  };
+
+  const handleRevokeAdminDev = async (devId: string) => {
+    await revokeAdminDeviceSlot(devId, adminId);
+    showToast(`Removed Admin Device ${devId}. Slot freed (${Math.max(0, approvedAdminDevices.length - 1)}/${MAX_ADMIN_DEVICES}).`, 'info');
+  };
 
   const users = Object.values(store.getUsers());
 
@@ -81,10 +159,153 @@ export const AdminDeviceApproval: React.FC<AdminDeviceApprovalProps> = ({ adminI
 
   return (
     <div className="space-y-4">
+      {/* STRICT 5-DEVICE ADMIN PANEL GATE */}
+      <div className="p-4 rounded-3xl bg-gradient-to-br from-slate-900 via-amber-950/20 to-slate-900 border-2 border-amber-500/40 shadow-2xl space-y-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-brand font-black text-sm text-white">
+                Admin Panel Approved Devices (Max {MAX_ADMIN_DEVICES} Slots)
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Sirf yahan se Approve kiye gaye Max {MAX_ADMIN_DEVICES} devices hi Admin Panel tak pahoch payenge.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span
+              className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase border ${
+                approvedAdminDevices.length >= MAX_ADMIN_DEVICES
+                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                  : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+              }`}
+            >
+              {approvedAdminDevices.length} / {MAX_ADMIN_DEVICES} Approved
+            </span>
+            {pendingAdminDevices.length > 0 && (
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-amber-500 text-slate-950 animate-pulse">
+                {pendingAdminDevices.length} Pending
+              </span>
+            )}
+          </div>
+        </div>
+
+        {allAdminDevices.length === 0 ? (
+          <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-center text-xs text-slate-400">
+            Abhi tak koi Admin device approve ya pending nahi hai. Jab koi phone Admin open karega, uski request yahan aa jayegi.
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+            {allAdminDevices.map((dev) => (
+              <div
+                key={dev.deviceId}
+                className={`p-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+                  dev.status === 'pending'
+                    ? 'bg-amber-950/30 border-amber-500/50'
+                    : dev.status === 'approved'
+                    ? 'bg-emerald-950/20 border-emerald-500/30'
+                    : 'bg-rose-950/20 border-rose-500/30'
+                }`}
+              >
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="font-bold text-xs text-white truncate">
+                      {dev.deviceModel || dev.deviceName || 'Admin Device'}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase border ${
+                        dev.status === 'pending'
+                          ? 'bg-amber-500/20 border-amber-400/40 text-amber-300'
+                          : dev.status === 'approved'
+                          ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300'
+                          : 'bg-rose-500/20 border-rose-400/40 text-rose-300'
+                      }`}
+                    >
+                      {dev.status}
+                    </span>
+                    {dev.deviceId === currentHardwareId && (
+                      <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-sky-500/20 text-sky-300 border border-sky-400/30">
+                        THIS DEVICE
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-300">
+                    {dev.username || 'Admin'} {dev.phone ? `(+91 ${dev.phone})` : ''} · {dev.os || 'OS'} / {dev.browser || 'Browser'}
+                  </div>
+                  <div className="font-mono text-[10px] text-amber-300/90 truncate" title={dev.deviceId}>
+                    ID: {dev.deviceId}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {dev.status !== 'approved' && (
+                    <button
+                      type="button"
+                      disabled={approvedAdminDevices.length >= MAX_ADMIN_DEVICES}
+                      onClick={() => handleApproveAdminDev(dev)}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold text-xs flex items-center space-x-1 transition"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>
+                        {approvedAdminDevices.length >= MAX_ADMIN_DEVICES
+                          ? `Slots Full (${MAX_ADMIN_DEVICES}/${MAX_ADMIN_DEVICES})`
+                          : `Approve (${approvedAdminDevices.length + 1}/${MAX_ADMIN_DEVICES})`}
+                      </span>
+                    </button>
+                  )}
+                  {dev.status === 'pending' && (
+                    <button
+                      type="button"
+                      onClick={() => handleRejectAdminDev(dev.deviceId)}
+                      className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center space-x-1 transition"
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                      <span>Reject</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleRevokeAdminDev(dev.deviceId)}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white transition"
+                    title="Remove / Revoke device slot"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button
+          type="button"
+          disabled={
+            adminDeviceMap[currentHardwareId]?.status === 'approved' ||
+            approvedAdminDevices.length >= MAX_ADMIN_DEVICES
+          }
+          onClick={handlePairCurrentAdminDevice}
+          className="w-full py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 disabled:opacity-50 text-emerald-300 border border-emerald-400/40 font-bold text-xs flex items-center justify-center gap-1.5 transition"
+        >
+          <CheckCircle2 className="w-4 h-4" />
+          <span>
+            {adminDeviceMap[currentHardwareId]?.status === 'approved'
+              ? `Current Device Already Approved (${approvedAdminDevices.length}/${MAX_ADMIN_DEVICES})`
+              : approvedAdminDevices.length >= MAX_ADMIN_DEVICES
+              ? `All ${MAX_ADMIN_DEVICES} Admin Device Slots Full — Remove one to approve`
+              : `Approve Current Device (${approvedAdminDevices.length}/${MAX_ADMIN_DEVICES} Slots Used)`}
+          </span>
+        </button>
+      </div>
+
       {/* 1 Number = 1 Device Policy Banner */}
       <div className="p-3.5 rounded-2xl bg-slate-900 border border-amber-500/30 text-xs text-slate-300 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <span className="font-black text-amber-400">🔒 Strict 1 Number = 1 Device Policy: </span>
+          <span className="font-black text-amber-400">🔒 Strict 1 Number = 1 Device Policy (Player Accounts): </span>
           <span>
             Ek mobile number sirf 1 device me login ho sakta hai. Dusre device se login karne par request yahan Pending me aayegi. Jab aap Approve karenge, purana device apne aap logout/revoke ho jayega.
           </span>

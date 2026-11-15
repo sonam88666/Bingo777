@@ -252,11 +252,29 @@ class FirebaseSyncService {
         '7088961883': { phone: '7088961883', name: 'Primary Super Admin 1', addedAt: Date.now() },
         '9012634797': { phone: '9012634797', name: 'Primary Super Admin 2', addedAt: Date.now() }
       }).catch(() => {});
-      rtdbUpdate(rtdbRef(rtdb, 'admin_settings'), {
-        signupBonusAmount: 200,
-        signup_bonus: 200,
-        signupBonus: 200
-      }).catch(() => {});
+      rtdbGet(rtdbRef(rtdb, 'admin_settings'))
+        .then((settingsSnap) => {
+          const val = settingsSnap.exists() ? settingsSnap.val() : null;
+          const existingBonus = Number(
+            val?.signupBonusAmount ?? val?.signup_bonus ?? val?.signupBonus
+          );
+          if (
+            !val ||
+            !Number.isFinite(existingBonus) ||
+            existingBonus < 200 ||
+            val.featureSignupBonus === false ||
+            !val.signupBonus200SyncedAt
+          ) {
+            rtdbUpdate(rtdbRef(rtdb, 'admin_settings'), {
+              signupBonusAmount: 200,
+              signup_bonus: 200,
+              signupBonus: 200,
+              featureSignupBonus: true,
+              signupBonus200SyncedAt: Date.now()
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
 
       const usersUnsub = rtdbOnValue(
         rtdbRef(rtdb, 'users'),
@@ -1207,6 +1225,10 @@ class FirebaseSyncService {
       maintenanceMode: Boolean(settings.maintenanceMode),
       updatedAt: Date.now()
     };
+    if (typeof settings.signupBonusAmount === 'number' && Number.isFinite(settings.signupBonusAmount)) {
+      rawPayload.signup_bonus = settings.signupBonusAmount;
+      rawPayload.signupBonus = settings.signupBonusAmount;
+    }
     const cleanPayload: Record<string, any> = {};
     Object.entries(rawPayload).forEach(([k, v]) => {
       if (v !== undefined) {

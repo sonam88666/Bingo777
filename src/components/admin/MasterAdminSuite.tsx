@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard,
   Users,
@@ -50,6 +51,8 @@ import { store } from '../../services/store';
 import { firebaseSync } from '../../services/firebaseSync';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
+import { rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
+import { normalizeAdminDeviceMap, getPendingAdminDevices } from '../../services/adminDeviceSecurity';
 
 interface MasterAdminSuiteProps {
   adminId: string;
@@ -67,12 +70,26 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
   const [, setTick] = React.useState(0);
   const { showToast } = useToast();
 
+  const [pendingAdminDevicesCount, setPendingAdminDevicesCount] = useState(0);
+
   React.useEffect(() => {
     // Initialize automated 60-minute background cleanup routine on Admin Console startup
     firebaseSync.startAutomatedHourlyCleanupRoutine();
     firebaseSync.runHourlyDatabaseCleanup().catch(() => {});
 
-    return store.subscribe(() => setTick((t) => t + 1));
+    const unsubStore = store.subscribe(() => setTick((t) => t + 1));
+    const unsubAdminDevs = rtdbOnValue(
+      rtdbRef(rtdb, 'admin_security/allowed_devices'),
+      (snap) => {
+        const map = snap.exists() ? normalizeAdminDeviceMap(snap.val()) : {};
+        setPendingAdminDevicesCount(getPendingAdminDevices(map).length);
+      },
+      () => {}
+    );
+    return () => {
+      unsubStore();
+      unsubAdminDevs();
+    };
   }, []);
 
   const adminSettings = store.getAdminSettings();
@@ -130,7 +147,7 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
   const pendingDepositsCount = deposits.filter((d) => d.status === 'pending').length;
   const pendingWithdrawalsCount = withdrawals.filter((w) => w.status === 'pending').length;
 
-  let pendingDevicesCount = 0;
+  let pendingDevicesCount = pendingAdminDevicesCount;
   users.forEach((u) => {
     Object.values(u.devices || {}).forEach((d) => {
       if (d.status === 'pending') pendingDevicesCount++;
@@ -196,7 +213,7 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
     setMobileDrawerOpen(false);
   };
 
-  const renderSidebarContent = () => (
+  const renderSidebarContent = (layoutPrefix: string) => (
     <div className="flex flex-col h-full bg-slate-900/95 text-slate-100 select-none">
       {/* Top Sidebar Brand Header */}
       <div className="p-4 border-b border-amber-500/20 flex items-center justify-between bg-slate-950/60">
@@ -233,20 +250,27 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
               key={item.id}
               type="button"
               onClick={() => handleSelectTab(item.id)}
-              className={`w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-between transition-all ${
+              className={`relative w-full px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-between transition-colors ${
                 isActive
-                  ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 shadow-md shadow-amber-500/20'
+                  ? 'text-slate-950'
                   : 'text-slate-300 hover:text-white hover:bg-slate-800/70'
               }`}
             >
-              <div className="flex items-center space-x-3 min-w-0">
+              {isActive && (
+                <motion.div
+                  layoutId={`${layoutPrefix}_activeSidebarPill`}
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                  className="absolute inset-0 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 shadow-md shadow-amber-500/20"
+                />
+              )}
+              <div className="relative z-10 flex items-center space-x-3 min-w-0">
                 <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-slate-950' : 'text-amber-400/80'}`} />
                 <span className="truncate">{item.label}</span>
               </div>
 
               {item.badge !== undefined && item.badge > 0 && (
                 <span
-                  className={`ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                  className={`relative z-10 ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
                     isActive
                       ? 'bg-slate-950 text-amber-300'
                       : item.alert
@@ -280,21 +304,33 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
     <div className="min-h-screen bg-slate-950 text-slate-100 flex">
       {/* Desktop Permanent Dark Sidebar */}
       <aside className="hidden lg:block w-64 shrink-0 border-r border-amber-500/20 sticky top-0 h-screen">
-        {renderSidebarContent()}
+        {renderSidebarContent('desktop')}
       </aside>
 
       {/* Mobile Slide-Over Dark Sidebar Drawer */}
-      {mobileDrawerOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden flex">
-          <div
-            className="fixed inset-0 bg-black/75 backdrop-blur-xs"
-            onClick={() => setMobileDrawerOpen(false)}
-          />
-          <div className="relative w-72 max-w-[82vw] h-full shadow-2xl border-r border-amber-500/20 z-10">
-            {renderSidebarContent()}
+      <AnimatePresence>
+        {mobileDrawerOpen && (
+          <div className="fixed inset-0 z-50 lg:hidden flex">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="fixed inset-0 bg-black/75 backdrop-blur-xs"
+              onClick={() => setMobileDrawerOpen(false)}
+            />
+            <motion.div
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+              className="relative w-72 max-w-[82vw] h-full shadow-2xl border-r border-amber-500/20 z-10"
+            >
+              {renderSidebarContent('mobile')}
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
@@ -309,9 +345,18 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
             >
               <Menu className="w-5 h-5 text-amber-400" />
             </button>
-            <h1 className="font-brand font-black text-base sm:text-lg tracking-wide bg-gradient-to-r from-amber-200 via-yellow-400 to-amber-200 bg-clip-text text-transparent truncate">
-              {currentNav.title}
-            </h1>
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.h1
+                key={currentNav.id}
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -5 }}
+                transition={{ duration: 0.15 }}
+                className="font-brand font-black text-base sm:text-lg tracking-wide bg-gradient-to-r from-amber-200 via-yellow-400 to-amber-200 bg-clip-text text-transparent truncate"
+              >
+                {currentNav.title}
+              </motion.h1>
+            </AnimatePresence>
           </div>
 
           <div className="flex items-center space-x-2 sm:space-x-2.5 shrink-0">
@@ -388,16 +433,23 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
                 key={item.id}
                 type="button"
                 onClick={() => handleSelectTab(item.id)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap flex items-center space-x-1.5 transition ${
+                className={`relative px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap flex items-center space-x-1.5 transition-colors ${
                   isActive
-                    ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 shadow-sm'
+                    ? 'text-slate-950'
                     : 'bg-slate-800/80 text-slate-300 hover:text-white'
                 }`}
               >
-                <span>{item.label}</span>
+                {isActive && (
+                  <motion.div
+                    layoutId="mobileStripActivePill"
+                    transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                    className="absolute inset-0 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 shadow-sm"
+                  />
+                )}
+                <span className="relative z-10">{item.label}</span>
                 {item.badge !== undefined && item.badge > 0 && (
                   <span
-                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                    className={`relative z-10 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
                       isActive ? 'bg-slate-950 text-amber-300' : 'bg-slate-700 text-slate-200'
                     }`}
                   >
@@ -409,42 +461,53 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
           })}
         </div>
 
-        {/* Dedicated Module Screen Container */}
+        {/* Dedicated Module Screen Container with Smooth Layout Transitions */}
         <main className="flex-1 w-full max-w-4xl mx-auto p-3.5 sm:p-6">
-          {activeTab === 'overview' && <AdminOverview onNavigateTab={(tab) => handleSelectTab(tab)} />}
-          {activeTab === 'users' && <AdminUsers adminId={adminId} masterToken={masterToken} />}
-          {activeTab === 'deposits' && (
-            <AdminFinancials adminId={adminId} masterToken={masterToken} initialMode="deposits" />
-          )}
-          {activeTab === 'withdrawals' && (
-            <AdminFinancials adminId={adminId} masterToken={masterToken} initialMode="withdrawals" />
-          )}
-          {activeTab === 'transactions' && <AdminTransactions adminId={adminId} />}
-          {activeTab === 'bets_logs' && <AdminLiveBets adminId={adminId} initialView="logs" />}
-          {activeTab === 'bonuses_referral' && (
-            <AdminBonusesReferral adminId={adminId} masterToken={masterToken} />
-          )}
-          {activeTab === 'mlm_management' && (
-            <AdminMlmManager adminId={adminId} masterToken={masterToken} />
-          )}
-          {activeTab === 'gift_codes' && <AdminGiftCodes adminId={adminId} masterToken={masterToken} />}
-          {activeTab === 'game_management' && (
-            <AdminGameManagement adminId={adminId} masterToken={masterToken} />
-          )}
-          {activeTab === 'trends_analytics' && (
-            <AdminTrendsAnalytics adminId={adminId} />
-          )}
-          {activeTab === 'news_polls' && (
-            <AdminNewsPollApproval adminId={adminId} masterToken={masterToken} />
-          )}
-          {activeTab === 'features' && <AdminFeatures adminId={adminId} masterToken={masterToken} />}
-          {activeTab === 'reports' && <AdminReportsAnalytics />}
-          {activeTab === 'support' && <AdminTelegramSupport adminId={adminId} />}
-          {activeTab === 'settings' && <AdminSettingsPanel adminId={adminId} />}
-          {activeTab === 'audit' && <AdminAuditLogs />}
-          {activeTab === 'data_backup' && <AdminDataBackup adminId={adminId} />}
-          {activeTab === 'devices' && <AdminDeviceApproval adminId={adminId} />}
-          {activeTab === 'firebase' && <AdminFirebaseRules />}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={activeTab}
+              layout="position"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            >
+              {activeTab === 'overview' && <AdminOverview onNavigateTab={(tab) => handleSelectTab(tab)} />}
+              {activeTab === 'users' && <AdminUsers adminId={adminId} masterToken={masterToken} />}
+              {activeTab === 'deposits' && (
+                <AdminFinancials adminId={adminId} masterToken={masterToken} initialMode="deposits" />
+              )}
+              {activeTab === 'withdrawals' && (
+                <AdminFinancials adminId={adminId} masterToken={masterToken} initialMode="withdrawals" />
+              )}
+              {activeTab === 'transactions' && <AdminTransactions adminId={adminId} />}
+              {activeTab === 'bets_logs' && <AdminLiveBets adminId={adminId} initialView="logs" />}
+              {activeTab === 'bonuses_referral' && (
+                <AdminBonusesReferral adminId={adminId} masterToken={masterToken} />
+              )}
+              {activeTab === 'mlm_management' && (
+                <AdminMlmManager adminId={adminId} masterToken={masterToken} />
+              )}
+              {activeTab === 'gift_codes' && <AdminGiftCodes adminId={adminId} masterToken={masterToken} />}
+              {activeTab === 'game_management' && (
+                <AdminGameManagement adminId={adminId} masterToken={masterToken} />
+              )}
+              {activeTab === 'trends_analytics' && (
+                <AdminTrendsAnalytics adminId={adminId} />
+              )}
+              {activeTab === 'news_polls' && (
+                <AdminNewsPollApproval adminId={adminId} masterToken={masterToken} />
+              )}
+              {activeTab === 'features' && <AdminFeatures adminId={adminId} masterToken={masterToken} />}
+              {activeTab === 'reports' && <AdminReportsAnalytics />}
+              {activeTab === 'support' && <AdminTelegramSupport adminId={adminId} />}
+              {activeTab === 'settings' && <AdminSettingsPanel adminId={adminId} />}
+              {activeTab === 'audit' && <AdminAuditLogs />}
+              {activeTab === 'data_backup' && <AdminDataBackup adminId={adminId} />}
+              {activeTab === 'devices' && <AdminDeviceApproval adminId={adminId} />}
+              {activeTab === 'firebase' && <AdminFirebaseRules />}
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
     </div>

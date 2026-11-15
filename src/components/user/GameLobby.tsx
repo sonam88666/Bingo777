@@ -439,7 +439,18 @@ export const GameLobby: React.FC<GameLobbyProps> = ({
                       const act = String((activeBanner as any).actionUrl || 'deposit').trim().toLowerCase();
                       if (act === 'referral' && onOpenReferral) onOpenReferral();
                       else if (act === 'gift' && onOpenGiftCode) onOpenGiftCode();
-                      else if (act.startsWith('http')) window.open((activeBanner as any).actionUrl, '_blank', 'noopener,noreferrer');
+                      else if (act.startsWith('http')) {
+                        const rawUrl = String((activeBanner as any).actionUrl || '').trim();
+                        if (rawUrl) {
+                          const link = document.createElement('a');
+                          link.href = rawUrl;
+                          link.target = '_blank';
+                          link.rel = 'noopener noreferrer';
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                        }
+                      }
                       else onOpenDeposit();
                     }}
                     className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-900 text-amber-300 font-bold text-xs shadow-lg active:scale-95 transition border border-amber-500/30 flex items-center space-x-1.5"

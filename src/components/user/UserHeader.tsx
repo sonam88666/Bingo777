@@ -107,41 +107,41 @@ export const UserHeader: React.FC<UserHeaderProps> = ({
   return (
     <header className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur-2xl border-b border-amber-500/20 px-3 sm:px-5 py-2.5 transition-all shadow-lg shadow-black/40">
       <div className="max-w-xl mx-auto flex items-center justify-between gap-2">
-        {/* Brand & 3D Stealth Emblem Logo (Name Hidden) */}
-        <div className="flex items-center space-x-2.5">
-          <div onClick={isUserAdmin ? handleHeaderSecretTap : undefined} className={isUserAdmin ? 'cursor-pointer' : ''}>
-            <Bingo777Logo size="md" variant="badge" />
+        {/* Brand Emblem & Wordmark */}
+        <div className="flex items-center gap-2 min-w-0">
+          <div onClick={isUserAdmin ? handleHeaderSecretTap : undefined} className={isUserAdmin ? 'cursor-pointer shrink-0' : 'shrink-0'}>
+            <Bingo777Logo size="sm" variant="full" showText />
           </div>
-          <div>
-            <div className="flex items-center space-x-1.5">
-              {user ? (
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-[10px] font-black text-amber-300 flex items-center space-x-1 shadow-sm">
-                  <Crown className="w-3 h-3 text-amber-400" />
-                  <span>VIP {user.vipLevel}</span>
-                </span>
-              ) : (
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-400/30 text-[10px] font-black text-amber-300 flex items-center space-x-1">
-                  <Crown className="w-3 h-3 text-amber-400" />
-                  <span>ROYAL VIP</span>
-                </span>
-              )}
+          <div className="hidden sm:flex flex-col justify-center min-w-0 border-l border-slate-800 pl-2">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-amber-300 flex items-center gap-1 whitespace-nowrap">
+                <Crown className="w-3 h-3 text-amber-400" />
+                <span>{user ? `VIP ${user.vipLevel}` : 'ROYAL VIP'}</span>
+              </span>
               {isUserAdmin && onOpenAdmin && (
                 <button
                   type="button"
                   onClick={onOpenAdmin}
                   title="Open Admin Panel"
-                  className="px-2 py-0.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-[9px] font-black text-emerald-300 flex items-center space-x-1 transition"
+                  className="px-2 py-0.5 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-[9px] font-black text-emerald-300 flex items-center gap-1 transition whitespace-nowrap"
                 >
                   <ShieldCheck className="w-2.5 h-2.5" />
                   <span>Admin</span>
                 </button>
               )}
             </div>
-            <span className="text-[9px] text-amber-300/80 font-bold tracking-wider flex items-center space-x-1 mt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Real Live Platform</span>
-            </span>
           </div>
+          {isUserAdmin && onOpenAdmin && (
+            <button
+              type="button"
+              onClick={onOpenAdmin}
+              title="Open Admin Panel"
+              className="sm:hidden px-2 py-1 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-[9px] font-black text-emerald-300 flex items-center gap-1 transition whitespace-nowrap"
+            >
+              <ShieldCheck className="w-2.5 h-2.5" />
+              <span>Admin</span>
+            </button>
+          )}
         </div>
 
         {/* Right: Balance Pill & Quick Actions */}

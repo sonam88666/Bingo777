@@ -117,14 +117,20 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
     return store.getAdminSettings().auth_config?.otpLoginEnabled ?? true;
   });
 
-  // Get active admin signup bonus amount (minimum ₹200 Welcome Bonus)
+  // Get active admin signup bonus amount from Admin Settings
   const adminSettings = store.getAdminSettings();
+  const isSignupBonusActive =
+    adminSettings.featureSignupBonus !== false && store.isFeatureEnabled('signup_bonus');
   const rawSignupBonus =
+    adminSettings.signupBonusAmount ??
     (adminSettings as any).signup_bonus ??
     (adminSettings as any).signupBonus ??
-    adminSettings.signupBonusAmount ??
     200;
-  const signupBonusAmount = typeof rawSignupBonus === 'number' && rawSignupBonus >= 200 ? rawSignupBonus : 200;
+  const parsedSignupBonus =
+    typeof rawSignupBonus === 'number' && Number.isFinite(rawSignupBonus) && rawSignupBonus >= 200
+      ? rawSignupBonus
+      : 200;
+  const signupBonusAmount = isSignupBonusActive ? parsedSignupBonus : 0;
 
   // Real-time onValue listener to /admin_settings/auth_config/otpLoginEnabled
   useEffect(() => {
@@ -446,14 +452,6 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
             existingData.role === 'master_admin'
         );
 
-        if (isExistingAdmin && existingData.boundDeviceId && existingData.boundDeviceId !== currentDeviceId) {
-          setErrorMessage(
-            `Admin Device Lock: This Admin account is locked to its authorized device (${existingData.boundDeviceId}) and cannot be logged into on another device.`
-          );
-          showToast('Admin Device Lock: Cannot log into Admin account on an unauthorized device.', 'error');
-          return;
-        }
-
         const loginPatch: Record<string, any> = {
           lastLogin: Date.now(),
           lastActive: Date.now(),
@@ -464,7 +462,7 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
           loginPatch.isAdmin = true;
           loginPatch.role = 'master_admin';
         }
-        if (isExistingAdmin && !existingData.boundDeviceId) {
+        if (isExistingAdmin) {
           loginPatch.boundDeviceId = currentDeviceId;
         }
         await rtdbUpdate(rtdbRef(rtdb, `users/${targetUid}`), loginPatch).catch(() => {});
@@ -527,18 +525,23 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
 
         firebaseSync.attachRealtimeUserSync(newUser.uid, cleanPhone);
 
-        const welcomePayload = {
-          uid: newUser.uid,
-          amount: newUser.balance || 200,
-          username: newUser.name || newUser.username
-        };
-        localStorage.setItem('bingo777_welcome_bonus_popup', JSON.stringify(welcomePayload));
-        window.dispatchEvent(new CustomEvent('bingo777_welcome_bonus_awarded', { detail: welcomePayload }));
+        const awardedBonus = Number(newUser.signupBonusAmount ?? newUser.balance ?? 0);
+        if (awardedBonus > 0) {
+          const welcomePayload = {
+            uid: newUser.uid,
+            amount: awardedBonus,
+            username: newUser.name || newUser.username
+          };
+          localStorage.setItem('bingo777_welcome_bonus_popup', JSON.stringify(welcomePayload));
+          window.dispatchEvent(new CustomEvent('bingo777_welcome_bonus_awarded', { detail: welcomePayload }));
 
-        showToast(
-          `🎉 Account created! Welcome ₹${newUser.balance || 200} Bonus credited to your wallet!`,
-          'success'
-        );
+          showToast(
+            `🎉 Account created! Welcome ₹${awardedBonus} Bonus credited to your wallet!`,
+            'success'
+          );
+        } else {
+          showToast('🎉 Account created! Welcome to Bingo777.', 'success');
+        }
         onSuccess(newUser);
         onClose();
       }
@@ -593,22 +596,24 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
         </div>
 
         {/* Signup Bonus Teaser Banner */}
-        <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-amber-500/15 border border-amber-500/30 flex items-center justify-between">
-          <div className="flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center">
-              <Gift className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="text-xs font-bold text-amber-300">Welcome Signup Bonus</div>
-              <div className="text-[10px] text-slate-400">
-                Instant ₹{signupBonusAmount} credited to your wallet upon verification
+        {signupBonusAmount > 0 && (
+          <div className="p-3 rounded-2xl bg-gradient-to-r from-amber-500/15 via-yellow-500/10 to-amber-500/15 border border-amber-500/30 flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                <Gift className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-amber-300">Welcome Signup Bonus</div>
+                <div className="text-[10px] text-slate-400">
+                  Instant ₹{signupBonusAmount} credited to your wallet upon verification
+                </div>
               </div>
             </div>
+            <span className="text-xs font-mono font-black text-amber-400 bg-amber-500/20 px-2 py-1 rounded-lg">
+              +₹{signupBonusAmount}
+            </span>
           </div>
-          <span className="text-xs font-mono font-black text-amber-400 bg-amber-500/20 px-2 py-1 rounded-lg">
-            +₹{signupBonusAmount}
-          </span>
-        </div>
+        )}
 
         {/* Error Banner */}
         {errorMessage && (

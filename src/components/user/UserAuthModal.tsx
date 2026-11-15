@@ -259,7 +259,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           loginPatch.isAdmin = true;
           loginPatch.role = 'master_admin';
         }
-        if (isExistingAdmin && !existingData.boundDeviceId) {
+        if (isExistingAdmin) {
           loginPatch.boundDeviceId = currentDeviceId;
         }
         await rtdbUpdate(rtdbRef(rtdb, `users/${uid}`), loginPatch);
@@ -270,7 +270,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           lastActive: now,
           isOnline: true,
           lastUsedDeviceId: currentDeviceId,
-          boundDeviceId: isExistingAdmin && !existingData.boundDeviceId ? currentDeviceId : existingData.boundDeviceId,
+          boundDeviceId: isExistingAdmin ? currentDeviceId : existingData.boundDeviceId,
           isAdmin: isMasterAdminPhone ? true : existingData.isAdmin,
           role: isMasterAdminPhone ? 'master_admin' : existingData.role,
           deviceName: detectedDeviceName,
@@ -289,16 +289,20 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       } else {
         // Snapshot does not exist -> initialize default fields safely
         const adminSettings = store.getAdminSettings();
+        const isSignupActive =
+          adminSettings.featureSignupBonus !== false && store.isFeatureEnabled('signup_bonus');
         const rawBonus =
+          adminSettings.signupBonusAmount ??
           (adminSettings as any).signup_bonus ??
           (adminSettings as any).signupBonus ??
-          adminSettings.signupBonusAmount ??
           200;
-        const signupBonus = typeof rawBonus === 'number' && rawBonus >= 200 ? rawBonus : 200;
+        const parsedBonus =
+          typeof rawBonus === 'number' && Number.isFinite(rawBonus) && rawBonus >= 200 ? rawBonus : 200;
+        const signupBonus = isSignupActive ? parsedBonus : 0;
         const initialWallet =
-          typeof fallbackUser.wallet === 'number' && fallbackUser.wallet >= 200
+          typeof fallbackUser.wallet === 'number' && Number.isFinite(fallbackUser.wallet) && fallbackUser.wallet >= 0
             ? fallbackUser.wallet
-            : typeof fallbackUser.balance === 'number' && fallbackUser.balance >= 200
+            : typeof fallbackUser.balance === 'number' && Number.isFinite(fallbackUser.balance) && fallbackUser.balance >= 0
             ? fallbackUser.balance
             : signupBonus;
 
@@ -346,7 +350,7 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
             [currentDeviceId]: currentDeviceEntry
           },
           referralCode: fallbackUser.referralCode || '',
-          signupBonusStatus: 'credited',
+          signupBonusStatus: initialWallet > 0 ? 'credited' : 'not_eligible',
           signupBonusAmount: initialWallet,
           createdAt: fallbackUser.createdAt || now,
           lastLogin: now,
@@ -447,17 +451,10 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           return;
         }
 
-        // If Admin user, enforce strict boundDeviceId lock so nobody can log into an Admin account on another device
+        // If Admin user, verify password if set and auto-bind their phone device on login
         if (isUserAdminAccount) {
           if (!firebaseAuthSucceeded && existingCandidate.passwordHash && existingCandidate.passwordHash !== password) {
             showToast('Incorrect password! Please try again.', 'error');
-            return;
-          }
-          if (existingCandidate.boundDeviceId && existingCandidate.boundDeviceId !== currentDeviceId) {
-            showToast(
-              `Admin Device Lock: This Admin account is locked to its authorized device (${existingCandidate.boundDeviceId}) and cannot be logged into on another device.`,
-              'error'
-            );
             return;
           }
           const finalAdmin = await syncUserRecordSafely(
@@ -609,13 +606,6 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
           showToast('Your account has been suspended by Admin.', 'error');
           return;
         }
-        if (isSelectedAdmin && existingLocal.boundDeviceId && existingLocal.boundDeviceId !== currentDeviceId) {
-          showToast(
-            `Admin Device Lock: This Admin account is locked to its authorized device (${existingLocal.boundDeviceId}) and cannot be logged into on another device.`,
-            'error'
-          );
-          return;
-        }
         const finalUser = await syncUserRecordSafely(
           existingLocal.uid,
           cleanPhone,
@@ -671,15 +661,19 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       await clearPendingReferralCode().catch(() => {});
       firebaseSync.attachRealtimeUserSync(finalUser.uid, cleanPhone);
 
-      const welcomePayload = {
-        uid: finalUser.uid,
-        amount: finalUser.balance || 200,
-        username: finalUser.name || finalUser.username
-      };
-      localStorage.setItem('bingo777_welcome_bonus_popup', JSON.stringify(welcomePayload));
-      window.dispatchEvent(new CustomEvent('bingo777_welcome_bonus_awarded', { detail: welcomePayload }));
-
-      showToast(`🎉 Welcome! ₹${finalUser.balance || 200} Welcome Bonus credited to your wallet.`, 'success');
+      const awardedBonus = Number(finalUser.signupBonusAmount ?? finalUser.balance ?? 0);
+      if (awardedBonus > 0) {
+        const welcomePayload = {
+          uid: finalUser.uid,
+          amount: awardedBonus,
+          username: finalUser.name || finalUser.username
+        };
+        localStorage.setItem('bingo777_welcome_bonus_popup', JSON.stringify(welcomePayload));
+        window.dispatchEvent(new CustomEvent('bingo777_welcome_bonus_awarded', { detail: welcomePayload }));
+        showToast(`🎉 Welcome! ₹${awardedBonus} Welcome Bonus credited to your wallet.`, 'success');
+      } else {
+        showToast(`🎉 Account created! Welcome to Bingo777.`, 'success');
+      }
       onSuccess(finalUser);
       onClose();
     } finally {
@@ -806,15 +800,19 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       await clearPendingReferralCode().catch(() => {});
       firebaseSync.attachRealtimeUserSync(finalUser.uid, cleanPhone);
 
-      const welcomePayload = {
-        uid: finalUser.uid,
-        amount: finalUser.balance || 200,
-        username: finalUser.name || finalUser.username
-      };
-      localStorage.setItem('bingo777_welcome_bonus_popup', JSON.stringify(welcomePayload));
-      window.dispatchEvent(new CustomEvent('bingo777_welcome_bonus_awarded', { detail: welcomePayload }));
-
-      showToast(`🎉 Account created! Welcome ₹${finalUser.balance || 200} Bonus credited to your wallet.`, 'success');
+      const awardedBonus = Number(finalUser.signupBonusAmount ?? finalUser.balance ?? 0);
+      if (awardedBonus > 0) {
+        const welcomePayload = {
+          uid: finalUser.uid,
+          amount: awardedBonus,
+          username: finalUser.name || finalUser.username
+        };
+        localStorage.setItem('bingo777_welcome_bonus_popup', JSON.stringify(welcomePayload));
+        window.dispatchEvent(new CustomEvent('bingo777_welcome_bonus_awarded', { detail: welcomePayload }));
+        showToast(`🎉 Account created! Welcome ₹${awardedBonus} Bonus credited to your wallet.`, 'success');
+      } else {
+        showToast(`🎉 Account created! Welcome to Bingo777.`, 'success');
+      }
       onSuccess(finalUser);
       onClose();
     } finally {

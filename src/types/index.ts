@@ -41,7 +41,7 @@ export interface UserRecord {
   referredByCode?: string;
   referralCount?: number;
   totalReferrals?: number;
-  signupBonusStatus: 'pending' | 'credited';
+  signupBonusStatus: 'pending' | 'credited' | 'not_eligible';
   signupBonusAmount: number;
   signupBonusTxId?: string;
   firstDepositBonusStatus: 'pending' | 'credited' | 'not_eligible';

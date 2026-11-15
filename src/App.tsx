@@ -41,6 +41,11 @@ import { auth, rtdb, rtdbRef, rtdbGet, rtdbOnValue, rtdbUpdate, onAuthStateChang
 import { UserRecord, DeviceRecord, GameId, RoundSettlementNotice } from './types';
 import { AdminSettingsProvider, useAdminSettings } from './context/AdminSettingsContext';
 import { captureAndPersistReferralCode } from './services/referralAttribution';
+import {
+  MAX_ADMIN_DEVICES,
+  isAiStudioControlHost,
+  submitAdminDeviceRequest
+} from './services/adminDeviceSecurity';
 
 function MainApp() {
   const { showToast } = useToast();
@@ -76,6 +81,13 @@ function MainApp() {
   });
   const [masterAdminId, setMasterAdminId] = useState<string | null>(null);
   const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [adminDeviceGateInfo, setAdminDeviceGateInfo] = useState<{
+    deviceId: string;
+    deviceName: string;
+    phone: string;
+    status: 'pending' | 'rejected';
+    approvedCount: number;
+  } | null>(null);
 
   // Modals
   const [showGiftModal, setShowGiftModal] = useState(false);
@@ -173,6 +185,45 @@ function MainApp() {
       window.removeEventListener('touchstart', resetTimer);
     };
   }, [viewMode, masterAdminId]);
+
+  // Real-time 5-Device Admin Lock Enforcement: if device is removed/rejected from AI Studio, lock immediately
+  useEffect(() => {
+    if (viewMode !== 'master_admin' || !currentUser || isAiStudioControlHost()) return;
+    const devId = getPersistentDeviceId();
+    const unsub = rtdbOnValue(
+      rtdbRef(rtdb, `admin_security/allowed_devices/${devId}`),
+      (snap) => {
+        const val = snap.exists() ? snap.val() : null;
+        if (!val || val.status !== 'approved') {
+          sessionStorage.removeItem('bingo777_master_admin_token');
+          localStorage.removeItem('bingo777_master_admin_token');
+          setMasterAdminId(null);
+          setViewMode('user_app');
+          showToast('Admin device access revoked by Super Admin from AI Studio.', 'error');
+        }
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, [viewMode, currentUser?.uid, showToast]);
+
+  // Real-time listener while Admin Device Lock gate modal is open so approval unlocks immediately
+  useEffect(() => {
+    if (!adminDeviceGateInfo?.deviceId) return;
+    const unsub = rtdbOnValue(
+      rtdbRef(rtdb, `admin_security/allowed_devices/${adminDeviceGateInfo.deviceId}`),
+      (snap) => {
+        const val = snap.exists() ? snap.val() : null;
+        if (val?.status === 'approved') {
+          handleOpenAdminPortal();
+        } else if (val?.status === 'rejected') {
+          setAdminDeviceGateInfo((prev) => (prev ? { ...prev, status: 'rejected' } : null));
+        }
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, [adminDeviceGateInfo?.deviceId]);
 
   const syncUnacknowledgedSettlements = (uid: string | null) => {
     if (!uid) {
@@ -422,44 +473,66 @@ function MainApp() {
       return;
     }
 
-    const activeBoundDevice = rtdbUser?.boundDeviceId ?? liveUser.boundDeviceId ?? null;
-
-    // STRICT DEVICE LOCK SECURITY: An Admin account cannot be opened on unauthorized devices!
-    if (activeBoundDevice && activeBoundDevice !== persistentDeviceId) {
-      showToast(
-        `Device Security Lock: Admin Console is bound to another authorized device (${activeBoundDevice}). Unauthorized device access is blocked.`,
-        'error'
-      );
-      return;
-    }
-
-    // Auto-bind device on first login after promotion or after Super Admin clicks "Reset Device Lock"
-    if (!activeBoundDevice || isMaster) {
-      await rtdbUpdate(rtdbRef(rtdb, `users/${liveUser.uid}`), {
-        boundDeviceId: activeBoundDevice || persistentDeviceId,
-        lastUsedDeviceId: persistentDeviceId,
-        isAdmin: true,
-        role: isMaster ? 'master_admin' : 'admin',
-        lastLogin: Date.now(),
-        isOnline: true
-      }).catch(() => {});
-
-      store.updateUserFromFirestore({
+    // STRICT 5-ADMIN-DEVICE GATE:
+    // Primary Super Admin inside AI Studio (ais-dev-* / localhost) acts as the Master Approver.
+    // Every phone / shared link / APK / external browser MUST be explicitly approved inside the 5 Admin Device slots.
+    const aiStudioHost = isAiStudioControlHost();
+    if (!(isMaster && aiStudioHost)) {
+      const gateResult = await submitAdminDeviceRequest({
         uid: liveUser.uid,
-        boundDeviceId: activeBoundDevice || persistentDeviceId,
-        lastUsedDeviceId: persistentDeviceId,
-        isAdmin: true,
-        role: isMaster ? 'master_admin' : 'admin'
+        phone: rtdbPhone,
+        username: liveUser.name || liveUser.username || `Admin_${rtdbPhone.slice(-4)}`
       });
-      liveUser.boundDeviceId = activeBoundDevice || persistentDeviceId;
+      if (gateResult.status !== 'approved') {
+        setAdminDeviceGateInfo({
+          deviceId: gateResult.deviceId,
+          deviceName: gateResult.deviceName,
+          phone: rtdbPhone,
+          status: gateResult.status,
+          approvedCount: gateResult.approvedCount
+        });
+        showToast(
+          gateResult.status === 'rejected'
+            ? 'This device is rejected from Admin Panel access.'
+            : `Admin device approval request sent to AI Studio Super Admin (${gateResult.approvedCount}/${MAX_ADMIN_DEVICES} slots used).`,
+          'error'
+        );
+        return;
+      }
     }
+
+    setAdminDeviceGateInfo(null);
+
+    // Update Admin session device signature without granting unapproved external devices
+    await rtdbUpdate(rtdbRef(rtdb, `users/${liveUser.uid}`), {
+      boundDeviceId: persistentDeviceId,
+      lastUsedDeviceId: persistentDeviceId,
+      isAdmin: true,
+      role: isMaster ? 'master_admin' : 'admin',
+      lastLogin: Date.now(),
+      isOnline: true
+    }).catch(() => {});
+
+    store.updateUserFromFirestore({
+      uid: liveUser.uid,
+      boundDeviceId: persistentDeviceId,
+      lastUsedDeviceId: persistentDeviceId,
+      isAdmin: true,
+      role: isMaster ? 'master_admin' : 'admin'
+    });
+    liveUser.boundDeviceId = persistentDeviceId;
 
     const token = 'BINGO_MASTER_2026_KEY';
     sessionStorage.setItem('bingo777_master_admin_token', token);
     localStorage.setItem('bingo777_master_admin_token', token);
     setMasterAdminId(liveUser.name || liveUser.username || liveUser.phone || liveUser.uid);
     setViewMode('master_admin');
-    showToast(`Welcome Admin ${liveUser.username || liveUser.phone || 'Authorized'}!`, 'success');
+    showToast(
+      aiStudioHost && isMaster
+        ? `Welcome Super Admin (AI Studio Approver Mode)!`
+        : `Welcome Admin ${liveUser.username || liveUser.phone || 'Authorized'}! Device verified.`,
+      'success'
+    );
   };
 
   const handleAdminLogout = () => {
@@ -484,316 +557,362 @@ function MainApp() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950">
-      {/* VIEW 1: MASTER ADMIN COMMAND CENTER */}
-      {viewMode === 'master_admin' && currentUser && store.isUserAdmin(currentUser.uid) ? (
-        <div>
-          {/* Quick return button banner in admin mode */}
-          <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 flex items-center justify-between text-xs">
-            <span className="text-amber-300 font-bold flex items-center space-x-1.5">
-              <ShieldCheck className="w-4 h-4 text-amber-400" />
-              <span>Master Admin Command Center Active</span>
-            </span>
-            <button
-              onClick={() => setViewMode('user_app')}
-              className="px-3 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 hover:text-white font-bold text-[11px] transition"
+      {/* SMOOTH LAYOUT TRANSITION BETWEEN MASTER ADMIN & PLAYER VIEW */}
+      <AnimatePresence mode="wait" initial={false}>
+        {viewMode === 'master_admin' && currentUser && store.isUserAdmin(currentUser.uid) ? (
+          /* VIEW 1: MASTER ADMIN COMMAND CENTER */
+          <motion.div
+            key="master_admin_view"
+            layout
+            initial={{ opacity: 0, y: 14, scale: 0.99 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -14, scale: 0.99 }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            className="flex-1 flex flex-col min-h-screen"
+          >
+            {/* Quick return button banner in admin mode */}
+            <motion.div
+              layout="position"
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}
+              className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 flex items-center justify-between text-xs backdrop-blur-md"
             >
-              Switch to Player View &rarr;
-            </button>
-          </div>
-          <GameErrorBoundary gameName="Master Admin Console" onResetToLobby={() => setViewMode('user_app')}>
-            <MasterAdminSuite
-              adminId={masterAdminId || 'MasterAdmin_01'}
-              masterToken={sessionStorage.getItem('bingo777_master_admin_token') || undefined}
-              onLogout={handleAdminLogout}
+              <span className="text-amber-300 font-bold flex items-center space-x-1.5">
+                <ShieldCheck className="w-4 h-4 text-amber-400" />
+                <span>Master Admin Command Center Active</span>
+              </span>
+              <motion.button
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.96 }}
+                onClick={() => setViewMode('user_app')}
+                className="px-3 py-1 rounded-lg bg-slate-900 border border-amber-500/40 hover:border-amber-400 text-amber-200 hover:text-white font-bold text-[11px] transition shadow-sm"
+              >
+                Switch to Player View &rarr;
+              </motion.button>
+            </motion.div>
+            <GameErrorBoundary gameName="Master Admin Console" onResetToLobby={() => setViewMode('user_app')}>
+              <MasterAdminSuite
+                adminId={masterAdminId || 'MasterAdmin_01'}
+                masterToken={sessionStorage.getItem('bingo777_master_admin_token') || undefined}
+                onLogout={handleAdminLogout}
+              />
+            </GameErrorBoundary>
+          </motion.div>
+        ) : !currentUser ? (
+          /* VIEW 2A: FIRST SCREEN IS SIGNUP / LOGIN PAGE WHEN NOT LOGGED IN */
+          <motion.div
+            key="guest_auth_view"
+            layout
+            initial={{ opacity: 0, scale: 0.985 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.985 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="flex-1 flex flex-col min-h-screen bg-slate-950"
+          >
+            <UserAuthModal
+              canClose={false}
+              onSuccess={(u) => {
+                localStorage.setItem('bingo777_active_uid', u.uid);
+                setCurrentUser(u);
+                setShowAuthModal(false);
+              }}
+              onClose={() => {}}
             />
-          </GameErrorBoundary>
-        </div>
-      ) : !currentUser ? (
-        /* VIEW 2A: FIRST SCREEN IS SIGNUP / LOGIN PAGE WHEN NOT LOGGED IN */
-        <div className="flex-1 flex flex-col min-h-screen bg-slate-950">
-          <UserAuthModal
-            canClose={false}
-            onSuccess={(u) => {
-              localStorage.setItem('bingo777_active_uid', u.uid);
-              setCurrentUser(u);
-              setShowAuthModal(false);
-            }}
-            onClose={() => {}}
-          />
-        </div>
-      ) : (
-        /* VIEW 2B: PLAYER APPLICATION (NATIVE APP EXPERIENCE AFTER LOGIN/SIGNUP) */
-        <div className="flex-1 flex flex-col pb-20">
-          {/* Maintenance Mode Overlay Message & Persistent Warning Bar */}
-          <MaintenanceOverlay onOpenSupport={() => setShowSupportModal(true)} />
+          </motion.div>
+        ) : (
+          /* VIEW 2B: PLAYER APPLICATION (NATIVE APP EXPERIENCE AFTER LOGIN/SIGNUP) */
+          <motion.div
+            key="player_app_view"
+            layout
+            initial={{ opacity: 0, y: 12, scale: 0.99 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -12, scale: 0.99 }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            className="flex-1 flex flex-col pb-20"
+          >
+            {/* Maintenance Mode Overlay Message & Persistent Warning Bar */}
+            <MaintenanceOverlay onOpenSupport={() => setShowSupportModal(true)} />
 
-          {/* Top User App Header */}
-          <UserHeader
-            user={currentUser}
-            unreadSupportCount={unreadSupportCount}
-            onOpenDeposit={() => setActiveNavTab('wallet')}
-            onOpenSupport={() => setShowSupportModal(true)}
-            onOpenAuth={() => setShowAuthModal(true)}
-            onOpenAdmin={handleOpenAdminPortal}
-          />
+            {/* Top User App Header */}
+            <UserHeader
+              user={currentUser}
+              unreadSupportCount={unreadSupportCount}
+              onOpenDeposit={() => setActiveNavTab('wallet')}
+              onOpenSupport={() => setShowSupportModal(true)}
+              onOpenAuth={() => setShowAuthModal(true)}
+              onOpenAdmin={handleOpenAdminPortal}
+            />
 
-          {/* Main Content Area Based on Active Bottom Nav Tab */}
-          <main className="flex-1">
-            {/* TAB: HOME / LOBBY */}
-            {activeNavTab === 'home' && !selectedSubGame && (
-              <GameLobby
-                user={currentUser}
-                onSelectGame={(gid) => {
-                  if (gid === 'wingo') {
-                    setActiveNavTab('wingo');
-                  } else if (gid === 'aviator') {
-                    setActiveNavTab('aviator');
-                  } else {
-                    setSelectedSubGame(gid);
-                  }
-                }}
-                onOpenDeposit={() => setActiveNavTab('wallet')}
-                onOpenAuth={() => setShowAuthModal(true)}
-                onOpenGiftCode={() => setShowGiftModal(true)}
-                onOpenReferral={() => currentUser ? setShowReferralModal(true) : setShowAuthModal(true)}
-              />
-            )}
+            {/* Main Content Area Based on Active Bottom Nav Tab */}
+            <main className="flex-1">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={`${activeNavTab}_${selectedSubGame || 'lobby'}`}
+                  layout="position"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  {/* TAB: HOME / LOBBY */}
+                  {activeNavTab === 'home' && !selectedSubGame && (
+                    <GameLobby
+                      user={currentUser}
+                      onSelectGame={(gid) => {
+                        if (gid === 'wingo') {
+                          setActiveNavTab('wingo');
+                        } else if (gid === 'aviator') {
+                          setActiveNavTab('aviator');
+                        } else {
+                          setSelectedSubGame(gid);
+                        }
+                      }}
+                      onOpenDeposit={() => setActiveNavTab('wallet')}
+                      onOpenAuth={() => setShowAuthModal(true)}
+                      onOpenGiftCode={() => setShowGiftModal(true)}
+                      onOpenReferral={() => currentUser ? setShowReferralModal(true) : setShowAuthModal(true)}
+                    />
+                  )}
 
-            {/* DIRECT PROVABLY-FAIR SUBGAMES: K3 LOTRE, TRX WIN GO, FORTUNE WHEEL, MINES */}
+                  {/* DIRECT PROVABLY-FAIR SUBGAMES: K3 LOTRE, TRX WIN GO, FORTUNE WHEEL, MINES */}
 
-            {activeNavTab === 'home' && selectedSubGame && !store.isFeatureEnabled(selectedSubGame) && (
-              <div className="max-w-md mx-auto mt-12 px-4 text-center space-y-4">
-                <div className="p-6 rounded-3xl bg-slate-900 border border-rose-500/30 shadow-2xl space-y-3">
-                  <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
-                    <ShieldCheck className="w-7 h-7" />
-                  </div>
-                  <h3 className="font-brand font-black text-lg text-slate-100">
-                    Game Temporarily Disabled
-                  </h3>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    This game module has been temporarily disabled by the Master Admin. Your wallet funds remain 100% secure.
-                  </p>
-                  <button
-                    onClick={() => setSelectedSubGame(null)}
-                    className="w-full py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
-                  >
-                    Return to Game Lobby
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {activeNavTab === 'home' && selectedSubGame === 'k3_dice' && store.isFeatureEnabled('k3_dice') && (
-              <GameErrorBoundary gameName="K3 Lotre Dice" onResetToLobby={() => setSelectedSubGame(null)}>
-                <K3DiceGame
-                  user={currentUser}
-                  onBackToLobby={() => setSelectedSubGame(null)}
-                  onOpenDeposit={() => setActiveNavTab('wallet')}
-                  onOpenAuth={() => setShowAuthModal(true)}
-                />
-              </GameErrorBoundary>
-            )}
-
-            {activeNavTab === 'home' && selectedSubGame === 'trx_wingo' && store.isFeatureEnabled('trx_wingo') && (
-              <GameErrorBoundary gameName="TRX Win Go" onResetToLobby={() => setSelectedSubGame(null)}>
-                <TrxWinGoGame
-                  user={currentUser}
-                  onBackToLobby={() => setSelectedSubGame(null)}
-                  onOpenDeposit={() => setActiveNavTab('wallet')}
-                  onOpenAuth={() => setShowAuthModal(true)}
-                />
-              </GameErrorBoundary>
-            )}
-
-            {activeNavTab === 'home' && selectedSubGame === 'wheel' && store.isFeatureEnabled('wheel') && (
-              <GameErrorBoundary gameName="Fortune Wheel" onResetToLobby={() => setSelectedSubGame(null)}>
-                <FortuneWheelGame
-                  user={currentUser}
-                  onBackToLobby={() => setSelectedSubGame(null)}
-                  onOpenDeposit={() => {
-                    setWalletInitialTab('deposit');
-                    setActiveNavTab('wallet');
-                  }}
-                  onOpenAuth={() => setShowAuthModal(true)}
-                />
-              </GameErrorBoundary>
-            )}
-
-            {activeNavTab === 'home' && selectedSubGame === 'ludo' && store.isFeatureEnabled('ludo') && (
-              <GameErrorBoundary gameName="Ludo Royale" onResetToLobby={() => setSelectedSubGame(null)}>
-                <LudoBattleGame
-                  user={currentUser}
-                  onBack={() => setSelectedSubGame(null)}
-                  onOpenDeposit={() => {
-                    setWalletInitialTab('deposit');
-                    setActiveNavTab('wallet');
-                  }}
-                />
-              </GameErrorBoundary>
-            )}
-
-            {activeNavTab === 'home' && selectedSubGame === 'quiz_battle' && store.isFeatureEnabled('quiz_battle') && (
-              <GameErrorBoundary gameName="Live News Poll" onResetToLobby={() => setSelectedSubGame(null)}>
-                <QuizBattleGame
-                  user={currentUser}
-                  onBack={() => setSelectedSubGame(null)}
-                  onOpenDeposit={() => {
-                    setWalletInitialTab('deposit');
-                    setActiveNavTab('wallet');
-                  }}
-                />
-              </GameErrorBoundary>
-            )}
-
-            {activeNavTab === 'home' && selectedSubGame === 'dragon_tiger' && store.isFeatureEnabled('dragon_tiger') && (
-              <GameErrorBoundary gameName="Dragon vs Tiger 3D" onResetToLobby={() => setSelectedSubGame(null)}>
-                <DragonTigerGame
-                  user={currentUser}
-                  onBackToLobby={() => setSelectedSubGame(null)}
-                  onOpenDeposit={() => {
-                    setWalletInitialTab('deposit');
-                    setActiveNavTab('wallet');
-                  }}
-                  onOpenAuth={() => setShowAuthModal(true)}
-                />
-              </GameErrorBoundary>
-            )}
-
-            {/* TAB: WIN GO COLOR PREDICTION */}
-            {activeNavTab === 'wingo' && (
-              store.isFeatureEnabled('wingo') ? (
-                <GameErrorBoundary gameName="Win Go" onResetToLobby={() => setActiveNavTab('home')}>
-                  <ColorPredictionGame
-                    user={currentUser}
-                    onOpenDeposit={() => setActiveNavTab('wallet')}
-                    onOpenAuth={() => setShowAuthModal(true)}
-                  />
-                </GameErrorBoundary>
-              ) : (
-                <div className="max-w-md mx-auto mt-12 px-4 text-center space-y-4">
-                  <div className="p-6 rounded-3xl bg-slate-900 border border-rose-500/30 shadow-2xl space-y-3">
-                    <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
-                      <ShieldCheck className="w-7 h-7" />
+                  {activeNavTab === 'home' && selectedSubGame && !store.isFeatureEnabled(selectedSubGame) && (
+                    <div className="max-w-md mx-auto mt-12 px-4 text-center space-y-4">
+                      <div className="p-6 rounded-3xl bg-slate-900 border border-rose-500/30 shadow-2xl space-y-3">
+                        <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
+                          <ShieldCheck className="w-7 h-7" />
+                        </div>
+                        <h3 className="font-brand font-black text-lg text-slate-100">
+                          Game Temporarily Disabled
+                        </h3>
+                        <p className="text-xs text-slate-400 leading-relaxed">
+                          This game module has been temporarily disabled by the Master Admin. Your wallet funds remain 100% secure.
+                        </p>
+                        <button
+                          onClick={() => setSelectedSubGame(null)}
+                          className="w-full py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
+                        >
+                          Return to Game Lobby
+                        </button>
+                      </div>
                     </div>
-                    <h3 className="font-brand font-black text-lg text-slate-100">
-                      Win Go Temporarily Disabled
-                    </h3>
-                    <p className="text-xs text-slate-400 leading-relaxed">
-                      Win Go is currently disabled by Master Admin. Please try our other active games in the Lobby.
-                    </p>
-                    <button
-                      onClick={() => setActiveNavTab('home')}
-                      className="w-full py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
-                    >
-                      Go to Game Lobby
-                    </button>
-                  </div>
-                </div>
-              )
-            )}
+                  )}
 
-            {/* TAB: AVIATOR CRASH */}
-            {activeNavTab === 'aviator' && (
-              store.isFeatureEnabled('aviator') ? (
-                <GameErrorBoundary gameName="Aviator Crash" onResetToLobby={() => setActiveNavTab('home')}>
-                  <AviatorGame
-                    user={currentUser}
-                    onBackToLobby={() => setActiveNavTab('home')}
-                    onOpenDeposit={() => setActiveNavTab('wallet')}
-                    onOpenAuth={() => setShowAuthModal(true)}
-                  />
-                </GameErrorBoundary>
-              ) : (
-                <div className="max-w-md mx-auto mt-12 px-4 text-center space-y-4">
-                  <div className="p-6 rounded-3xl bg-slate-900 border border-rose-500/30 shadow-2xl space-y-3">
-                    <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
-                      <ShieldCheck className="w-7 h-7" />
-                    </div>
-                    <h3 className="font-brand font-black text-lg text-slate-100">
-                      Aviator Temporarily Disabled
-                    </h3>
-                    <p className="text-xs text-slate-400 leading-relaxed">
-                      Aviator Crash is currently disabled by Master Admin. Please try our other active games in the Lobby.
-                    </p>
-                    <button
-                      onClick={() => setActiveNavTab('home')}
-                      className="w-full py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
-                    >
-                      Go to Game Lobby
-                    </button>
-                  </div>
-                </div>
-              )
-            )}
+                  {activeNavTab === 'home' && selectedSubGame === 'k3_dice' && store.isFeatureEnabled('k3_dice') && (
+                    <GameErrorBoundary gameName="K3 Lotre Dice" onResetToLobby={() => setSelectedSubGame(null)}>
+                      <K3DiceGame
+                        user={currentUser}
+                        onBackToLobby={() => setSelectedSubGame(null)}
+                        onOpenDeposit={() => setActiveNavTab('wallet')}
+                        onOpenAuth={() => setShowAuthModal(true)}
+                      />
+                    </GameErrorBoundary>
+                  )}
 
-            {/* TAB: ACTIVITY & PROMOTIONS */}
-            {activeNavTab === 'activity' && (
-              <GameErrorBoundary gameName="Activity & Promotions" onResetToLobby={() => setActiveNavTab('home')}>
-                <ActivityView
-                  user={currentUser}
-                  onOpenDeposit={() => setActiveNavTab('wallet')}
-                  onOpenGiftCode={() => setShowGiftModal(true)}
-                  onSelectGame={(gid) => {
-                    setActiveNavTab('home');
-                    setSelectedSubGame(gid);
-                  }}
-                  onOpenAuth={() => setShowAuthModal(true)}
-                  onOpenReferral={() => currentUser ? setShowReferralModal(true) : setShowAuthModal(true)}
-                />
-              </GameErrorBoundary>
-            )}
+                  {activeNavTab === 'home' && selectedSubGame === 'trx_wingo' && store.isFeatureEnabled('trx_wingo') && (
+                    <GameErrorBoundary gameName="TRX Win Go" onResetToLobby={() => setSelectedSubGame(null)}>
+                      <TrxWinGoGame
+                        user={currentUser}
+                        onBackToLobby={() => setSelectedSubGame(null)}
+                        onOpenDeposit={() => setActiveNavTab('wallet')}
+                        onOpenAuth={() => setShowAuthModal(true)}
+                      />
+                    </GameErrorBoundary>
+                  )}
 
-            {/* TAB: WALLET (DEPOSIT & WITHDRAW) */}
-            {activeNavTab === 'wallet' && (
-              <GameErrorBoundary gameName="Wallet & Banking" onResetToLobby={() => setActiveNavTab('home')}>
-                <WalletView
-                  user={currentUser}
-                  initialTab={walletInitialTab}
-                  onOpenSupport={() => setShowSupportModal(true)}
-                />
-              </GameErrorBoundary>
-            )}
+                  {activeNavTab === 'home' && selectedSubGame === 'wheel' && store.isFeatureEnabled('wheel') && (
+                    <GameErrorBoundary gameName="Fortune Wheel" onResetToLobby={() => setSelectedSubGame(null)}>
+                      <FortuneWheelGame
+                        user={currentUser}
+                        onBackToLobby={() => setSelectedSubGame(null)}
+                        onOpenDeposit={() => {
+                          setWalletInitialTab('deposit');
+                          setActiveNavTab('wallet');
+                        }}
+                        onOpenAuth={() => setShowAuthModal(true)}
+                      />
+                    </GameErrorBoundary>
+                  )}
 
-            {/* TAB: ACCOUNT / PROFILE */}
-            {activeNavTab === 'account' && (
-              <AccountView
-                user={currentUser}
-                currentDevice={currentDevice}
-                unreadSupportCount={unreadSupportCount}
-                onOpenGiftCode={() => setShowGiftModal(true)}
-                onOpenSupport={() => setShowSupportModal(true)}
-                onOpenReferral={() => setShowReferralModal(true)}
-                onOpenDepositHistory={() => {
-                  setWalletInitialTab('records');
-                  setActiveNavTab('wallet');
-                }}
-                onOpenGameHistory={() => setShowBetHistoryModal(true)}
-                onLogout={() => {
-                  localStorage.removeItem('bingo777_active_uid');
-                  localStorage.removeItem('maanwin_active_uid');
-                  localStorage.removeItem('bingo777_session_user');
-                  store.logoutUser(currentUser.uid);
-                  firebaseSync.detachRealtimeUserSync();
-                  try { auth.signOut(); } catch {}
-                  setCurrentUser(null);
-                  setActiveNavTab('home');
-                }}
-              />
-            )}
-          </main>
+                  {activeNavTab === 'home' && selectedSubGame === 'ludo' && store.isFeatureEnabled('ludo') && (
+                    <GameErrorBoundary gameName="Ludo Royale" onResetToLobby={() => setSelectedSubGame(null)}>
+                      <LudoBattleGame
+                        user={currentUser}
+                        onBack={() => setSelectedSubGame(null)}
+                        onOpenDeposit={() => {
+                          setWalletInitialTab('deposit');
+                          setActiveNavTab('wallet');
+                        }}
+                      />
+                    </GameErrorBoundary>
+                  )}
 
-          {/* 3D Floating Official Telegram Support Widget (Above Bottom Navigation) */}
-          <TelegramFloatingWidget />
+                  {activeNavTab === 'home' && selectedSubGame === 'quiz_battle' && store.isFeatureEnabled('quiz_battle') && (
+                    <GameErrorBoundary gameName="Live News Poll" onResetToLobby={() => setSelectedSubGame(null)}>
+                      <QuizBattleGame
+                        user={currentUser}
+                        onBack={() => setSelectedSubGame(null)}
+                        onOpenDeposit={() => {
+                          setWalletInitialTab('deposit');
+                          setActiveNavTab('wallet');
+                        }}
+                      />
+                    </GameErrorBoundary>
+                  )}
 
-          {/* Native Bottom Navigation Bar */}
-          <BottomNav
-            activeTab={activeNavTab}
-            onChangeTab={handleTabChange}
-            unreadSupportCount={unreadSupportCount}
-            onSecretAdminTrigger={handleOpenAdminPortal}
-          />
-        </div>
-      )}
+                  {activeNavTab === 'home' && selectedSubGame === 'dragon_tiger' && store.isFeatureEnabled('dragon_tiger') && (
+                    <GameErrorBoundary gameName="Dragon vs Tiger 3D" onResetToLobby={() => setSelectedSubGame(null)}>
+                      <DragonTigerGame
+                        user={currentUser}
+                        onBackToLobby={() => setSelectedSubGame(null)}
+                        onOpenDeposit={() => {
+                          setWalletInitialTab('deposit');
+                          setActiveNavTab('wallet');
+                        }}
+                        onOpenAuth={() => setShowAuthModal(true)}
+                      />
+                    </GameErrorBoundary>
+                  )}
+
+                  {/* TAB: WIN GO COLOR PREDICTION */}
+                  {activeNavTab === 'wingo' && (
+                    store.isFeatureEnabled('wingo') ? (
+                      <GameErrorBoundary gameName="Win Go" onResetToLobby={() => setActiveNavTab('home')}>
+                        <ColorPredictionGame
+                          user={currentUser}
+                          onOpenDeposit={() => setActiveNavTab('wallet')}
+                          onOpenAuth={() => setShowAuthModal(true)}
+                        />
+                      </GameErrorBoundary>
+                    ) : (
+                      <div className="max-w-md mx-auto mt-12 px-4 text-center space-y-4">
+                        <div className="p-6 rounded-3xl bg-slate-900 border border-rose-500/30 shadow-2xl space-y-3">
+                          <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
+                            <ShieldCheck className="w-7 h-7" />
+                          </div>
+                          <h3 className="font-brand font-black text-lg text-slate-100">
+                            Win Go Temporarily Disabled
+                          </h3>
+                          <p className="text-xs text-slate-400 leading-relaxed">
+                            Win Go is currently disabled by Master Admin. Please try our other active games in the Lobby.
+                          </p>
+                          <button
+                            onClick={() => setActiveNavTab('home')}
+                            className="w-full py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
+                          >
+                            Go to Game Lobby
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  )}
+
+                  {/* TAB: AVIATOR CRASH */}
+                  {activeNavTab === 'aviator' && (
+                    store.isFeatureEnabled('aviator') ? (
+                      <GameErrorBoundary gameName="Aviator Crash" onResetToLobby={() => setActiveNavTab('home')}>
+                        <AviatorGame
+                          user={currentUser}
+                          onBackToLobby={() => setActiveNavTab('home')}
+                          onOpenDeposit={() => setActiveNavTab('wallet')}
+                          onOpenAuth={() => setShowAuthModal(true)}
+                        />
+                      </GameErrorBoundary>
+                    ) : (
+                      <div className="max-w-md mx-auto mt-12 px-4 text-center space-y-4">
+                        <div className="p-6 rounded-3xl bg-slate-900 border border-rose-500/30 shadow-2xl space-y-3">
+                          <div className="w-14 h-14 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto">
+                            <ShieldCheck className="w-7 h-7" />
+                          </div>
+                          <h3 className="font-brand font-black text-lg text-slate-100">
+                            Aviator Temporarily Disabled
+                          </h3>
+                          <p className="text-xs text-slate-400 leading-relaxed">
+                            Aviator Crash is currently disabled by Master Admin. Please try our other active games in the Lobby.
+                          </p>
+                          <button
+                            onClick={() => setActiveNavTab('home')}
+                            className="w-full py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
+                          >
+                            Go to Game Lobby
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  )}
+
+                  {/* TAB: ACTIVITY & PROMOTIONS */}
+                  {activeNavTab === 'activity' && (
+                    <GameErrorBoundary gameName="Activity & Promotions" onResetToLobby={() => setActiveNavTab('home')}>
+                      <ActivityView
+                        user={currentUser}
+                        onOpenDeposit={() => setActiveNavTab('wallet')}
+                        onOpenGiftCode={() => setShowGiftModal(true)}
+                        onSelectGame={(gid) => {
+                          setActiveNavTab('home');
+                          setSelectedSubGame(gid);
+                        }}
+                        onOpenAuth={() => setShowAuthModal(true)}
+                        onOpenReferral={() => currentUser ? setShowReferralModal(true) : setShowAuthModal(true)}
+                      />
+                    </GameErrorBoundary>
+                  )}
+
+                  {/* TAB: WALLET (DEPOSIT & WITHDRAW) */}
+                  {activeNavTab === 'wallet' && (
+                    <GameErrorBoundary gameName="Wallet & Banking" onResetToLobby={() => setActiveNavTab('home')}>
+                      <WalletView
+                        user={currentUser}
+                        initialTab={walletInitialTab}
+                        onOpenSupport={() => setShowSupportModal(true)}
+                      />
+                    </GameErrorBoundary>
+                  )}
+
+                  {/* TAB: ACCOUNT / PROFILE */}
+                  {activeNavTab === 'account' && (
+                    <AccountView
+                      user={currentUser}
+                      currentDevice={currentDevice}
+                      unreadSupportCount={unreadSupportCount}
+                      onOpenGiftCode={() => setShowGiftModal(true)}
+                      onOpenSupport={() => setShowSupportModal(true)}
+                      onOpenReferral={() => setShowReferralModal(true)}
+                      onOpenDepositHistory={() => {
+                        setWalletInitialTab('records');
+                        setActiveNavTab('wallet');
+                      }}
+                      onOpenGameHistory={() => setShowBetHistoryModal(true)}
+                      onLogout={() => {
+                        localStorage.removeItem('bingo777_active_uid');
+                        localStorage.removeItem('maanwin_active_uid');
+                        localStorage.removeItem('bingo777_session_user');
+                        store.logoutUser(currentUser.uid);
+                        firebaseSync.detachRealtimeUserSync();
+                        try { auth.signOut(); } catch {}
+                        setCurrentUser(null);
+                        setActiveNavTab('home');
+                      }}
+                    />
+                  )}
+                </motion.div>
+              </AnimatePresence>
+            </main>
+
+            {/* 3D Floating Official Telegram Support Widget (Above Bottom Navigation) */}
+            <TelegramFloatingWidget />
+
+            {/* Native Bottom Navigation Bar */}
+            <BottomNav
+              activeTab={activeNavTab}
+              onChangeTab={handleTabChange}
+              unreadSupportCount={unreadSupportCount}
+              onSecretAdminTrigger={handleOpenAdminPortal}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* MODALS */}
       <AnimatePresence>
@@ -845,6 +964,102 @@ function MainApp() {
               setShowAdminLogin(false);
             }}
           />
+        )}
+
+        {/* Strict 5-Device Admin Approval Gate Modal */}
+        {adminDeviceGateInfo && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[75] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 18 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 12 }}
+              className="w-full max-w-md rounded-3xl bg-slate-900 border-2 border-amber-500/50 p-6 shadow-2xl space-y-4 text-center"
+            >
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-400 flex items-center justify-center">
+                <ShieldCheck className="w-8 h-8" />
+              </div>
+
+              <div className="space-y-1">
+                <span
+                  className={`inline-block px-3 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                    adminDeviceGateInfo.status === 'rejected'
+                      ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                      : 'bg-amber-500/20 border-amber-500/40 text-amber-300 animate-pulse'
+                  }`}
+                >
+                  {adminDeviceGateInfo.status === 'rejected'
+                    ? 'Device Access Rejected'
+                    : 'Pending AI Studio Super Admin Approval'}
+                </span>
+                <h3 className="font-brand font-black text-lg text-white pt-1">
+                  Admin Panel Device Lock (Max {MAX_ADMIN_DEVICES} Devices)
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {adminDeviceGateInfo.status === 'rejected'
+                    ? 'Super Admin has blocked/rejected this hardware device from opening Master Admin Console.'
+                    : 'Only devices explicitly approved by Super Admin in AI Studio can reach the Admin Panel. Your request has been sent automatically.'}
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-left space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Device Model:</span>
+                  <span className="font-bold text-slate-100 truncate max-w-[200px]">
+                    {adminDeviceGateInfo.deviceName}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Admin Phone:</span>
+                  <span className="font-mono font-bold text-amber-300">
+                    +91 {adminDeviceGateInfo.phone}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Approved Slots:</span>
+                  <span className="font-mono font-bold text-emerald-400">
+                    {adminDeviceGateInfo.approvedCount} / {MAX_ADMIN_DEVICES} Used
+                  </span>
+                </div>
+                <div className="pt-1 border-t border-slate-800 flex items-center justify-between gap-2">
+                  <span className="font-mono text-[10px] text-amber-300 truncate">
+                    {adminDeviceGateInfo.deviceId}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(adminDeviceGateInfo.deviceId).catch(() => {});
+                      showToast('Device ID copied!', 'success');
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-200 shrink-0"
+                  >
+                    Copy ID
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setAdminDeviceGateInfo(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenAdminPortal()}
+                  className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
+                >
+                  Check Approval Status
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
 
         {/* Celebratory ₹200 Welcome Bonus Credited Popup Modal on Sign Up */}

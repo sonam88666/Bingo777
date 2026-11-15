@@ -5497,9 +5497,17 @@ class AuthoritativeStore {
       }
     }
 
-    // Automatically credit ₹200 Welcome Signup Bonus from admin settings (/admin_settings/signup_bonus) or default ₹200
-    const rawBonus = (this.adminSettings as any).signup_bonus ?? (this.adminSettings as any).signupBonus ?? this.adminSettings.signupBonusAmount;
-    const signupBonus = typeof rawBonus === 'number' && rawBonus >= 200 ? rawBonus : 200;
+    // Automatically credit Welcome Signup Bonus from admin settings (/admin_settings/signupBonusAmount) if enabled
+    const isSignupBonusActive =
+      this.adminSettings.featureSignupBonus !== false && this.isFeatureEnabled('signup_bonus');
+    const rawBonus =
+      this.adminSettings.signupBonusAmount ??
+      (this.adminSettings as any).signup_bonus ??
+      (this.adminSettings as any).signupBonus ??
+      200;
+    const parsedBonus =
+      typeof rawBonus === 'number' && Number.isFinite(rawBonus) && rawBonus >= 200 ? rawBonus : 200;
+    const signupBonus = isSignupBonusActive ? parsedBonus : 0;
     const initialBalance = signupBonus;
 
     const isMasterAdminPhone = this.isMasterAdminPhone(cleanPhone);
@@ -5537,7 +5545,7 @@ class AuthoritativeStore {
       referredBy: referredByUid,
       referredByCode: cleanRefCode,
       referralCount: 0,
-      signupBonusStatus: 'credited',
+      signupBonusStatus: signupBonus > 0 ? 'credited' : 'not_eligible',
       signupBonusAmount: signupBonus,
       firstDepositBonusStatus: 'pending', // Pending 1st approved deposit
       firstDepositBonusAmount: 0,
@@ -5589,7 +5597,7 @@ class AuthoritativeStore {
           qualifyingDaysCompleted: 0,
           dailyTurnover: {},
           status: 'pending_deposit',
-          bonusAmount: this.adminSettings.referralBonusAmount || 120
+          bonusAmount: this.adminSettings.referralBonusAmount ?? 120
         };
         const existingRefIdx = this.referrals.findIndex((r) => r.id === createdRefRecord!.id || r.referredUid === uid);
         if (existingRefIdx >= 0) {
@@ -6047,8 +6055,8 @@ class AuthoritativeStore {
     if (!user) return true;
     // Admins or users with matching/unbound boundDeviceId are always approved
     const currentDeviceId = getPersistentDeviceId();
-    if (user.isAdmin || user.role === 'admin' || user.role === 'master_admin') {
-      if (!user.boundDeviceId || user.boundDeviceId === currentDeviceId) return true;
+    if (user.isAdmin || user.role === 'admin' || user.role === 'master_admin' || this.isMasterAdminPhone(user.phone)) {
+      return true;
     }
     if (!user.boundDeviceId || user.boundDeviceId === currentDeviceId) return true;
     const devices = Object.values(user.devices || {});
@@ -6105,23 +6113,24 @@ class AuthoritativeStore {
       existing.role === 'master_admin' ||
       this.isMasterAdminPhone(cleanPhone);
 
-    // STRICT ADMIN DEVICE LOCK: If an Admin account is already bound to a specific device,
-    // prevent login on any other device.
-    if (isExistingAdmin && existing.boundDeviceId && existing.boundDeviceId !== device.deviceId) {
-      return {
-        success: false,
-        code: 'ACCOUNT_RESTRICTED',
-        error: `Admin Security Lock: This Admin account is locked to its authorized device (${existing.boundDeviceId}) and cannot be logged into on another device.`
-      };
-    }
-
-    if (isExistingAdmin && !existing.boundDeviceId) {
+    // Authorized Admin logging in on their phone: auto-bind current device & approve immediately
+    if (isExistingAdmin) {
       existing.boundDeviceId = device.deviceId;
+      existing.lastUsedDeviceId = device.deviceId;
       existing.isAdmin = true;
-      existing.role = this.isMasterAdminPhone(cleanPhone) ? 'master_admin' : 'admin';
-    } else if (this.isMasterAdminPhone(cleanPhone)) {
-      existing.isAdmin = true;
-      existing.role = 'master_admin';
+      existing.role = this.isMasterAdminPhone(cleanPhone) ? 'master_admin' : existing.role === 'master_admin' ? 'master_admin' : 'admin';
+      existing.devices[device.deviceId] = {
+        ...device,
+        registeredAt: existing.devices[device.deviceId]?.registeredAt || now,
+        requestedAt: existing.devices[device.deviceId]?.requestedAt || now,
+        lastUsedAt: now,
+        status: 'approved'
+      };
+      existing.lastLogin = now;
+      existing.lastActive = now;
+      existing.isOnline = true;
+      this.savePermanentUsersRegistry();
+      return { success: true, user: existing };
     }
 
     const allDevices = Object.values(existing.devices);
@@ -6569,10 +6578,18 @@ class AuthoritativeStore {
     if (currentUpdatedAt > 0 && incomingUpdatedAt > 0 && incomingUpdatedAt < currentUpdatedAt) {
       return;
     }
+    const rawIncomingSignup =
+      incomingSettings.signupBonusAmount ??
+      (incomingSettings as any).signup_bonus ??
+      (incomingSettings as any).signupBonus;
     const normalizedSignupBonus =
-      incomingSettings.signupBonusAmount === 100 || incomingSettings.signupBonusAmount === 120 || !incomingSettings.signupBonusAmount
-        ? 200
-        : incomingSettings.signupBonusAmount;
+      typeof rawIncomingSignup === 'number' && Number.isFinite(rawIncomingSignup) && rawIncomingSignup >= 200
+        ? rawIncomingSignup
+        : typeof this.adminSettings.signupBonusAmount === 'number' &&
+          Number.isFinite(this.adminSettings.signupBonusAmount) &&
+          this.adminSettings.signupBonusAmount >= 200
+        ? this.adminSettings.signupBonusAmount
+        : 200;
     this.adminSettings = {
       ...this.adminSettings,
       ...incomingSettings,
@@ -7077,10 +7094,15 @@ class AuthoritativeStore {
         user.firstDepositBonusStatus = 'not_eligible';
       }
 
-      // ₹200 Signup Bonus
+      // Signup Bonus (only if not already credited at registration)
       const subEnabled = this.isFeatureEnabled('signup_bonus') && this.adminSettings.featureSignupBonus !== false;
-      const subAmount = this.adminSettings.signupBonusAmount || 200;
-      if (subEnabled && subAmount > 0) {
+      const subAmount = this.adminSettings.signupBonusAmount ?? 200;
+      if (
+        user.signupBonusStatus !== 'credited' &&
+        user.signupBonusStatus !== 'not_eligible' &&
+        subEnabled &&
+        subAmount > 0
+      ) {
         const subTx = this.executeWalletTransaction({
           uid: dep.uid,
           type: 'signup_bonus',
@@ -7091,9 +7113,11 @@ class AuthoritativeStore {
           status: 'completed',
           metadata: { depositId: dep.id }
         });
-        user.signupBonusStatus = 'credited';
-        user.signupBonusAmount = subAmount;
-        user.signupBonusTxId = subTx.transaction?.id;
+        if (subTx.success) {
+          user.signupBonusStatus = 'credited';
+          user.signupBonusAmount = subAmount;
+          user.signupBonusTxId = subTx.transaction?.id;
+        }
       }
 
       user.firstDepositApprovedAt = Date.now();
@@ -8112,6 +8136,8 @@ class AuthoritativeStore {
 
     user.lastCheckInDate = todayStr;
     user.checkInDay = (currentDay % 7) + 1;
+    user.wallet = user.balance;
+    user.updatedAt = Date.now();
     try {
       localStorage.setItem(`bingo777_last_checkin_date_${uid}`, todayStr);
       localStorage.setItem(`bingo777_last_checkin_day_${uid}`, user.checkInDay.toString());
@@ -8128,6 +8154,9 @@ class AuthoritativeStore {
 
     this.saveToStorage();
     this.savePermanentUsersRegistry();
+    if (this.onUserSaved) {
+      try { this.onUserSaved(user); } catch (e) { console.warn('onUserSaved attendance error:', e); }
+    }
     this.notify();
 
     return {
@@ -8947,6 +8976,12 @@ class AuthoritativeStore {
       merged.referralDailyBetRequirement = newSettings.referralQualifyingBet;
     } else if (newSettings.referralDailyBetRequirement !== undefined) {
       merged.referralQualifyingBet = newSettings.referralDailyBetRequirement;
+    }
+    if (newSettings.signupBonusAmount !== undefined && Number.isFinite(Number(newSettings.signupBonusAmount))) {
+      const cleanAmt = Math.max(0, Number(newSettings.signupBonusAmount));
+      merged.signupBonusAmount = cleanAmt;
+      (merged as any).signup_bonus = cleanAmt;
+      (merged as any).signupBonus = cleanAmt;
     }
     this.adminSettings = merged;
     this.ingestCloudAdminSettings(merged);

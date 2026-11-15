@@ -50,6 +50,15 @@ import {
   rtdbOnValue,
   rtdbRemove
 } from '../../firebase';
+import {
+  MAX_ADMIN_DEVICES,
+  AdminAllowedDeviceRecord,
+  normalizeAdminDeviceMap,
+  getApprovedAdminDevices,
+  approveAdminDeviceSlot,
+  rejectAdminDeviceSlot,
+  revokeAdminDeviceSlot
+} from '../../services/adminDeviceSecurity';
 
 interface AdminSettingsProps {
   adminId: string;
@@ -137,7 +146,7 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
 
   // 🔐 High-Security Admin Access & Device Lock State (/admin_security)
   const [allowedPhones, setAllowedPhones] = useState<Record<string, { phone: string; name?: string; addedAt?: number }>>({});
-  const [allowedDevices, setAllowedDevices] = useState<Record<string, { deviceId: string; phone?: string; pairedAt?: number; status?: string; deviceName?: string }>>({});
+  const [allowedDevices, setAllowedDevices] = useState<Record<string, AdminAllowedDeviceRecord>>({});
   const [newAdminPhone, setNewAdminPhone] = useState('');
   const [newAdminPhoneName, setNewAdminPhoneName] = useState('');
   const [masterAdminPassInput, setMasterAdminPassInput] = useState('Anchal@8877@@!');
@@ -178,15 +187,26 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
       setTick((t) => t + 1);
       const liveSettings = store.getAdminSettings();
       setFormState((prev) => {
-        if (prev.maintenanceMode !== Boolean(liveSettings.maintenanceMode)) {
-          return {
-            ...prev,
-            maintenanceMode: Boolean(liveSettings.maintenanceMode),
-            maintenanceMessage: liveSettings.maintenanceMessage || prev.maintenanceMessage,
-            maintenanceEstimatedResumeTime: liveSettings.maintenanceEstimatedResumeTime ?? prev.maintenanceEstimatedResumeTime
-          };
-        }
-        return prev;
+        const nextMaint = Boolean(liveSettings.maintenanceMode);
+        const maintChanged = prev.maintenanceMode !== nextMaint;
+        const bonusChanged =
+          (typeof liveSettings.signupBonusAmount === 'number' &&
+            liveSettings.signupBonusAmount !== prev.signupBonusAmount &&
+            Number(liveSettings.updatedAt || 0) > Number(prev.updatedAt || 0)) ||
+          (typeof liveSettings.firstDepositBonusPercent === 'number' &&
+            liveSettings.firstDepositBonusPercent !== prev.firstDepositBonusPercent &&
+            Number(liveSettings.updatedAt || 0) > Number(prev.updatedAt || 0));
+        if (!maintChanged && !bonusChanged) return prev;
+        return {
+          ...prev,
+          maintenanceMode: nextMaint,
+          maintenanceMessage: liveSettings.maintenanceMessage || prev.maintenanceMessage,
+          maintenanceEstimatedResumeTime: liveSettings.maintenanceEstimatedResumeTime ?? prev.maintenanceEstimatedResumeTime,
+          signupBonusAmount: liveSettings.signupBonusAmount ?? prev.signupBonusAmount,
+          firstDepositBonusPercent: liveSettings.firstDepositBonusPercent ?? prev.firstDepositBonusPercent,
+          referralBonusAmount: liveSettings.referralBonusAmount ?? prev.referralBonusAmount,
+          updatedAt: liveSettings.updatedAt ?? prev.updatedAt
+        };
       });
     });
 
@@ -290,9 +310,7 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
       });
 
       unsubDevices = rtdbOnValue(rtdbRef(rtdb, 'admin_security/allowed_devices'), (snap) => {
-        if (snap.exists()) {
-          setAllowedDevices(snap.val() || {});
-        }
+        setAllowedDevices(snap.exists() ? normalizeAdminDeviceMap(snap.val()) : {});
       });
     } catch (e) {
       console.warn('RTDB admin subscriptions error:', e);
@@ -481,8 +499,10 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
 
   // 💰 Quick Save for Signup Bonus & Deposit Offer/Discount Settings
   const handleSaveBonusAndOfferQuick = async (broadcastAsPopup: boolean = false) => {
-    const cleanSignup = Math.max(0, Number(formState.signupBonusAmount) || 200);
-    const cleanFirstDep = Math.max(0, Number(formState.firstDepositBonusPercent) || 100);
+    const rawSignup = formState.signupBonusAmount ?? 200;
+    const cleanSignup = Math.max(200, Number.isFinite(Number(rawSignup)) ? Number(rawSignup) : 200);
+    const rawFirstDep = formState.firstDepositBonusPercent ?? 100;
+    const cleanFirstDep = Math.max(0, Number.isFinite(Number(rawFirstDep)) ? Number(rawFirstDep) : 100);
     const cleanOfferTag = (formState.depositOfferTag || `${cleanFirstDep}% EXTRA BONUS`).trim();
 
     const updatedPartial: Partial<AdminSettings> = {
@@ -645,23 +665,51 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
     showToast(`Removed +91 ${phoneKey} from Admin Allowed Numbers.`, 'info');
   };
 
-  // 🔐 Security Handlers: Allowed Devices
+  // 🔐 Security Handlers: Approved Admin Devices (Strict Max 5 Slots)
+  const approvedAdminDeviceList = getApprovedAdminDevices(allowedDevices);
+
   const handlePairCurrentDevice = async () => {
     const dev = store.getOrCreateClientDevice();
-    await rtdbSet(rtdbRef(rtdb, `admin_security/allowed_devices/${dev.deviceId}`), {
-      deviceId: dev.deviceId,
-      deviceName: dev.deviceName || 'Admin Hardware Device',
-      browser: dev.browser || 'Browser',
-      os: dev.os || 'OS',
-      pairedAt: Date.now(),
-      pairedBy: adminId,
-      status: 'approved'
-    });
-    showToast(`Approved & Locked Current Device (${dev.deviceId}) for Admin Login!`, 'success');
+    const res = await approveAdminDeviceSlot(
+      {
+        deviceId: dev.deviceId,
+        deviceName: dev.deviceName || 'Admin Hardware Device',
+        deviceModel: dev.deviceModel || dev.deviceName || 'Admin Hardware Device',
+        browser: dev.browser || 'Browser',
+        os: dev.os || 'OS',
+        username: adminId
+      },
+      adminId
+    );
+    if (res.success) {
+      showToast(
+        `Approved & Locked Current Device (${dev.deviceId}) — ${res.approvedCount}/${MAX_ADMIN_DEVICES} slots used!`,
+        'success'
+      );
+    } else {
+      showToast(res.error || `Maximum ${MAX_ADMIN_DEVICES} Admin Devices limit reached.`, 'error');
+    }
+  };
+
+  const handleApproveDeviceFromSettings = async (dev: AdminAllowedDeviceRecord) => {
+    const res = await approveAdminDeviceSlot(dev, adminId);
+    if (res.success) {
+      showToast(
+        `Approved Admin Device ${dev.deviceId} (${res.approvedCount}/${MAX_ADMIN_DEVICES} slots used)!`,
+        'success'
+      );
+    } else {
+      showToast(res.error || `Maximum ${MAX_ADMIN_DEVICES} Admin Devices limit reached.`, 'error');
+    }
+  };
+
+  const handleRejectDeviceFromSettings = async (devId: string) => {
+    await rejectAdminDeviceSlot(devId, adminId, 'Rejected from Admin Settings');
+    showToast(`Rejected Admin Device ${devId}.`, 'info');
   };
 
   const handleRemoveAllowedDevice = async (devId: string) => {
-    await rtdbRemove(rtdbRef(rtdb, `admin_security/allowed_devices/${devId}`));
+    await revokeAdminDeviceSlot(devId, adminId);
     showToast(`Device ${devId} unlinked from Admin approval.`, 'info');
   };
 
@@ -3424,48 +3472,97 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
               </div>
             </div>
 
-            {/* 2. Approved Admin Hardware Devices */}
+            {/* 2. Approved Admin Hardware Devices (Strict 5-Device Cap) */}
             <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 font-bold text-slate-200">
                   <Lock className="w-4 h-4 text-emerald-400" />
-                  <span>2. Approved Admin Hardware Devices</span>
+                  <span>2. Approved Admin Devices (Max {MAX_ADMIN_DEVICES})</span>
                 </div>
-                <span className="text-[10px] text-slate-400 font-mono">
-                  {Object.keys(allowedDevices).length} Devices
+                <span
+                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                    approvedAdminDeviceList.length >= MAX_ADMIN_DEVICES
+                      ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                      : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                  }`}
+                >
+                  {approvedAdminDeviceList.length} / {MAX_ADMIN_DEVICES} Approved
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Admin Panel is hardware-locked to approved device IDs. Any unapproved device attempting login is auto-blocked.
+                Only up to {MAX_ADMIN_DEVICES} hardware devices approved from AI Studio can access the Master Admin Panel. Approve pending requests or revoke access below.
               </p>
 
-              <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                 {Object.keys(allowedDevices).length === 0 ? (
                   <div className="text-center py-4 text-slate-500 italic text-[11px]">
-                    No hardware devices locked yet. Click below to pair your current device.
+                    No Admin hardware devices registered yet. Devices opening Admin outside AI Studio appear here as Pending.
                   </div>
                 ) : (
-                  Object.entries(allowedDevices).map(([devId, data]: [string, any]) => (
+                  Object.entries(allowedDevices)
+                    .sort(([, a], [, b]) => (b.requestedAt || b.approvedAt || 0) - (a.requestedAt || a.approvedAt || 0))
+                    .map(([devId, data]) => (
                     <div
                       key={devId}
-                      className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between"
+                      className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${
+                        data?.status === 'pending'
+                          ? 'bg-amber-950/30 border-amber-500/40'
+                          : data?.status === 'rejected'
+                          ? 'bg-rose-950/20 border-rose-500/30'
+                          : 'bg-slate-900 border-slate-800'
+                      }`}
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="font-mono text-[11px] font-bold text-emerald-400 truncate" title={devId}>
-                          {devId}
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[11px] font-bold text-emerald-400 truncate" title={devId}>
+                            {devId}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[9px] font-black uppercase ${
+                              data?.status === 'pending'
+                                ? 'bg-amber-500 text-slate-950'
+                                : data?.status === 'rejected'
+                                ? 'bg-rose-500/30 text-rose-300'
+                                : 'bg-emerald-500/20 text-emerald-300'
+                            }`}
+                          >
+                            {data?.status || 'approved'}
+                          </span>
                         </div>
-                        <div className="text-[10px] text-slate-400">
-                          {data?.deviceName || 'Device'} • {data?.browser || 'Browser'}
+                        <div className="text-[10px] text-slate-400 truncate">
+                          {data?.deviceModel || data?.deviceName || 'Device'} • {data?.browser || 'Browser'}
+                          {data?.phone ? ` • +91 ${data.phone}` : ''}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveAllowedDevice(devId)}
-                        className="p-1 text-slate-500 hover:text-rose-400 transition shrink-0 ml-2"
-                        title="Unlink device"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {data?.status !== 'approved' && (
+                          <button
+                            type="button"
+                            disabled={approvedAdminDeviceList.length >= MAX_ADMIN_DEVICES}
+                            onClick={() => handleApproveDeviceFromSettings(data)}
+                            className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold text-[10px] transition"
+                          >
+                            Approve
+                          </button>
+                        )}
+                        {data?.status === 'pending' && (
+                          <button
+                            type="button"
+                            onClick={() => handleRejectDeviceFromSettings(devId)}
+                            className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] transition"
+                          >
+                            Reject
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveAllowedDevice(devId)}
+                          className="p-1 text-slate-500 hover:text-rose-400 transition shrink-0"
+                          title="Unlink device"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -3473,11 +3570,16 @@ export const AdminSettingsPanel: React.FC<AdminSettingsProps> = ({ adminId }) =>
 
               <button
                 type="button"
+                disabled={approvedAdminDeviceList.length >= MAX_ADMIN_DEVICES}
                 onClick={handlePairCurrentDevice}
-                className="w-full py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 font-bold text-xs flex items-center justify-center gap-1.5 transition"
+                className="w-full py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 disabled:opacity-50 text-emerald-300 border border-emerald-400/40 font-bold text-xs flex items-center justify-center gap-1.5 transition"
               >
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Pair & Approve My Current Device Now</span>
+                <span>
+                  {approvedAdminDeviceList.length >= MAX_ADMIN_DEVICES
+                    ? `All ${MAX_ADMIN_DEVICES} Admin Device Slots Full`
+                    : `Pair & Approve My Current Device (${approvedAdminDeviceList.length}/${MAX_ADMIN_DEVICES})`}
+                </span>
               </button>
             </div>
 
