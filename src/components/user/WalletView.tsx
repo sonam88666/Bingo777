@@ -21,6 +21,7 @@ import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
 import { DepositHistorySection } from './DepositHistorySection';
 import { rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
+import { copyToClipboard } from '../../utils/clipboard';
 
 export interface CurrencyConfig {
   code: string;
@@ -87,6 +88,16 @@ export const WalletView: React.FC<WalletViewProps> = ({
 }) => {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw' | 'records'>(initialTab);
+  const [, setStoreTick] = useState(0);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
+    const unsub = store.subscribe(() => setStoreTick((t) => t + 1));
+    return () => unsub();
+  }, []);
 
   // Deposit State - First Option is UPI, Second Option is USDT (ERC20)
   const [depositMethod, setDepositMethod] = useState<'UPI' | 'USDT'>('UPI');
@@ -111,8 +122,8 @@ export const WalletView: React.FC<WalletViewProps> = ({
   const [isSubmittingWithdraw, setIsSubmittingWithdraw] = useState(false);
 
   const adminSettings = store.getAdminSettings();
-  const deposits = store.getDeposits().filter((d) => d.uid === user.uid);
-  const withdrawals = store.getWithdrawals().filter((w) => w.uid === user.uid);
+  const deposits = store.getDepositsForUser(user.uid, user.phone);
+  const withdrawals = store.getWithdrawalsForUser(user.uid, user.phone);
 
   // Calculate real money wallet figures
   const pendingWithdrawals = withdrawals.filter((w) => w.status === 'pending');
@@ -415,9 +426,12 @@ export const WalletView: React.FC<WalletViewProps> = ({
   const activeUpiName = activeChannelObj?.merchantName || adminSettings.officialUpiName || 'BHARATPE ENTERPRISES';
   const effectiveChannel = activeChannelObj?.label || 'Official Primary';
 
-  const handleCopy = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    showToast(`${label} copied to clipboard!`, 'info');
+  const liveWalletUser = store.getUser(user.uid) || user;
+  const availableWalletBalance = Number(liveWalletUser?.balance ?? liveWalletUser?.wallet ?? user.balance ?? user.wallet ?? 0) || 0;
+
+  const handleCopy = async (text: string, label: string) => {
+    const copied = await copyToClipboard(text);
+    showToast(copied ? `${label} copied to clipboard!` : `Unable to copy ${label} on this device`, copied ? 'info' : 'error');
   };
 
   const handleDepositSubmit = (e: React.FormEvent) => {
@@ -517,7 +531,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
         return;
       }
       const inrDeduction = Math.round(usdtWithdrawAmount * usdtRate * 100) / 100;
-      if (user.balance < inrDeduction) {
+      if (availableWalletBalance < inrDeduction) {
         showToast(`Insufficient wallet balance. Required: ₹${inrDeduction.toLocaleString('en-IN')} ($${usdtWithdrawAmount} USDT)`, 'error');
         return;
       }
@@ -558,7 +572,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
       showToast(`Maximum withdrawal is ₹${adminSettings.maxWithdrawal}`, 'error');
       return;
     }
-    if (user.balance < withdrawAmount) {
+    if (availableWalletBalance < withdrawAmount) {
       showToast('Insufficient available wallet balance', 'error');
       return;
     }
@@ -863,7 +877,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
           }`}
         >
           <Clock className="w-4 h-4" />
-          <span>Records</span>
+          <span>History ({deposits.length + withdrawals.length})</span>
         </button>
       </div>
 
@@ -931,7 +945,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
                     <span>FIRST DEPOSIT DOUBLE BONUS ACTIVATED</span>
                   </div>
                   <p className="text-[11px] text-slate-300 leading-tight">
-                    Deposit now to unlock your <strong className="text-amber-300">₹120 Signup Bonus</strong> + <strong className="text-emerald-400">100% First Deposit Match (₹{depositAmount})</strong>. Total ₹{(depositAmount * 2 + 120).toLocaleString('en-IN')} wallet credit upon Master Admin approval!
+                    Deposit now to unlock your <strong className="text-amber-300">₹{adminSettings.signupBonusAmount || 200} Signup Bonus</strong> + <strong className="text-emerald-400">100% First Deposit Match (₹{depositAmount})</strong>. Total ₹{(depositAmount * 2 + (adminSettings.signupBonusAmount || 200)).toLocaleString('en-IN')} wallet credit upon Master Admin approval!
                   </p>
                 </div>
               )}
@@ -1262,7 +1276,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
               <div>
                 <div className="flex justify-between text-xs text-slate-400 mb-1.5">
                   <span>Enter Withdrawal Amount ($ USDT)</span>
-                  <span>Wallet Balance: ₹{user.balance.toFixed(2)}</span>
+                  <span>Wallet Balance: ₹{availableWalletBalance.toFixed(2)}</span>
                 </div>
                 <div className="relative">
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 font-mono font-black text-xl text-teal-400">$</span>
@@ -1325,7 +1339,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
 
               <button
                 type="submit"
-                disabled={isSubmittingWithdraw || user.balance < usdtEquivalentInrForWithdraw}
+                disabled={isSubmittingWithdraw || availableWalletBalance < usdtEquivalentInrForWithdraw}
                 className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 text-slate-950 font-brand font-black text-sm shadow-xl transition active:scale-95 disabled:opacity-50"
               >
                 {isSubmittingWithdraw
@@ -1355,12 +1369,12 @@ export const WalletView: React.FC<WalletViewProps> = ({
               <div>
                 <div className="flex justify-between text-xs text-slate-400 mb-1">
                   <span>Withdrawal Amount (₹)</span>
-                  <span>Available: ₹{user.balance.toFixed(2)}</span>
+                  <span>Available: ₹{availableWalletBalance.toFixed(2)}</span>
                 </div>
                 <input
                   type="number"
                   min={minUpiWithdrawal}
-                  max={Math.min(adminSettings.maxWithdrawal, Math.max(minUpiWithdrawal, user.balance))}
+                  max={Math.min(adminSettings.maxWithdrawal, Math.max(minUpiWithdrawal, availableWalletBalance))}
                   value={withdrawAmount}
                   onChange={(e) => setWithdrawAmount(Number(e.target.value))}
                   className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 font-mono text-xl font-black text-amber-300 focus:outline-none focus:border-amber-500"
@@ -1465,7 +1479,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
 
               <button
                 type="submit"
-                disabled={isSubmittingWithdraw || user.balance < withdrawAmount}
+                disabled={isSubmittingWithdraw || availableWalletBalance < withdrawAmount}
                 className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-brand font-black text-sm shadow-xl transition active:scale-95 disabled:opacity-50"
               >
                 {isSubmittingWithdraw ? 'Submitting Request...' : `Submit Withdrawal Request (₹${withdrawAmount})`}

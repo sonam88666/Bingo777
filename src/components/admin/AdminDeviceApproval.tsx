@@ -19,7 +19,8 @@ import {
   getApprovedAdminDevices,
   approveAdminDeviceSlot,
   rejectAdminDeviceSlot,
-  revokeAdminDeviceSlot
+  revokeAdminDeviceSlot,
+  syncAdminUserDevicesToAllowedMap
 } from '../../services/adminDeviceSecurity';
 
 interface AdminDeviceApprovalProps {
@@ -37,6 +38,10 @@ export const AdminDeviceApproval: React.FC<AdminDeviceApprovalProps> = ({ adminI
   const [adminDeviceMap, setAdminDeviceMap] = useState<Record<string, AdminAllowedDeviceRecord>>({});
 
   useEffect(() => {
+    syncAdminUserDevicesToAllowedMap()
+      .then((map) => setAdminDeviceMap(map))
+      .catch(() => {});
+
     const unsubStore = store.subscribe(() => setTick((t) => t + 1));
     const unsubRtdb = rtdbOnValue(
       rtdbRef(rtdb, 'admin_security/allowed_devices'),
@@ -111,12 +116,80 @@ export const AdminDeviceApproval: React.FC<AdminDeviceApprovalProps> = ({ adminI
   const users = Object.values(store.getUsers());
 
   const allDevices: FlatDeviceItem[] = [];
+  const seenDeviceKeys = new Set<string>();
+
   users.forEach((u) => {
     Object.values(u.devices || {}).forEach((d) => {
       if (d && d.deviceId) {
-        allDevices.push({ user: u, device: d });
+        const adminEntry = adminDeviceMap[d.deviceId];
+        const effectiveStatus = adminEntry?.status === 'pending' ? 'pending' : d.status;
+        allDevices.push({
+          user: u,
+          device: {
+            ...d,
+            status: effectiveStatus
+          }
+        });
+        seenDeviceKeys.add(`${u.uid}_${d.deviceId}`);
       }
     });
+  });
+
+  // Also include any Admin/APK device from adminDeviceMap not yet present in u.devices
+  Object.values(adminDeviceMap).forEach((admDev) => {
+    if (!admDev || !admDev.deviceId) return;
+    const cleanPhone = (admDev.phone || '').replace(/\D/g, '').slice(-10);
+    const matchedUser =
+      (admDev.uid ? store.getUser(admDev.uid) : undefined) ||
+      (cleanPhone ? store.findUserByPhone(cleanPhone) : undefined);
+
+    const syntheticUser: UserRecord = matchedUser || {
+      uid: admDev.uid || `admin_${cleanPhone || admDev.deviceId.slice(-6)}`,
+      username: admDev.username || `Admin_${cleanPhone.slice(-4) || 'APK'}`,
+      phone: cleanPhone || '7088961883',
+      balance: 0,
+      vipLevel: 1,
+      status: 'active',
+      isAdmin: true,
+      role: 'master_admin',
+      createdAt: admDev.requestedAt || Date.now(),
+      lastActive: admDev.lastUsedAt || Date.now(),
+      isOnline: true,
+      totalDeposited: 0,
+      totalWithdrawn: 0,
+      totalBetsCount: 0,
+      totalWonAmount: 0,
+      totalLostAmount: 0,
+      referralCode: 'ADMIN',
+      referralCount: 0,
+      signupBonusStatus: 'credited',
+      signupBonusAmount: 200,
+      firstDepositBonusStatus: 'credited',
+      dailyBettingActivity: {},
+      devices: {}
+    };
+
+    const key = `${syntheticUser.uid}_${admDev.deviceId}`;
+    if (!seenDeviceKeys.has(key)) {
+      seenDeviceKeys.add(key);
+      allDevices.push({
+        user: syntheticUser,
+        device: {
+          deviceId: admDev.deviceId,
+          deviceName: admDev.deviceName || admDev.deviceModel || 'Admin APK Device',
+          deviceModel: admDev.deviceModel || admDev.deviceName || 'Admin APK Device',
+          browser: admDev.browser || 'Android APK',
+          os: admDev.os || 'Android',
+          osVersion: admDev.os || 'Android',
+          screenResolution: 'Mobile APK',
+          userAgent: '',
+          registeredAt: admDev.requestedAt || admDev.pairedAt || Date.now(),
+          requestedAt: admDev.requestedAt || admDev.pairedAt || Date.now(),
+          lastUsedAt: admDev.lastUsedAt || Date.now(),
+          status: admDev.status
+        }
+      });
+    }
   });
 
   allDevices.sort(
@@ -137,20 +210,45 @@ export const AdminDeviceApproval: React.FC<AdminDeviceApprovalProps> = ({ adminI
     return matchesStatus && matchesSearch;
   });
 
-  const handleApprove = (uid: string, deviceId: string) => {
-    const ok = store.approveDevice(uid, deviceId, adminId);
-    if (ok) {
-      showToast(
-        `Approved device ${deviceId} for ${uid} & revoked any previous device (1 Number = 1 Device policy)`,
-        'success'
-      );
+  const handleApprove = async (uid: string, deviceId: string) => {
+    const targetUser = store.getUser(uid);
+    const isAdminUser =
+      Boolean(adminDeviceMap[deviceId]) ||
+      Boolean(targetUser && (targetUser.isAdmin || targetUser.role === 'admin' || targetUser.role === 'master_admin' || store.isMasterAdminPhone(targetUser.phone)));
+
+    if (isAdminUser) {
+      const admDev = adminDeviceMap[deviceId] || {
+        deviceId,
+        uid,
+        phone: targetUser?.phone || '',
+        username: targetUser?.username || uid,
+        deviceName: targetUser?.devices?.[deviceId]?.deviceName || targetUser?.deviceModel || 'Admin APK Device',
+        deviceModel: targetUser?.devices?.[deviceId]?.deviceModel || targetUser?.deviceModel || 'Admin APK Device',
+        os: targetUser?.devices?.[deviceId]?.os || 'Android',
+        browser: targetUser?.devices?.[deviceId]?.browser || 'Android APK',
+        status: 'pending' as const
+      };
+      const res = await approveAdminDeviceSlot(admDev, adminId);
+      if (!res.success) {
+        showToast(res.error || `Max ${MAX_ADMIN_DEVICES} Admin Devices allowed.`, 'error');
+        return;
+      }
     }
+
+    store.approveDevice(uid, deviceId, adminId);
+    showToast(
+      `Approved device ${deviceId} for ${uid} & unlocked APK / Admin access!`,
+      'success'
+    );
   };
 
-  const handleConfirmReject = (e: React.FormEvent) => {
+  const handleConfirmReject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!rejectingItem) return;
     const reason = rejectReason.trim() || 'Unverified hardware signature';
+    if (adminDeviceMap[rejectingItem.device.deviceId]) {
+      await rejectAdminDeviceSlot(rejectingItem.device.deviceId, adminId, reason);
+    }
     store.rejectDevice(rejectingItem.user.uid, rejectingItem.device.deviceId, adminId, reason);
     showToast(`Rejected device ${rejectingItem.device.deviceId}`, 'info');
     setRejectingItem(null);

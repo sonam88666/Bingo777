@@ -517,9 +517,20 @@ export const PhoneLoginModal: React.FC<PhoneLoginModalProps> = ({
 
         await firebaseSync.pushUserToFirestore(newUser, cleanPhone);
 
+        if (enteredRefCode && !newUser.referredBy) {
+          await firebaseSync.pullUsersFromRtdb().catch(() => {});
+          store.bindPendingReferrals();
+        }
         const linkedRef = store.getAllReferrals().find((r) => r.referredUid === newUser.uid);
         if (linkedRef) {
           await firebaseSync.pushReferralToFirestore(linkedRef).catch(() => {});
+          const referrerUser = store.getUser(linkedRef.referrerUid);
+          if (referrerUser) {
+            await rtdbUpdate(rtdbRef(rtdb, `users/${referrerUser.uid}`), {
+              referralCount: referrerUser.referralCount || 1,
+              totalReferrals: referrerUser.totalReferrals || referrerUser.referralCount || 1
+            }).catch(() => {});
+          }
         }
         await clearPendingReferralCode().catch(() => {});
 

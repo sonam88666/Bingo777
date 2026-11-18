@@ -57,18 +57,36 @@ export const FortuneWheelGame: React.FC<FortuneWheelGameProps> = ({
   const [rotation, setRotation] = useState(0);
   const [wonPrize, setWonPrize] = useState<WheelSector | null>(null);
   const [now, setNow] = useState(Date.now());
-  const [recentWins, setRecentWins] = useState<string[]>([
-    'Member 98***32 won ₹500',
-    'Member 87***10 won ₹1,000',
-    'Member 91***05 won ₹200'
-  ]);
+  const [recentWins, setRecentWins] = useState<string[]>(() => {
+    try {
+      return store
+        .getAllTransactionsFlat()
+        .filter((t) => (t.description || '').includes('Lucky Wheel Won') && t.amount > 0)
+        .slice(0, 5)
+        .map((t) => `Member ${String(t.uid || '').slice(-4) || 'VIP'} won ₹${Number(t.amount || 0).toLocaleString('en-IN')}`);
+    } catch {
+      return [];
+    }
+  });
+  const spinTickIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const spinTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const SPIN_COST = 50;
 
-  // Live timer tick for 24h countdown
+  // Live timer tick for 24h countdown & unmount timer cleanup
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      if (spinTickIntervalRef.current) {
+        clearInterval(spinTickIntervalRef.current);
+        spinTickIntervalRef.current = null;
+      }
+      if (spinTimeoutRef.current) {
+        clearTimeout(spinTimeoutRef.current);
+        spinTimeoutRef.current = null;
+      }
+    };
   }, []);
 
   // Check deposit requirement
@@ -99,6 +117,14 @@ export const FortuneWheelGame: React.FC<FortuneWheelGameProps> = ({
       onOpenAuth();
       return;
     }
+    if (store.isMaintenanceActiveForUser(user.uid)) {
+      showToast('Platform is currently under maintenance.', 'error');
+      return;
+    }
+    if (!store.isFeatureEnabled('wheel')) {
+      showToast('Lucky Wheel is currently paused by Master Admin.', 'error');
+      return;
+    }
     if (isSpinning) return;
 
     // 1. Check 24-Hour Limit: Only 1 spin per 24 hours
@@ -117,7 +143,9 @@ export const FortuneWheelGame: React.FC<FortuneWheelGameProps> = ({
       return;
     }
 
-    if (user.balance < SPIN_COST) {
+    const liveUser = store.getUser(user.uid) || user;
+    const availableBalance = Number(liveUser?.balance ?? liveUser?.wallet ?? user.balance ?? user.wallet ?? 0) || 0;
+    if (availableBalance < SPIN_COST) {
       showToast('Insufficient balance! Recharge to spin.', 'error');
       onOpenDeposit();
       return;
@@ -161,27 +189,31 @@ export const FortuneWheelGame: React.FC<FortuneWheelGameProps> = ({
     setRotation(finalRotation);
 
     // Audio ticks during spin
+    if (spinTickIntervalRef.current) clearInterval(spinTickIntervalRef.current);
     let tickCount = 0;
-    const tickInterval = setInterval(() => {
+    spinTickIntervalRef.current = setInterval(() => {
       soundFx.playWheelTick();
       tickCount++;
-      if (tickCount >= 25) {
-        clearInterval(tickInterval);
+      if (tickCount >= 25 && spinTickIntervalRef.current) {
+        clearInterval(spinTickIntervalRef.current);
+        spinTickIntervalRef.current = null;
       }
     }, 120);
 
     // Stop and resolve prize
-    setTimeout(() => {
+    const spinUid = user.uid;
+    if (spinTimeoutRef.current) clearTimeout(spinTimeoutRef.current);
+    spinTimeoutRef.current = setTimeout(() => {
       setIsSpinning(false);
       setWonPrize(targetSector);
 
       // Record 24-hour timestamp
-      store.recordWheelSpin(user.uid);
+      store.recordWheelSpin(spinUid);
 
       if (targetSector.cashAmount > 0) {
         soundFx.playWinFanfare();
         confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 } });
-        store.updateUserBalance(user.uid, targetSector.cashAmount, `Lucky Wheel Won ${targetSector.label}`);
+        store.updateUserBalance(spinUid, targetSector.cashAmount, `Lucky Wheel Won ${targetSector.label}`);
         showToast(`🎉 Congratulations! You won ${targetSector.label}! (Next spin in 24 hours)`, 'success');
         setRecentWins((prev) => [`You won ${targetSector.label}`, ...prev.slice(0, 4)]);
       }

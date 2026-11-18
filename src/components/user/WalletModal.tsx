@@ -12,6 +12,7 @@ import {
 import { UserRecord, DepositRecord, WithdrawalRecord } from '../../types';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface WalletModalProps {
   user: UserRecord;
@@ -69,9 +70,12 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const isUsdtWithdrawalEnabled = store.isFeatureEnabled('usdt_withdrawal');
   const isBankWithdrawalEnabled = store.isFeatureEnabled('bank_withdrawal');
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    showToast('Copied to clipboard!', 'info');
+  const liveWalletUser = store.getUser(user.uid) || user;
+  const availableWalletBalance = Number(liveWalletUser?.balance ?? liveWalletUser?.wallet ?? user.balance ?? user.wallet ?? 0) || 0;
+
+  const handleCopy = async (text: string) => {
+    const copied = await copyToClipboard(text);
+    showToast(copied ? 'Copied to clipboard!' : 'Copy not supported on this device', copied ? 'info' : 'error');
   };
 
   const handleDepositSubmit = (e: React.FormEvent) => {
@@ -163,7 +167,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         return;
       }
       const inrNeeded = Math.round(usdtWithdrawAmount * usdtRate);
-      if (user.balance < inrNeeded) {
+      if (availableWalletBalance < inrNeeded) {
         showToast(`Insufficient wallet balance. $${usdtWithdrawAmount} USDT requires ₹${inrNeeded}`, 'error');
         return;
       }
@@ -202,7 +206,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       showToast(`Maximum withdrawal is ₹${adminSettings.maxWithdrawal}`, 'error');
       return;
     }
-    if (user.balance < withdrawAmount) {
+    if (availableWalletBalance < withdrawAmount) {
       showToast('Insufficient wallet balance', 'error');
       return;
     }
@@ -553,7 +557,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 <div>
                   <span className="text-[11px] text-slate-400">Withdrawable Balance</span>
                   <div className="font-mono font-black text-xl text-amber-300">
-                    ₹{user.balance.toFixed(2)}
+                    ₹{availableWalletBalance.toFixed(2)}
                   </div>
                 </div>
                 <div className="text-right text-[11px] text-slate-400">
@@ -811,7 +815,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                             -₹{w.amount} {w.usdtAmount ? `($${w.usdtAmount} USDT ERC20)` : `(${w.payoutMethod})`}
                           </div>
                           <div className="text-[10px] text-slate-500 mt-0.5">
-                            Dest: {w.accountDetails.usdtAddress || w.accountDetails.upiId || w.accountDetails.accountNumber} • {new Date(w.requestedAt).toLocaleTimeString()}
+                            Dest: {w.accountDetails?.usdtAddress || w.accountDetails?.upiId || w.accountDetails?.accountNumber || 'N/A'} • {new Date(w.requestedAt).toLocaleTimeString()}
                           </div>
                         </div>
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${

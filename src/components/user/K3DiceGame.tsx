@@ -71,15 +71,33 @@ export const K3DiceGame: React.FC<K3DiceGameProps> = ({
       onOpenAuth();
       return;
     }
-    if (user.balance < betAmount) {
+    if (store.isMaintenanceActiveForUser(user.uid)) {
+      showToast('Platform is currently under maintenance.', 'error');
+      return;
+    }
+    if (!store.isFeatureEnabled('k3_dice')) {
+      showToast('K3 Lotre Dice is currently paused by Master Admin.', 'error');
+      return;
+    }
+    const safeAmount = Number(betAmount);
+    if (!Number.isFinite(safeAmount) || safeAmount <= 0) {
+      showToast('Please enter a valid positive bet amount.', 'error');
+      return;
+    }
+    const liveUser = store.getUser(user.uid) || user;
+    const availableBalance = Number(liveUser?.balance ?? liveUser?.wallet ?? user.balance ?? user.wallet ?? 0) || 0;
+    if (availableBalance < safeAmount) {
       showToast('Insufficient wallet balance', 'error');
+      onOpenDeposit();
       return;
     }
 
-    const res = store.placeK3Bet(user.uid, selectedBetType, selectedBetValue, betAmount);
+    const res = store.placeK3Bet(user.uid, selectedBetType, selectedBetValue, safeAmount);
     if (res.success) {
       soundFx.playChipSound();
-      showToast(`Bet of ₹${betAmount} on ${selectedBetValue.toUpperCase()} placed!`, 'success');
+      showToast(`Bet of ₹${safeAmount} on ${selectedBetValue.toUpperCase()} placed!`, 'success');
+    } else {
+      showToast(res.error || 'Failed to place K3 bet.', 'error');
     }
   };
 
@@ -277,14 +295,14 @@ export const K3DiceGame: React.FC<K3DiceGameProps> = ({
                   <div key={b.betId} className="p-3 rounded-2xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
                     <div className="flex items-center justify-between">
                       <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold text-[11px]">
-                        Select: {b.betValue.toUpperCase()}
+                        Select: {(b.betValue || '').toUpperCase()}
                       </span>
                       <span className={`font-mono font-black ${isWon ? 'text-emerald-400' : isLost ? 'text-rose-400' : 'text-amber-400'}`}>
-                        {isWon ? `+₹${b.actualPayout.toFixed(2)}` : isLost ? `-₹${b.amount.toFixed(2)}` : 'Pending'}
+                        {isWon ? `+₹${(Number(b.actualPayout) || 0).toFixed(2)}` : isLost ? `-₹${(Number(b.amount) || 0).toFixed(2)}` : 'Pending'}
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 pt-1 border-t border-slate-900">
-                      <span>Period: <strong className="text-slate-300">{b.roundPeriod}</strong></span>
+                      <span>Period: <strong className="text-slate-300">{b.roundPeriod || '-'}</strong></span>
                       <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
                         isWon ? 'bg-emerald-500/20 text-emerald-300' : isLost ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/20 text-amber-300'
                       }`}>

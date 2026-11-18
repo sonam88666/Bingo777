@@ -13,10 +13,18 @@ import {
   Award,
   AlertTriangle,
   Settings,
-  Clock
+  Smartphone
 } from 'lucide-react';
 import { store } from '../../services/store';
 import { apiClient } from '../../services/apiClient';
+import { rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
+import {
+  MAX_ADMIN_DEVICES,
+  AdminAllowedDeviceRecord,
+  normalizeAdminDeviceMap,
+  getApprovedAdminDevices,
+  getPendingAdminDevices
+} from '../../services/adminDeviceSecurity';
 
 interface AdminOverviewProps {
   onNavigateTab: (tab: string) => void;
@@ -24,12 +32,27 @@ interface AdminOverviewProps {
 
 export const AdminOverview: React.FC<AdminOverviewProps> = ({ onNavigateTab }) => {
   const [adminSettings, setAdminSettings] = useState(store.getAdminSettings());
+  const [adminDeviceMap, setAdminDeviceMap] = useState<Record<string, AdminAllowedDeviceRecord>>({});
 
   useEffect(() => {
-    return store.subscribe(() => {
+    const unsubStore = store.subscribe(() => {
       setAdminSettings(store.getAdminSettings());
     });
+    const unsubDevs = rtdbOnValue(
+      rtdbRef(rtdb, 'admin_security/allowed_devices'),
+      (snap) => {
+        setAdminDeviceMap(snap.exists() ? normalizeAdminDeviceMap(snap.val()) : {});
+      },
+      () => {}
+    );
+    return () => {
+      unsubStore();
+      unsubDevs();
+    };
   }, []);
+
+  const approvedAdminDevs = getApprovedAdminDevices(adminDeviceMap);
+  const pendingAdminDevs = getPendingAdminDevices(adminDeviceMap);
 
   const [confirmMaintTap, setConfirmMaintTap] = useState(false);
 
@@ -145,6 +168,40 @@ export const AdminOverview: React.FC<AdminOverviewProps> = ({ onNavigateTab }) =
 
   return (
     <div className="space-y-5">
+      {/* Quick APK / Admin 5-Device Security Card */}
+      <div className="p-4 rounded-2xl bg-slate-900/95 border border-amber-500/40 shadow-xl flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center space-x-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+            <Smartphone className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-brand font-black text-sm text-white">
+                Admin &amp; APK Device Approval (Max {MAX_ADMIN_DEVICES})
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                {approvedAdminDevs.length}/{MAX_ADMIN_DEVICES} Approved
+              </span>
+              {pendingAdminDevs.length > 0 && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-rose-500 text-white animate-pulse">
+                  {pendingAdminDevs.length} Pending APK Request
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-400 truncate mt-0.5">
+              Approve or manage up to {MAX_ADMIN_DEVICES} Admin APK &amp; mobile devices allowed to open Admin Console.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => onNavigateTab('devices')}
+          className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 text-slate-950 font-black text-xs transition shrink-0 shadow"
+        >
+          Manage Devices &rarr;
+        </button>
+      </div>
+
       {/* Maintenance Mode Emergency Status Banner */}
       <div
         className={`p-4 rounded-2xl border transition-all shadow-xl flex flex-wrap items-center justify-between gap-3 ${

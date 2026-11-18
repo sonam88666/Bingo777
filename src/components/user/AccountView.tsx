@@ -32,6 +32,7 @@ import { firebaseSync } from '../../services/firebaseSync';
 import { useToast } from '../common/Toast';
 import { soundFx, AudioSettingsState } from '../../services/soundFx';
 import { AppUpdateModal } from './AppUpdateModal';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface AccountViewProps {
   user: UserRecord;
@@ -66,7 +67,7 @@ export const AccountView: React.FC<AccountViewProps> = ({
       const res = await firebaseSync.forceSyncFromFirebase();
       if (res.success) {
         setLastSyncedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-        showToast(`Cloud Re-Sync Complete! Balance: ₹${(res.balance ?? user.balance).toFixed(2)}`, 'success');
+        showToast(`Cloud Re-Sync Complete! Balance: ₹${(Number(res.balance ?? user.balance ?? user.wallet) || 0).toFixed(2)}`, 'success');
       } else {
         showToast('Firebase Re-Sync completed.', 'info');
       }
@@ -153,15 +154,17 @@ export const AccountView: React.FC<AccountViewProps> = ({
     soundFx.setBgmVolume(vol);
   };
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    showToast('Copied UID to clipboard', 'info');
+  const handleCopy = async (text: string) => {
+    const copied = await copyToClipboard(text);
+    showToast(copied ? 'Copied UID to clipboard' : 'Copy not supported on this device', copied ? 'info' : 'error');
   };
 
-  const deviceStatus = currentDevice ? currentDevice.status : 'approved';
-  const winRate = user.totalBetsCount > 0
-    ? Math.round((user.totalWonAmount / (user.totalWonAmount + user.totalLostAmount || 1)) * 100)
+  const deviceStatus = currentDevice ? (currentDevice.status || 'approved') : 'approved';
+  const winRate = (user.totalBetsCount || 0) > 0
+    ? Math.round(((user.totalWonAmount || 0) / ((user.totalWonAmount || 0) + (user.totalLostAmount || 0) || 1)) * 100)
     : 0;
+  const safeBalance = Number(user.balance ?? user.wallet ?? 0) || 0;
+  const safeUsername = user.username || user.name || 'Player';
 
   return (
     <div className="max-w-xl mx-auto px-3 sm:px-4 py-4 space-y-3.5">
@@ -169,15 +172,15 @@ export const AccountView: React.FC<AccountViewProps> = ({
       <div className="rounded-3xl bg-gradient-to-r from-slate-900 via-amber-950/40 to-slate-900 border border-amber-500/30 p-5 shadow-2xl relative overflow-hidden">
         <div className="flex items-center space-x-3.5 relative z-10">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-400 via-amber-500 to-amber-700 flex items-center justify-center font-brand font-black text-slate-950 text-xl shadow-lg border border-amber-300">
-            {user.username.substring(0, 2).toUpperCase()}
+            {safeUsername.substring(0, 2).toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center space-x-2">
               <h3 className="font-brand font-black text-lg text-slate-100 truncate">
-                {user.username}
+                {safeUsername}
               </h3>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950">
-                VIP {user.vipLevel}
+                VIP {user.vipLevel ?? 0}
               </span>
             </div>
             <div className="flex items-center flex-wrap gap-2 text-xs text-slate-400 mt-0.5">
@@ -214,11 +217,11 @@ export const AccountView: React.FC<AccountViewProps> = ({
       <div className="grid grid-cols-3 gap-2 p-3.5 bg-slate-900 rounded-3xl border border-slate-800 shadow-xl text-center">
         <div>
           <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Wallet</span>
-          <span className="font-mono font-bold text-sm text-amber-300">₹{user.balance.toFixed(2)}</span>
+          <span className="font-mono font-bold text-sm text-amber-300">₹{safeBalance.toFixed(2)}</span>
         </div>
         <div>
           <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Total Won</span>
-          <span className="font-mono font-bold text-sm text-emerald-400">₹{user.totalWonAmount}</span>
+          <span className="font-mono font-bold text-sm text-emerald-400">₹{user.totalWonAmount || 0}</span>
         </div>
         <div>
           <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Est. Return</span>
@@ -414,13 +417,15 @@ export const AccountView: React.FC<AccountViewProps> = ({
               <div className="text-left">
                 <div className="flex items-center space-x-2">
                   <span className="font-bold text-slate-200 group-hover:text-amber-300 block">
-                    Refer & Earn (₹120 + 3-Tier Commission)
+                    Refer & Earn (₹{adminSettings.referralBonusAmount ?? 120} + 3-Tier Commission)
                   </span>
                   <span className="px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300 text-[9px] font-black uppercase">
                     REFER & EARN
                   </span>
                 </div>
-                <span className="text-[11px] text-slate-500">Invite friends & earn ₹120 cash bonus + 1% / 0.5% / 0.25% team rewards</span>
+                <span className="text-[11px] text-slate-500">
+                  Invite friends & earn ₹{adminSettings.referralBonusAmount ?? 120} cash bonus + {adminSettings.mlmLevel1Rate ?? 1}% / {adminSettings.mlmLevel2Rate ?? 0.5}% / {adminSettings.mlmLevel3Rate ?? 0.25}% team rewards
+                </span>
               </div>
             </div>
             <ChevronRight className="w-4 h-4 text-indigo-400 group-hover:translate-x-0.5 transition" />

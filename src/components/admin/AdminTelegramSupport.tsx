@@ -16,6 +16,7 @@ import { apiClient } from '../../services/apiClient';
 import { rtdb, rtdbRef, rtdbSet, rtdbOnValue } from '../../firebase';
 import { useToast } from '../common/Toast';
 import { resolveTelegramLink } from '../common/TelegramFloatingWidget';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface AdminTelegramSupportProps {
   adminId: string;
@@ -285,9 +286,9 @@ export const AdminTelegramSupport: React.FC<AdminTelegramSupportProps> = ({ admi
                 />
                 <button
                   type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(resolvedPreviewUrl);
-                    showToast('Copied resolved Telegram link!', 'info');
+                  onClick={async () => {
+                    const ok = await copyToClipboard(resolvedPreviewUrl);
+                    showToast(ok ? 'Copied resolved Telegram link!' : 'Copy failed — please copy manually', ok ? 'info' : 'error');
                   }}
                   className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-1 shrink-0 transition"
                   title="Copy Link"

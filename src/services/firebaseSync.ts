@@ -16,6 +16,8 @@ import {
   rtdbUpdate,
   rtdbRemove,
   rtdbRunTransaction,
+  rtdbQuery,
+  rtdbLimitToLast,
   isFirestoreAvailable
 } from '../firebase';
 import { onAuthStateChanged, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
@@ -28,7 +30,8 @@ import {
   LiveBet,
   ReferralRecord,
   AdminSettings,
-  GameRound
+  GameRound,
+  AuditLogItem
 } from '../types';
 import { store } from './store';
 
@@ -43,12 +46,12 @@ class FirebaseSyncService {
   private rtdbListenersAttached = false;
   private hourlyCleanupTimer: ReturnType<typeof setInterval> | null = null;
   private isCleanupRunning = false;
+  private knownRtdbLiveBetIds: Set<string> = new Set();
 
   constructor() {
     this.bindStoreHooks();
     this.attachRealtimeDatabaseListeners();
     this.initAuthListener();
-    this.startAutomatedHourlyCleanupRoutine();
   }
 
   /**
@@ -96,6 +99,9 @@ class FirebaseSyncService {
     store.onLiveBetSaved = (bet) => {
       this.pushLiveBetToFirestore(bet);
     };
+    store.onLiveBetDeleted = (betId) => {
+      this.deleteLiveBetFromCloud(betId);
+    };
     store.onReferralSaved = (ref) => {
       this.pushReferralToFirestore(ref);
     };
@@ -107,6 +113,9 @@ class FirebaseSyncService {
     };
     store.onAviatorRoundSynced = (round, liveMult) => {
       this.pushAviatorRoundToFirestore(round, liveMult);
+    };
+    store.onAuditLogSaved = (log) => {
+      this.pushAuditLogToRtdb(log);
     };
   }
 
@@ -226,20 +235,24 @@ class FirebaseSyncService {
           if (!snap.exists()) return;
           const val = snap.val();
           if (!val || typeof val !== 'object') return;
+          const batch: Array<Partial<GameRound>> = [];
           Object.values(val).forEach((item: any) => {
             if (item && typeof item === 'object') {
               if (item.period && item.isResolved) {
-                store.ingestCloudRound(item as Partial<GameRound>);
+                batch.push(item as Partial<GameRound>);
               } else {
                 // Nested /past_rounds/{gameType}/{period}
                 Object.values(item).forEach((subItem: any) => {
                   if (subItem && typeof subItem === 'object' && subItem.period && subItem.isResolved) {
-                    store.ingestCloudRound(subItem as Partial<GameRound>);
+                    batch.push(subItem as Partial<GameRound>);
                   }
                 });
               }
             }
           });
+          if (batch.length > 0) {
+            store.ingestCloudRoundsBatch(batch);
+          }
         },
         () => {}
       );
@@ -282,6 +295,7 @@ class FirebaseSyncService {
           if (!snap.exists()) return;
           const val = snap.val();
           if (!val || typeof val !== 'object') return;
+          const batch: Array<Partial<UserRecord> & { uid: string }> = [];
           Object.entries(val).forEach(([key, raw]: [string, any]) => {
             if (raw && typeof raw === 'object') {
               const uid = raw.uid || key;
@@ -293,7 +307,7 @@ class FirebaseSyncService {
                     role: 'master_admin'
                   }).catch(() => {});
                 }
-                store.updateUserFromFirestore({
+                batch.push({
                   ...raw,
                   ...(isMaster ? { isAdmin: true, role: 'master_admin' } : {}),
                   uid
@@ -301,6 +315,9 @@ class FirebaseSyncService {
               }
             }
           });
+          if (batch.length > 0) {
+            store.ingestCloudUsersBatch(batch);
+          }
         },
         () => {}
       );
@@ -315,9 +332,10 @@ class FirebaseSyncService {
           if (!snap.exists()) return;
           const val = snap.val();
           if (!val || typeof val !== 'object') return;
+          const batch: DepositRecord[] = [];
           Object.entries(val).forEach(([key, raw]: [string, any]) => {
             if (raw && typeof raw === 'object' && (raw.id || key)) {
-              const dep: DepositRecord = {
+              batch.push({
                 id: raw.id || key,
                 uid: raw.uid,
                 username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
@@ -332,10 +350,12 @@ class FirebaseSyncService {
                 reviewedAt: raw.reviewedAt || undefined,
                 reviewedBy: raw.reviewedBy || undefined,
                 adminNote: raw.adminNote || undefined
-              };
-              store.ingestCloudDeposit(dep);
+              });
             }
           });
+          if (batch.length > 0) {
+            store.ingestCloudDepositsBatch(batch);
+          }
         },
         () => {}
       );
@@ -350,9 +370,10 @@ class FirebaseSyncService {
           if (!snap.exists()) return;
           const val = snap.val();
           if (!val || typeof val !== 'object') return;
+          const batch: WithdrawalRecord[] = [];
           Object.entries(val).forEach(([key, raw]: [string, any]) => {
             if (raw && typeof raw === 'object' && (raw.id || key)) {
-              const item: WithdrawalRecord = {
+              batch.push({
                 id: raw.id || key,
                 uid: raw.uid,
                 username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
@@ -366,27 +387,30 @@ class FirebaseSyncService {
                 processedAt: raw.processedAt || undefined,
                 processedBy: raw.processedBy || undefined,
                 rejectionReason: raw.rejectionReason || undefined
-              };
-              store.ingestCloudWithdrawal(item);
+              });
             }
           });
+          if (batch.length > 0) {
+            store.ingestCloudWithdrawalsBatch(batch);
+          }
         },
         () => {}
       );
       this.globalUnsubscribes.push(wUnsub);
     } catch {}
 
-    // 7. Real-time RTDB listener on /transactions
+    // 7. Real-time RTDB listener on /transactions (recent 1000 entries for instant boot; batched single-pass ingest)
     try {
       const txUnsub = rtdbOnValue(
-        rtdbRef(rtdb, 'transactions'),
+        rtdbQuery(rtdbRef(rtdb, 'transactions'), rtdbLimitToLast(1000)),
         (snap) => {
           if (!snap.exists()) return;
           const val = snap.val();
           if (!val || typeof val !== 'object') return;
+          const batch: WalletTransaction[] = [];
           Object.entries(val).forEach(([key, raw]: [string, any]) => {
             if (raw && typeof raw === 'object' && (raw.id || key) && raw.uid) {
-              const tx: WalletTransaction = {
+              batch.push({
                 id: raw.id || key,
                 uid: raw.uid,
                 type: raw.type,
@@ -400,10 +424,12 @@ class FirebaseSyncService {
                 status: raw.status || 'completed',
                 metadata: raw.metadata || undefined,
                 integritySeal: raw.integritySeal || undefined
-              };
-              store.ingestCloudTransaction(tx);
+              });
             }
           });
+          if (batch.length > 0) {
+            store.ingestCloudTransactionsBatch(batch);
+          }
         },
         () => {}
       );
@@ -413,16 +439,32 @@ class FirebaseSyncService {
     // 8. Real-time RTDB listener on /live_bets
     try {
       const betsUnsub = rtdbOnValue(
-        rtdbRef(rtdb, 'live_bets'),
+        rtdbQuery(rtdbRef(rtdb, 'live_bets'), rtdbLimitToLast(200)),
         (snap) => {
-          if (!snap.exists()) return;
+          if (!snap.exists()) {
+            if (this.knownRtdbLiveBetIds.size > 0) {
+              let removedAny = false;
+              this.knownRtdbLiveBetIds.forEach((id) => {
+                if (store.ingestDeletedLiveBetFromCloud(id)) removedAny = true;
+              });
+              this.knownRtdbLiveBetIds.clear();
+              if (removedAny) store.safeNotifyListeners();
+            }
+            return;
+          }
           const val = snap.val();
           if (!val || typeof val !== 'object') return;
           let changed = false;
+          const incomingIds = new Set<string>();
+
           Object.entries(val).forEach(([key, raw]: [string, any]) => {
             if (raw && typeof raw === 'object' && (raw.betId || key)) {
+              const betId = raw.betId || key;
+              if (store.isBetDeleted(betId)) return;
+              incomingIds.add(betId);
+
               const bet: LiveBet = {
-                betId: raw.betId || key,
+                betId,
                 uid: raw.uid,
                 username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
                 gameId: raw.gameId || (raw.gameType === 'dragon_tiger' ? 'dragon_tiger' : undefined),
@@ -441,15 +483,35 @@ class FirebaseSyncService {
               if (existingIdx === -1) {
                 store.liveBets.unshift(bet);
                 changed = true;
-              } else if (
-                store.liveBets[existingIdx].status !== bet.status ||
-                store.liveBets[existingIdx].actualPayout !== bet.actualPayout
-              ) {
-                store.liveBets[existingIdx] = { ...store.liveBets[existingIdx], ...bet };
-                changed = true;
+              } else {
+                const cur = store.liveBets[existingIdx];
+                if (
+                  cur.status !== bet.status ||
+                  cur.actualPayout !== bet.actualPayout ||
+                  cur.amount !== bet.amount ||
+                  cur.betValue !== bet.betValue ||
+                  cur.betType !== bet.betType ||
+                  cur.multiplier !== bet.multiplier ||
+                  cur.potentialPayout !== bet.potentialPayout
+                ) {
+                  store.liveBets[existingIdx] = { ...cur, ...bet };
+                  changed = true;
+                }
               }
             }
           });
+
+          if (incomingIds.size < 195 && this.knownRtdbLiveBetIds.size > 0) {
+            this.knownRtdbLiveBetIds.forEach((prevId) => {
+              if (!incomingIds.has(prevId)) {
+                if (store.ingestDeletedLiveBetFromCloud(prevId)) {
+                  changed = true;
+                }
+              }
+            });
+          }
+          this.knownRtdbLiveBetIds = incomingIds;
+
           if (changed) {
             store.safeNotifyListeners();
           }
@@ -467,9 +529,10 @@ class FirebaseSyncService {
           if (!snap.exists()) return;
           const val = snap.val();
           if (!val || typeof val !== 'object') return;
+          const batch: ReferralRecord[] = [];
           Object.entries(val).forEach(([key, raw]: [string, any]) => {
             if (raw && typeof raw === 'object' && raw.referrerUid && raw.referredUid) {
-              const refRec: ReferralRecord = {
+              batch.push({
                 id: raw.id || key,
                 referrerUid: raw.referrerUid,
                 referrerUsername: raw.referrerUsername || `Player_${String(raw.referrerUid).slice(-4)}`,
@@ -487,79 +550,71 @@ class FirebaseSyncService {
                 creditedAt: raw.creditedAt || undefined,
                 transactionId: raw.transactionId || undefined,
                 rejectionReason: raw.rejectionReason || undefined
-              };
-              store.ingestCloudReferral(refRec);
+              });
             }
           });
+          if (batch.length > 0) {
+            store.ingestCloudReferralsBatch(batch);
+          }
         },
         () => {}
       );
       this.globalUnsubscribes.push(refsUnsub);
     } catch {}
+
+    // 10. Real-time RTDB listener on /audit_logs (last 200 immutable admin security & financial audit logs)
+    try {
+      const auditUnsub = rtdbOnValue(
+        rtdbQuery(rtdbRef(rtdb, 'audit_logs'), rtdbLimitToLast(200)),
+        (snap) => {
+          if (!snap.exists()) return;
+          const val = snap.val();
+          if (!val || typeof val !== 'object') return;
+          const batch: AuditLogItem[] = [];
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object' && (raw.action || raw.details)) {
+              batch.push({
+                id: raw.id || key,
+                timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
+                actor: raw.actor || 'MasterAdmin',
+                category: raw.category || 'SYSTEM',
+                action: raw.action || 'EVENT',
+                details: raw.details || '',
+                targetUser: raw.targetUser || undefined,
+                affectedRecordId: raw.affectedRecordId || undefined,
+                reason: raw.reason || undefined,
+                outcome: raw.outcome || undefined
+              });
+            }
+          });
+          if (batch.length > 0) {
+            store.ingestCloudAuditLogsBatch(batch);
+          }
+        },
+        () => {}
+      );
+      this.globalUnsubscribes.push(auditUnsub);
+    } catch {}
   }
 
   /**
-   * Pushes all active in-memory entities (users, deposits, withdrawals, transactions, pending bets)
-   * to Firebase RTDB & Firestore on startup so any account or deposit created on any phone immediately reaches Admin.
+   * Lightweight startup sync check: does NOT block UI or re-download already streaming RTDB collections.
    */
   private async pushLocalStateToCloud() {
     await this.ensureAuth();
-
+    // Live RTDB listeners handle bi-directional hydration; only ensure active session user syncs if present
     try {
-      // Pull authoritative RTDB state first so stale local cache never overwrites Admin updates
-      await this.pullUsersFromRtdb();
-
-      const localUsers = Object.values(store.getUsers());
-      for (const u of localUsers) {
-        if (u && u.uid && !u.uid.startsWith('usr_demo_')) {
-          try {
-            const snap = await rtdbGet(rtdbRef(rtdb, `users/${u.uid}`));
-            if (!snap.exists()) {
-              await this.pushUserToFirestore(u);
-            }
-          } catch {
-            // Ignore transient network read errors
+      const activeUid = store.getActiveSessionUid();
+      if (activeUid && !activeUid.startsWith('usr_demo_')) {
+        const activeUser = store.getUser(activeUid);
+        if (activeUser) {
+          const snap = await rtdbGet(rtdbRef(rtdb, `users/${activeUid}`));
+          if (!snap.exists()) {
+            await this.pushUserToFirestore(activeUser);
           }
         }
       }
-
-      const localDeposits = store.getDeposits();
-      for (const d of localDeposits.slice(0, 50)) {
-        if (d && d.id) {
-          await this.pushDepositToFirestore(d);
-        }
-      }
-
-      const localWithdrawals = store.getWithdrawals();
-      for (const w of localWithdrawals.slice(0, 50)) {
-        if (w && w.id) {
-          await this.pushWithdrawalToFirestore(w);
-        }
-      }
-
-      const localTxs = store.getAllTransactionsFlat();
-      for (const tx of localTxs.slice(0, 80)) {
-        if (tx && tx.id) {
-          await this.pushTransactionToFirestore(tx);
-        }
-      }
-
-      const localBets = store.getLiveBets();
-      for (const b of localBets.slice(0, 40)) {
-        if (b && b.betId) {
-          await this.pushLiveBetToFirestore(b);
-        }
-      }
-
-      const localReferrals = store.getAllReferrals();
-      for (const r of localReferrals.slice(0, 80)) {
-        if (r && r.id) {
-          await this.pushReferralToFirestore(r);
-        }
-      }
-    } catch (e) {
-      console.warn('[FirebaseSync] Initial cloud push notice:', e);
-    }
+    } catch {}
   }
 
   public async pushRoundToRtdb(round: GameRound): Promise<void> {
@@ -771,11 +826,19 @@ class FirebaseSyncService {
         (snapshot) => {
           let changed = false;
           snapshot.docChanges().forEach((change) => {
+            if (change.type === 'removed') {
+              if (store.ingestDeletedLiveBetFromCloud(change.doc.id)) {
+                changed = true;
+              }
+              return;
+            }
             if (change.type === 'added' || change.type === 'modified') {
               const raw = change.doc.data();
               if (raw && (raw.betId || change.doc.id)) {
+                const betId = raw.betId || change.doc.id;
+                if (store.isBetDeleted(betId)) return;
                 const bet: LiveBet = {
-                  betId: raw.betId || change.doc.id,
+                  betId,
                   uid: raw.uid,
                   username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
                   gameId: raw.gameId || (raw.gameType === 'dragon_tiger' ? 'dragon_tiger' : undefined),
@@ -794,12 +857,20 @@ class FirebaseSyncService {
                 if (existingIdx === -1) {
                   store.liveBets.unshift(bet);
                   changed = true;
-                } else if (
-                  store.liveBets[existingIdx].status !== bet.status ||
-                  store.liveBets[existingIdx].actualPayout !== bet.actualPayout
-                ) {
-                  store.liveBets[existingIdx] = { ...store.liveBets[existingIdx], ...bet };
-                  changed = true;
+                } else {
+                  const cur = store.liveBets[existingIdx];
+                  if (
+                    cur.status !== bet.status ||
+                    cur.actualPayout !== bet.actualPayout ||
+                    cur.amount !== bet.amount ||
+                    cur.betValue !== bet.betValue ||
+                    cur.betType !== bet.betType ||
+                    cur.multiplier !== bet.multiplier ||
+                    cur.potentialPayout !== bet.potentialPayout
+                  ) {
+                    store.liveBets[existingIdx] = { ...cur, ...bet };
+                    changed = true;
+                  }
                 }
               }
             }
@@ -1508,7 +1579,10 @@ class FirebaseSyncService {
       createdAt: existing?.createdAt || user.createdAt || Date.now(),
       lastLogin: user.lastLogin || Date.now(),
       isOnline: true,
-      devices: user.devices || existing?.devices || {},
+      devices: {
+        ...(existing?.devices && typeof existing.devices === 'object' ? existing.devices : {}),
+        ...(user.devices && typeof user.devices === 'object' ? user.devices : {})
+      },
       updatedAt: nowWriteTs
     };
 
@@ -1703,6 +1777,23 @@ class FirebaseSyncService {
   }
 
   /**
+   * Deletes a bet permanently from RTDB (/live_bets/{betId}) and Firestore (/live_bets/{betId})
+   */
+  public async deleteLiveBetFromCloud(betId: string): Promise<void> {
+    if (!betId) return;
+    this.knownRtdbLiveBetIds.delete(betId);
+    try {
+      await rtdbRemove(rtdbRef(rtdb, `live_bets/${betId}`));
+    } catch {}
+
+    if (!isFirestoreAvailable()) return;
+    await this.ensureAuth();
+    try {
+      await deleteDoc(doc(db, 'live_bets', betId));
+    } catch {}
+  }
+
+  /**
    * Syncs a referral linkage record to RTDB (/referrals/{referralId}) and Firestore (/referrals/{referralId})
    */
   public async pushReferralToFirestore(ref: ReferralRecord): Promise<void> {
@@ -1740,6 +1831,59 @@ class FirebaseSyncService {
   }
 
   /**
+   * Syncs an immutable Admin audit log entry to RTDB (/audit_logs/{logId})
+   */
+  public async pushAuditLogToRtdb(log: AuditLogItem): Promise<void> {
+    if (!log || !log.id) return;
+    const payload = {
+      id: log.id,
+      timestamp: log.timestamp || Date.now(),
+      actor: log.actor || 'MasterAdmin',
+      category: log.category || 'SYSTEM',
+      action: log.action || 'EVENT',
+      details: log.details || '',
+      targetUser: log.targetUser || null,
+      affectedRecordId: log.affectedRecordId || null,
+      reason: log.reason || null,
+      outcome: log.outcome || 'SUCCESS'
+    };
+    try {
+      await rtdbSet(rtdbRef(rtdb, `audit_logs/${log.id}`), payload);
+    } catch {}
+  }
+
+  public async pullAuditLogsFromRtdb(): Promise<void> {
+    try {
+      const snap = await rtdbGet(rtdbQuery(rtdbRef(rtdb, 'audit_logs'), rtdbLimitToLast(200)));
+      if (snap.exists()) {
+        const val = snap.val();
+        if (val && typeof val === 'object') {
+          const batch: AuditLogItem[] = [];
+          Object.entries(val).forEach(([key, raw]: [string, any]) => {
+            if (raw && typeof raw === 'object' && (raw.action || raw.details)) {
+              batch.push({
+                id: raw.id || key,
+                timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
+                actor: raw.actor || 'MasterAdmin',
+                category: raw.category || 'SYSTEM',
+                action: raw.action || 'EVENT',
+                details: raw.details || '',
+                targetUser: raw.targetUser || undefined,
+                affectedRecordId: raw.affectedRecordId || undefined,
+                reason: raw.reason || undefined,
+                outcome: raw.outcome || undefined
+              });
+            }
+          });
+          if (batch.length > 0) {
+            store.ingestCloudAuditLogsBatch(batch);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  /**
    * Pulls all users and referrals from Firebase Realtime Database on demand
    * (used before login/signup so referral codes from other devices are immediately matched).
    */
@@ -1749,17 +1893,18 @@ class FirebaseSyncService {
       if (snap.exists()) {
         const val = snap.val();
         if (val && typeof val === 'object') {
+          const batch: Array<Partial<UserRecord> & { uid: string }> = [];
           Object.entries(val).forEach(([key, raw]: [string, any]) => {
             if (raw && typeof raw === 'object') {
               const uid = raw.uid || key;
               if (uid && !String(uid).startsWith('usr_demo_')) {
-                store.updateUserFromFirestore({
-                  ...raw,
-                  uid
-                });
+                batch.push({ ...raw, uid });
               }
             }
           });
+          if (batch.length > 0) {
+            store.ingestCloudUsersBatch(batch);
+          }
         }
       }
     } catch {}
@@ -1769,14 +1914,18 @@ class FirebaseSyncService {
       if (refSnap.exists()) {
         const val = refSnap.val();
         if (val && typeof val === 'object') {
+          const batch: ReferralRecord[] = [];
           Object.entries(val).forEach(([key, raw]: [string, any]) => {
             if (raw && typeof raw === 'object' && raw.referrerUid && raw.referredUid) {
-              store.ingestCloudReferral({
+              batch.push({
                 ...raw,
                 id: raw.id || key
               } as ReferralRecord);
             }
           });
+          if (batch.length > 0) {
+            store.ingestCloudReferralsBatch(batch);
+          }
         }
       }
     } catch {}
@@ -1796,17 +1945,18 @@ class FirebaseSyncService {
       const rtdbUserUids = new Set<string>();
       let hasRtdbSettings = false;
 
-      // Pull from RTDB first as the primary real-time source of truth
+      // Pull from RTDB first as the primary real-time source of truth (batched)
       try {
         const rtdbUsersSnap = await rtdbGet(rtdbRef(rtdb, 'users'));
         if (rtdbUsersSnap.exists()) {
           const val = rtdbUsersSnap.val();
           if (val && typeof val === 'object') {
+            const userBatch: Array<Partial<UserRecord> & { uid: string }> = [];
             Object.entries(val).forEach(([key, raw]: [string, any]) => {
               const uid = raw?.uid || key;
               if (uid && !String(uid).startsWith('usr_demo_')) {
                 rtdbUserUids.add(uid);
-                store.updateUserFromFirestore({
+                userBatch.push({
                   ...raw,
                   uid,
                   updatedAt: Number(raw?.updatedAt || Date.now())
@@ -1816,6 +1966,9 @@ class FirebaseSyncService {
                 }
               }
             });
+            if (userBatch.length > 0) {
+              store.ingestCloudUsersBatch(userBatch);
+            }
           }
         }
         const rtdbSettingsSnap = await rtdbGet(rtdbRef(rtdb, 'admin_settings'));
@@ -1833,9 +1986,10 @@ class FirebaseSyncService {
         if (rtdbDepsSnap.exists()) {
           const dVal = rtdbDepsSnap.val();
           if (dVal && typeof dVal === 'object') {
+            const depBatch: DepositRecord[] = [];
             Object.entries(dVal).forEach(([key, raw]: [string, any]) => {
               if (raw && typeof raw === 'object' && (raw.id || key)) {
-                store.ingestCloudDeposit({
+                depBatch.push({
                   id: raw.id || key,
                   uid: raw.uid,
                   username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
@@ -1853,15 +2007,19 @@ class FirebaseSyncService {
                 });
               }
             });
+            if (depBatch.length > 0) {
+              store.ingestCloudDepositsBatch(depBatch);
+            }
           }
         }
         const rtdbWithSnap = await rtdbGet(rtdbRef(rtdb, 'withdrawals'));
         if (rtdbWithSnap.exists()) {
           const wVal = rtdbWithSnap.val();
           if (wVal && typeof wVal === 'object') {
+            const wBatch: WithdrawalRecord[] = [];
             Object.entries(wVal).forEach(([key, raw]: [string, any]) => {
               if (raw && typeof raw === 'object' && (raw.id || key)) {
-                store.ingestCloudWithdrawal({
+                wBatch.push({
                   id: raw.id || key,
                   uid: raw.uid,
                   username: raw.username || `Player_${String(raw.uid || '').slice(-4)}`,
@@ -1878,8 +2036,27 @@ class FirebaseSyncService {
                 });
               }
             });
+            if (wBatch.length > 0) {
+              store.ingestCloudWithdrawalsBatch(wBatch);
+            }
           }
         }
+        const rtdbRefsSnap = await rtdbGet(rtdbRef(rtdb, 'referrals'));
+        if (rtdbRefsSnap.exists()) {
+          const rVal = rtdbRefsSnap.val();
+          if (rVal && typeof rVal === 'object') {
+            const rBatch: ReferralRecord[] = [];
+            Object.entries(rVal).forEach(([key, raw]: [string, any]) => {
+              if (raw && typeof raw === 'object' && raw.referrerUid && raw.referredUid) {
+                rBatch.push({ ...raw, id: raw.id || key } as ReferralRecord);
+              }
+            });
+            if (rBatch.length > 0) {
+              store.ingestCloudReferralsBatch(rBatch);
+            }
+          }
+        }
+        await this.pullAuditLogsFromRtdb();
       } catch {}
 
       // Pull from Firestore only if Firestore is enabled and for records not already newer in RTDB

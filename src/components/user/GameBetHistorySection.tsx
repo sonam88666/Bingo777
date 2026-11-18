@@ -19,6 +19,7 @@ import {
 import { GameRound, LiveBet, UserRecord } from '../../types';
 import { useToast } from '../common/Toast';
 import { BetAnalyticsVisualizer } from './BetAnalyticsVisualizer';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface GameBetHistorySectionProps {
   pastRounds: GameRound[];
@@ -50,10 +51,10 @@ export const GameBetHistorySection: React.FC<GameBetHistorySectionProps> = ({
   // Chart Timeframe
   const [chartSampleSize, setChartSampleSize] = useState<30 | 50 | 100>(30);
 
-  const handleCopy = (text: string, label: string) => {
+  const handleCopy = async (text: string, label: string) => {
     if (!text) return;
-    navigator.clipboard.writeText(text);
-    showToast(`${label} copied to clipboard!`, 'info');
+    const copied = await copyToClipboard(text);
+    showToast(copied ? `${label} copied to clipboard!` : `Unable to copy ${label} on this device`, copied ? 'info' : 'error');
   };
 
   const formatDateTime = (timestamp: number) => {
@@ -524,10 +525,10 @@ export const GameBetHistorySection: React.FC<GameBetHistorySectionProps> = ({
                                   : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
                                 : 'bg-slate-800 text-slate-200 border border-slate-700'
                             }`}>
-                              <span>Select: {b.betValue.toUpperCase()}</span>
+                              <span>Select: {(b.betValue || '').toUpperCase()}</span>
                             </span>
                             <span className="text-[10px] text-slate-400 font-bold bg-slate-900 px-2 py-0.5 rounded-md border border-slate-800">
-                              Bet ₹{b.amount}
+                              Bet ₹{Number(b.amount) || 0}
                             </span>
                           </div>
 
@@ -536,13 +537,13 @@ export const GameBetHistorySection: React.FC<GameBetHistorySectionProps> = ({
                             {isWon ? (
                               <div className="flex items-center space-x-1 text-emerald-400">
                                 <span className="font-mono font-black text-base">
-                                  +₹{b.actualPayout.toFixed(2)}
+                                  +₹{(Number(b.actualPayout) || 0).toFixed(2)}
                                 </span>
                               </div>
                             ) : isLost ? (
                               <div className="flex items-center space-x-1 text-rose-400">
                                 <span className="font-mono font-black text-base">
-                                  -₹{b.amount.toFixed(2)}
+                                  -₹{(Number(b.amount) || 0).toFixed(2)}
                                 </span>
                               </div>
                             ) : (
@@ -556,10 +557,10 @@ export const GameBetHistorySection: React.FC<GameBetHistorySectionProps> = ({
                         {/* Middle Row: Period, Order ID with Copy, and Status */}
                         <div className="flex items-center justify-between text-xs font-mono text-slate-400 pt-1 border-t border-slate-900">
                           <div className="flex items-center space-x-2">
-                            <span>Period: <strong className="text-slate-200">{b.roundPeriod}</strong></span>
+                            <span>Period: <strong className="text-slate-200">{b.roundPeriod || '-'}</strong></span>
                             <span className="text-slate-600">|</span>
                             <div className="flex items-center space-x-1">
-                              <span>Order: <strong className="text-slate-300">{b.betId.substring(0, 10)}...</strong></span>
+                              <span>Order: <strong className="text-slate-300">{(b.betId || '').substring(0, 10)}...</strong></span>
                               <button
                                 type="button"
                                 onClick={() => handleCopy(b.betId, 'Order ID')}
@@ -608,20 +609,20 @@ export const GameBetHistorySection: React.FC<GameBetHistorySectionProps> = ({
                             </div>
                             <div className="flex justify-between py-1">
                               <span className="text-slate-400 font-sans">Contract Money:</span>
-                              <span className="font-bold text-slate-200">₹{b.amount.toFixed(2)}</span>
+                              <span className="font-bold text-slate-200">₹{(Number(b.amount) || 0).toFixed(2)}</span>
                             </div>
                             <div className="flex justify-between py-1">
                               <span className="text-slate-400 font-sans">Multiplier Rate:</span>
-                              <span className="font-bold text-amber-400">{b.multiplier}X</span>
+                              <span className="font-bold text-amber-400">{b.multiplier ?? 1}X</span>
                             </div>
                             <div className="flex justify-between py-1">
                               <span className="text-slate-400 font-sans">Delivery Fee (2%):</span>
-                              <span className="font-bold text-slate-400">₹{(b.amount * 0.02).toFixed(2)}</span>
+                              <span className="font-bold text-slate-400">₹{((Number(b.amount) || 0) * 0.02).toFixed(2)}</span>
                             </div>
                             <div className="flex justify-between py-1">
                               <span className="text-slate-400 font-sans">Total Net Return:</span>
                               <span className={`font-black ${isWon ? 'text-emerald-400' : isLost ? 'text-rose-400' : 'text-amber-400'}`}>
-                                {isWon ? `+₹${b.actualPayout.toFixed(2)}` : isLost ? '₹0.00' : 'Pending'}
+                                {isWon ? `+₹${(Number(b.actualPayout) || 0).toFixed(2)}` : isLost ? '₹0.00' : 'Pending'}
                               </span>
                             </div>
                           </div>

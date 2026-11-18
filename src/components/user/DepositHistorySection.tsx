@@ -23,6 +23,7 @@ import {
 import { DepositRecord, WithdrawalRecord } from '../../types';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface DepositHistorySectionProps {
   deposits: DepositRecord[];
@@ -50,18 +51,19 @@ export const DepositHistorySection: React.FC<DepositHistorySectionProps> = ({
   
   // Section view toggle: Deposits vs Withdrawals
   const [activeCategory, setActiveCategory] = useState<'deposits' | 'withdrawals'>(defaultSubTab);
-  
+  const [showChannels, setShowChannels] = useState(false);
+
   // Payment Method Filter: All vs UPI vs USDT
   const [methodTab, setMethodTab] = useState<'All' | 'UPI' | 'USDT'>('All');
-  
+
   // Deposit Filters (Status, Date, Search)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 6;
+  const itemsPerPage = 8;
 
   // Receipt Modal State
   const [receiptModalDeposit, setReceiptModalDeposit] = useState<DepositRecord | null>(null);
@@ -70,10 +72,10 @@ export const DepositHistorySection: React.FC<DepositHistorySectionProps> = ({
   const [receiptBankName, setReceiptBankName] = useState('');
   const [isSubmittingReceipt, setIsSubmittingReceipt] = useState(false);
 
-  const handleCopy = (text: string, label: string) => {
+  const handleCopy = async (text: string, label: string) => {
     if (!text) return;
-    navigator.clipboard.writeText(text);
-    showToast(`${label} copied to clipboard!`, 'info');
+    const copied = await copyToClipboard(text);
+    showToast(copied ? `${label} copied to clipboard!` : `Unable to copy ${label} on this device`, copied ? 'info' : 'error');
   };
 
   const handleOpenReceiptModal = (d: DepositRecord) => {
@@ -134,14 +136,14 @@ export const DepositHistorySection: React.FC<DepositHistorySectionProps> = ({
       // Search Query (Order ID / Reference / UTR)
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchesRef = d.referenceId.toLowerCase().includes(q);
-        const matchesId = d.id.toLowerCase().includes(q);
-        const matchesAmt = d.amount.toString().includes(q);
+        const matchesRef = (d.referenceId || '').toLowerCase().includes(q);
+        const matchesId = (d.id || '').toLowerCase().includes(q);
+        const matchesAmt = String(d.amount || 0).includes(q);
         if (!matchesRef && !matchesId && !matchesAmt) return false;
       }
 
       return true;
-    });
+    }).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
   }, [deposits, methodTab, statusFilter, dateFilter, searchQuery]);
 
   // Filtered withdrawals
@@ -166,13 +168,13 @@ export const DepositHistorySection: React.FC<DepositHistorySectionProps> = ({
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchesId = w.id.toLowerCase().includes(q);
-        const matchesAmt = w.amount.toString().includes(q);
-        const matchesAcc = (w.accountDetails?.upiId || w.accountDetails?.accountNumber || '').toLowerCase().includes(q);
+        const matchesId = (w.id || '').toLowerCase().includes(q);
+        const matchesAmt = String(w.amount || 0).includes(q);
+        const matchesAcc = (w.accountDetails?.upiId || w.accountDetails?.accountNumber || w.accountDetails?.usdtAddress || '').toLowerCase().includes(q);
         if (!matchesId && !matchesAmt && !matchesAcc) return false;
       }
       return true;
-    });
+    }).sort((a, b) => (b.requestedAt || 0) - (a.requestedAt || 0));
   }, [withdrawals, statusFilter, dateFilter, searchQuery]);
 
   // Current list based on category
@@ -256,8 +258,25 @@ export const DepositHistorySection: React.FC<DepositHistorySectionProps> = ({
           </div>
         </div>
 
-        {/* Official Admin Verified UPI Cashier Channels (Primary & Backup) */}
+        {/* Collapsible Official Admin Verified UPI Cashier Channels (Keeps History Immediately Visible) */}
         {activeCategory === 'deposits' && (
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setShowChannels((prev) => !prev)}
+              className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/40 text-xs font-bold text-amber-300 flex items-center justify-between transition"
+            >
+              <span className="flex items-center space-x-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>Official Cashier Channels (UPI / USDT)</span>
+              </span>
+              <span className="text-[11px] text-slate-400">
+                {showChannels ? 'Hide ▲' : 'Show ▼'}
+              </span>
+            </button>
+          </div>
+        )}
+        {activeCategory === 'deposits' && showChannels && (
           <div className="space-y-2">
             {/* Primary Channel */}
             <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs shadow-inner">
@@ -518,7 +537,7 @@ export const DepositHistorySection: React.FC<DepositHistorySectionProps> = ({
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-mono font-black text-emerald-400 text-lg tracking-tight">
-                              +₹{d.amount.toFixed(2)}
+                              +₹{(Number(d.amount) || 0).toFixed(2)}
                             </span>
                             {d.usdtAmount ? (
                               <span className="px-2 py-0.5 rounded-md bg-teal-500/20 border border-teal-500/40 text-[10px] font-mono font-bold text-teal-300">
@@ -639,7 +658,7 @@ export const DepositHistorySection: React.FC<DepositHistorySectionProps> = ({
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-mono font-black text-amber-300 text-lg tracking-tight">
-                              -₹{w.amount.toFixed(2)}
+                              -₹{(Number(w.amount) || 0).toFixed(2)}
                             </span>
                             {w.usdtAmount ? (
                               <span className="px-2 py-0.5 rounded-md bg-teal-500/20 border border-teal-500/40 text-[10px] font-mono font-bold text-teal-300">
@@ -764,7 +783,7 @@ export const DepositHistorySection: React.FC<DepositHistorySectionProps> = ({
               <div>
                 <span className="text-[10px] text-slate-500 block">Deposit Amount</span>
                 <span className="font-mono font-black text-emerald-400 text-base">
-                  ₹{receiptModalDeposit.amount.toFixed(2)}
+                  ₹{(Number(receiptModalDeposit.amount) || 0).toFixed(2)}
                 </span>
               </div>
               <div className="text-right">

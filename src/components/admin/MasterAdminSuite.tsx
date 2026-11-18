@@ -26,7 +26,9 @@ import {
   AlertTriangle,
   Layers,
   RefreshCw,
-  TrendingUp
+  TrendingUp,
+  CheckCircle2,
+  XCircle
 } from 'lucide-react';
 import { AdminOverview } from './AdminOverview';
 import { AdminFeatures } from './AdminFeatures';
@@ -52,7 +54,16 @@ import { firebaseSync } from '../../services/firebaseSync';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
 import { rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
-import { normalizeAdminDeviceMap, getPendingAdminDevices } from '../../services/adminDeviceSecurity';
+import {
+  MAX_ADMIN_DEVICES,
+  AdminAllowedDeviceRecord,
+  normalizeAdminDeviceMap,
+  getApprovedAdminDevices,
+  getPendingAdminDevices,
+  approveAdminDeviceSlot,
+  rejectAdminDeviceSlot,
+  syncAdminUserDevicesToAllowedMap
+} from '../../services/adminDeviceSecurity';
 
 interface MasterAdminSuiteProps {
   adminId: string;
@@ -70,19 +81,24 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
   const [, setTick] = React.useState(0);
   const { showToast } = useToast();
 
-  const [pendingAdminDevicesCount, setPendingAdminDevicesCount] = useState(0);
+  const [adminDeviceMap, setAdminDeviceMap] = useState<Record<string, AdminAllowedDeviceRecord>>({});
 
   React.useEffect(() => {
     // Initialize automated 60-minute background cleanup routine on Admin Console startup
     firebaseSync.startAutomatedHourlyCleanupRoutine();
     firebaseSync.runHourlyDatabaseCleanup().catch(() => {});
 
+    // Automatically surface any APK / mobile devices logged into Admin accounts
+    syncAdminUserDevicesToAllowedMap()
+      .then((map) => setAdminDeviceMap(map))
+      .catch(() => {});
+
     const unsubStore = store.subscribe(() => setTick((t) => t + 1));
     const unsubAdminDevs = rtdbOnValue(
       rtdbRef(rtdb, 'admin_security/allowed_devices'),
       (snap) => {
         const map = snap.exists() ? normalizeAdminDeviceMap(snap.val()) : {};
-        setPendingAdminDevicesCount(getPendingAdminDevices(map).length);
+        setAdminDeviceMap(map);
       },
       () => {}
     );
@@ -91,6 +107,27 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
       unsubAdminDevs();
     };
   }, []);
+
+  const approvedAdminDevices = getApprovedAdminDevices(adminDeviceMap);
+  const pendingAdminDevices = getPendingAdminDevices(adminDeviceMap);
+  const pendingAdminDevicesCount = pendingAdminDevices.length;
+
+  const handleQuickApproveAdminDev = async (dev: AdminAllowedDeviceRecord) => {
+    const res = await approveAdminDeviceSlot(dev, adminId);
+    if (res.success) {
+      showToast(
+        `✅ Approved APK / Admin Device ${dev.deviceModel || dev.deviceId} (${res.approvedCount}/${MAX_ADMIN_DEVICES} slots used)!`,
+        'success'
+      );
+    } else {
+      showToast(res.error || `Max ${MAX_ADMIN_DEVICES} Admin Devices limit reached.`, 'error');
+    }
+  };
+
+  const handleQuickRejectAdminDev = async (devId: string) => {
+    await rejectAdminDeviceSlot(devId, adminId, 'Rejected by Super Admin from Admin Panel');
+    showToast(`Rejected Admin Device ${devId}.`, 'info');
+  };
 
   const adminSettings = store.getAdminSettings();
 
@@ -103,8 +140,10 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
     try {
       await firebaseSync.pullUsersFromRtdb().catch(() => {});
       await firebaseSync.forceSyncFromFirebase().catch(() => {});
+      const syncedDevs = await syncAdminUserDevicesToAllowedMap().catch(() => null);
+      if (syncedDevs) setAdminDeviceMap(syncedDevs);
       setTick((t) => t + 1);
-      showToast('Synced! Live Admin data refreshed from Firebase.', 'success');
+      showToast('Synced! Live Admin & APK Device requests refreshed from Firebase.', 'success');
     } catch {
       showToast('Synced!', 'success');
     } finally {
@@ -147,10 +186,14 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
   const pendingDepositsCount = deposits.filter((d) => d.status === 'pending').length;
   const pendingWithdrawalsCount = withdrawals.filter((w) => w.status === 'pending').length;
 
+  const countedDeviceIds = new Set(pendingAdminDevices.map((d) => d.deviceId));
   let pendingDevicesCount = pendingAdminDevicesCount;
   users.forEach((u) => {
     Object.values(u.devices || {}).forEach((d) => {
-      if (d.status === 'pending') pendingDevicesCount++;
+      if (d && d.status === 'pending' && !countedDeviceIds.has(d.deviceId)) {
+        countedDeviceIds.add(d.deviceId);
+        pendingDevicesCount++;
+      }
     });
   });
 
@@ -159,6 +202,14 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
   // Navigation items matching the organized Admin Console sidebar in the app's native dark & gold palette
   const navItems = [
     { id: 'overview', label: 'Dashboard', title: 'Admin Console', icon: LayoutDashboard },
+    {
+      id: 'devices',
+      label: 'Device Approvals',
+      title: 'Device & APK Approvals',
+      icon: Smartphone,
+      badge: pendingDevicesCount,
+      alert: pendingDevicesCount > 0
+    },
     { id: 'users', label: 'User Management', title: 'User Management', icon: Users, badge: users.length },
     {
       id: 'deposits',
@@ -195,14 +246,6 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
     { id: 'settings', label: 'Admin Settings', title: 'Admin Settings', icon: Settings },
     { id: 'audit', label: 'Audit Logs', title: 'Audit Logs', icon: ShieldCheck },
     { id: 'data_backup', label: 'Data Export / Import', title: 'Data Export / Import', icon: Database },
-    {
-      id: 'devices',
-      label: 'Device Approvals',
-      title: 'Device Approvals',
-      icon: Smartphone,
-      badge: pendingDevicesCount,
-      alert: pendingDevicesCount > 0
-    },
     { id: 'firebase', label: 'Firebase Security Rules', title: 'Firebase Security Rules', icon: Lock }
   ];
 
@@ -398,9 +441,19 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
             {/* Notification Bell with Red Counter Badge */}
             <button
               type="button"
-              onClick={() => handleSelectTab(pendingDepositsCount > 0 ? 'deposits' : 'support')}
+              onClick={() =>
+                handleSelectTab(
+                  pendingDevicesCount > 0
+                    ? 'devices'
+                    : pendingDepositsCount > 0
+                    ? 'deposits'
+                    : pendingWithdrawalsCount > 0
+                    ? 'withdrawals'
+                    : 'support'
+                )
+              }
               className="relative p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-500/40 transition"
-              title="Pending Requests & Alerts"
+              title="Pending Device, Deposit & Withdrawal Requests"
             >
               <Bell className="w-4 h-4 text-amber-400" />
               {totalAlerts > 0 && (
@@ -450,7 +503,11 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
                 {item.badge !== undefined && item.badge > 0 && (
                   <span
                     className={`relative z-10 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-                      isActive ? 'bg-slate-950 text-amber-300' : 'bg-slate-700 text-slate-200'
+                      isActive
+                        ? 'bg-slate-950 text-amber-300'
+                        : item.alert
+                        ? 'bg-rose-500 text-white animate-pulse'
+                        : 'bg-slate-700 text-slate-200'
                     }`}
                   >
                     {item.badge}
@@ -462,7 +519,90 @@ export const MasterAdminSuite: React.FC<MasterAdminSuiteProps> = ({
         </div>
 
         {/* Dedicated Module Screen Container with Smooth Layout Transitions */}
-        <main className="flex-1 w-full max-w-4xl mx-auto p-3.5 sm:p-6">
+        <main className="flex-1 w-full max-w-4xl mx-auto p-3.5 sm:p-6 space-y-4">
+          {/* Global Live Pending APK / Admin Device Approval Banner */}
+          {pendingAdminDevices.length > 0 && (
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-950/90 via-slate-900 to-emerald-950/80 border-2 border-amber-400/80 shadow-xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-400/50 text-amber-300 flex items-center justify-center shrink-0">
+                    <Smartphone className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <span className="font-brand font-black text-xs sm:text-sm text-white">
+                        📱 Pending APK / Admin Device Approval ({pendingAdminDevices.length})
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-slate-950 uppercase">
+                        {approvedAdminDevices.length}/{MAX_ADMIN_DEVICES} Slots Used
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-200/90">
+                      APK ya phone se Admin login request aayi hai — niche Approve dabayein taaki APK me Admin turant open ho jaye:
+                    </p>
+                  </div>
+                </div>
+                {activeTab !== 'devices' && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectTab('devices')}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-amber-400/40 text-amber-300 font-bold text-xs transition shrink-0"
+                  >
+                    All Devices &rarr;
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                {pendingAdminDevices.map((dev) => (
+                  <div
+                    key={dev.deviceId}
+                    className="p-3 rounded-xl bg-slate-950/90 border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-xs text-white">
+                          {dev.deviceModel || dev.deviceName || 'Admin APK Device'}
+                        </span>
+                        {dev.phone && (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 font-mono font-bold text-[11px] text-amber-300">
+                            +91 {dev.phone}
+                          </span>
+                        )}
+                        <span className="text-[11px] text-slate-400">
+                          {dev.username || 'Admin'} · {dev.os || 'Android'} / {dev.browser || 'APK'}
+                        </span>
+                      </div>
+                      <div className="font-mono text-[10px] text-amber-300/90 truncate">
+                        Device ID: {dev.deviceId}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        disabled={approvedAdminDevices.length >= MAX_ADMIN_DEVICES}
+                        onClick={() => handleQuickApproveAdminDev(dev)}
+                        className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-black text-xs flex items-center space-x-1.5 shadow-lg shadow-emerald-950/50 transition"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Approve APK / Admin</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleQuickRejectAdminDev(dev.deviceId)}
+                        className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center space-x-1 transition"
+                      >
+                        <XCircle className="w-4 h-4" />
+                        <span>Reject</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
               key={activeTab}

@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { 
   ShieldCheck, 
-  Key,
   X,
   Gift,
   Sparkles,
@@ -11,30 +10,76 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ToastProvider, useToast } from './components/common/Toast';
 import { UserHeader } from './components/user/UserHeader';
 import { GameLobby } from './components/user/GameLobby';
-import { ColorPredictionGame } from './components/user/ColorPredictionGame';
-import { AviatorGame } from './components/user/AviatorGame';
-import { K3DiceGame } from './components/user/K3DiceGame';
-import { TrxWinGoGame } from './components/user/TrxWinGoGame';
-import { FortuneWheelGame } from './components/user/FortuneWheelGame';
-import { LudoBattleGame } from './components/user/LudoBattleGame';
-import { QuizBattleGame } from './components/user/QuizBattleGame';
-import { DragonTigerGame } from './components/user/DragonTigerGame';
-import { ActivityView } from './components/user/ActivityView';
-import { WalletView } from './components/user/WalletView';
-import { AccountView } from './components/user/AccountView';
-import { GameBetHistorySection } from './components/user/GameBetHistorySection';
-import { GiftCodeModal } from './components/user/GiftCodeModal';
-import { SupportChatModal } from './components/user/SupportChatModal';
-import { ReferralDashboardModal } from './components/user/ReferralDashboardModal';
-import { UserAuthModal } from './components/user/UserAuthModal';
 import { GameResultModal } from './components/user/GameResultModal';
 import { BottomNav, TabId } from './components/navigation/BottomNav';
-import { MasterAdminSuite } from './components/admin/MasterAdminSuite';
-import { AdminLoginModal } from './components/admin/AdminLoginModal';
 import { MaintenanceOverlay } from './components/common/MaintenanceOverlay';
 import { AppPopupModal } from './components/common/AppPopupModal';
 import { TelegramFloatingWidget } from './components/common/TelegramFloatingWidget';
 import { GameErrorBoundary } from './components/common/ErrorBoundary';
+
+const ColorPredictionGame = lazy(() =>
+  import('./components/user/ColorPredictionGame').then((m) => ({ default: m.ColorPredictionGame }))
+);
+const AviatorGame = lazy(() =>
+  import('./components/user/AviatorGame').then((m) => ({ default: m.AviatorGame }))
+);
+const K3DiceGame = lazy(() =>
+  import('./components/user/K3DiceGame').then((m) => ({ default: m.K3DiceGame }))
+);
+const TrxWinGoGame = lazy(() =>
+  import('./components/user/TrxWinGoGame').then((m) => ({ default: m.TrxWinGoGame }))
+);
+const FortuneWheelGame = lazy(() =>
+  import('./components/user/FortuneWheelGame').then((m) => ({ default: m.FortuneWheelGame }))
+);
+const LudoBattleGame = lazy(() =>
+  import('./components/user/LudoBattleGame').then((m) => ({ default: m.LudoBattleGame }))
+);
+const QuizBattleGame = lazy(() =>
+  import('./components/user/QuizBattleGame').then((m) => ({ default: m.QuizBattleGame }))
+);
+const DragonTigerGame = lazy(() =>
+  import('./components/user/DragonTigerGame').then((m) => ({ default: m.DragonTigerGame }))
+);
+const ActivityView = lazy(() =>
+  import('./components/user/ActivityView').then((m) => ({ default: m.ActivityView }))
+);
+const WalletView = lazy(() =>
+  import('./components/user/WalletView').then((m) => ({ default: m.WalletView }))
+);
+const AccountView = lazy(() =>
+  import('./components/user/AccountView').then((m) => ({ default: m.AccountView }))
+);
+const GameBetHistorySection = lazy(() =>
+  import('./components/user/GameBetHistorySection').then((m) => ({ default: m.GameBetHistorySection }))
+);
+const GiftCodeModal = lazy(() =>
+  import('./components/user/GiftCodeModal').then((m) => ({ default: m.GiftCodeModal }))
+);
+const SupportChatModal = lazy(() =>
+  import('./components/user/SupportChatModal').then((m) => ({ default: m.SupportChatModal }))
+);
+const ReferralDashboardModal = lazy(() =>
+  import('./components/user/ReferralDashboardModal').then((m) => ({ default: m.ReferralDashboardModal }))
+);
+import { UserAuthModal } from './components/user/UserAuthModal';
+const MasterAdminSuite = lazy(() =>
+  import('./components/admin/MasterAdminSuite').then((m) => ({ default: m.MasterAdminSuite }))
+);
+const AdminLoginModal = lazy(() =>
+  import('./components/admin/AdminLoginModal').then((m) => ({ default: m.AdminLoginModal }))
+);
+
+const LazyScreenFallback = () => (
+  <div className="flex items-center justify-center min-h-[45vh] bg-slate-950 p-6">
+    <div className="flex flex-col items-center gap-3">
+      <div className="w-9 h-9 rounded-full border-2 border-amber-400 border-t-transparent animate-spin" />
+      <span className="text-[11px] font-bold tracking-wider uppercase text-amber-300/80">
+        Loading Bing777...
+      </span>
+    </div>
+  </div>
+);
 import { store } from './services/store';
 import { firebaseSync } from './services/firebaseSync';
 import { auth, rtdb, rtdbRef, rtdbGet, rtdbOnValue, rtdbUpdate, onAuthStateChanged, getPersistentDeviceId } from './firebase';
@@ -61,7 +106,7 @@ function MainApp() {
   const [selectedSubGame, setSelectedSubGame] = useState<GameId | null>(null);
 
   // Instant session hydration from localStorage so app opens immediately without auto-logout
-  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const authLoadingRef = useRef<boolean>(true);
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(() => {
     try {
       const activeUid = localStorage.getItem('bingo777_active_uid');
@@ -264,7 +309,7 @@ function MainApp() {
         // Keep persisted localStorage session active even during network drops or virtual-email restore
         firebaseSync.attachRealtimeUserSync(storedUid);
       }
-      setAuthLoading(false);
+      authLoadingRef.current = false;
     });
     return () => unsubAuth();
   }, []);
@@ -365,7 +410,7 @@ function MainApp() {
           localStorage.setItem('bingo777_session_user', JSON.stringify(refreshed));
           syncUnacknowledgedSettlements(refreshed.uid);
         }
-      } else if (!authLoading) {
+      } else if (!authLoadingRef.current) {
         setCurrentUser(null);
         setSettlementQueue([]);
       }
@@ -410,7 +455,7 @@ function MainApp() {
       unsubSettlement();
       unsubNotifications();
     };
-  }, [showToast, authLoading]);
+  }, [showToast]);
 
   const activeSettlement = settlementQueue.length > 0 ? settlementQueue[0] : null;
 
@@ -543,6 +588,11 @@ function MainApp() {
     showToast('Master Admin session locked & token cleared', 'info');
   };
 
+  const openDepositTab = () => {
+    setWalletInitialTab('deposit');
+    setActiveNavTab('wallet');
+  };
+
   // Bottom Nav switcher handler
   const handleTabChange = (tab: TabId) => {
     setActiveNavTab(tab);
@@ -552,109 +602,85 @@ function MainApp() {
       setSelectedSubGame('wingo');
     } else if (tab === 'aviator') {
       setSelectedSubGame('aviator');
+    } else if (tab === 'wallet') {
+      setWalletInitialTab('deposit');
     }
   };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950">
-      {/* SMOOTH LAYOUT TRANSITION BETWEEN MASTER ADMIN & PLAYER VIEW */}
-      <AnimatePresence mode="wait" initial={false}>
-        {viewMode === 'master_admin' && currentUser && store.isUserAdmin(currentUser.uid) ? (
-          /* VIEW 1: MASTER ADMIN COMMAND CENTER */
-          <motion.div
-            key="master_admin_view"
-            layout
-            initial={{ opacity: 0, y: 14, scale: 0.99 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -14, scale: 0.99 }}
-            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-            className="flex-1 flex flex-col min-h-screen"
+      {viewMode === 'master_admin' && currentUser && store.isUserAdmin(currentUser.uid) ? (
+        /* VIEW 1: MASTER ADMIN COMMAND CENTER */
+        <div
+          key="master_admin_view"
+          className="flex-1 flex flex-col min-h-screen"
+        >
+          {/* Quick return button banner in admin mode */}
+          <div
+            className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 flex items-center justify-between text-xs backdrop-blur-md"
           >
-            {/* Quick return button banner in admin mode */}
-            <motion.div
-              layout="position"
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2, delay: 0.05, ease: [0.16, 1, 0.3, 1] }}
-              className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 flex items-center justify-between text-xs backdrop-blur-md"
+            <span className="text-amber-300 font-bold flex items-center space-x-1.5">
+              <ShieldCheck className="w-4 h-4 text-amber-400" />
+              <span>Master Admin Command Center Active</span>
+            </span>
+            <motion.button
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.96 }}
+              onClick={() => setViewMode('user_app')}
+              className="px-3 py-1 rounded-lg bg-slate-900 border border-amber-500/40 hover:border-amber-400 text-amber-200 hover:text-white font-bold text-[11px] transition shadow-sm"
             >
-              <span className="text-amber-300 font-bold flex items-center space-x-1.5">
-                <ShieldCheck className="w-4 h-4 text-amber-400" />
-                <span>Master Admin Command Center Active</span>
-              </span>
-              <motion.button
-                whileHover={{ scale: 1.03 }}
-                whileTap={{ scale: 0.96 }}
-                onClick={() => setViewMode('user_app')}
-                className="px-3 py-1 rounded-lg bg-slate-900 border border-amber-500/40 hover:border-amber-400 text-amber-200 hover:text-white font-bold text-[11px] transition shadow-sm"
-              >
-                Switch to Player View &rarr;
-              </motion.button>
-            </motion.div>
-            <GameErrorBoundary gameName="Master Admin Console" onResetToLobby={() => setViewMode('user_app')}>
+              Switch to Player View &rarr;
+            </motion.button>
+          </div>
+          <GameErrorBoundary gameName="Master Admin Console" onResetToLobby={() => setViewMode('user_app')}>
+            <Suspense fallback={<LazyScreenFallback />}>
               <MasterAdminSuite
                 adminId={masterAdminId || 'MasterAdmin_01'}
                 masterToken={sessionStorage.getItem('bingo777_master_admin_token') || undefined}
                 onLogout={handleAdminLogout}
               />
-            </GameErrorBoundary>
-          </motion.div>
-        ) : !currentUser ? (
-          /* VIEW 2A: FIRST SCREEN IS SIGNUP / LOGIN PAGE WHEN NOT LOGGED IN */
-          <motion.div
-            key="guest_auth_view"
-            layout
-            initial={{ opacity: 0, scale: 0.985 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.985 }}
-            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="flex-1 flex flex-col min-h-screen bg-slate-950"
-          >
-            <UserAuthModal
-              canClose={false}
-              onSuccess={(u) => {
-                localStorage.setItem('bingo777_active_uid', u.uid);
-                setCurrentUser(u);
-                setShowAuthModal(false);
-              }}
-              onClose={() => {}}
-            />
-          </motion.div>
-        ) : (
-          /* VIEW 2B: PLAYER APPLICATION (NATIVE APP EXPERIENCE AFTER LOGIN/SIGNUP) */
-          <motion.div
-            key="player_app_view"
-            layout
-            initial={{ opacity: 0, y: 12, scale: 0.99 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -12, scale: 0.99 }}
-            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-            className="flex-1 flex flex-col pb-20"
-          >
-            {/* Maintenance Mode Overlay Message & Persistent Warning Bar */}
-            <MaintenanceOverlay onOpenSupport={() => setShowSupportModal(true)} />
+            </Suspense>
+          </GameErrorBoundary>
+        </div>
+      ) : !currentUser ? (
+        /* VIEW 2A: FIRST SCREEN IS SIGNUP / LOGIN PAGE WHEN NOT LOGGED IN */
+        <div
+          key="guest_auth_view"
+          className="flex-1 flex flex-col min-h-screen bg-slate-950"
+        >
+          <UserAuthModal
+            canClose={false}
+            onSuccess={(u) => {
+              localStorage.setItem('bingo777_active_uid', u.uid);
+              setCurrentUser(u);
+              setShowAuthModal(false);
+            }}
+            onClose={() => {}}
+          />
+        </div>
+      ) : (
+        /* VIEW 2B: PLAYER APPLICATION (NATIVE APP EXPERIENCE AFTER LOGIN/SIGNUP) */
+        <div
+          key="player_app_view"
+          className="flex-1 flex flex-col pb-20"
+        >
+          {/* Maintenance Mode Overlay Message & Persistent Warning Bar */}
+          <MaintenanceOverlay onOpenSupport={() => setShowSupportModal(true)} />
 
-            {/* Top User App Header */}
-            <UserHeader
-              user={currentUser}
-              unreadSupportCount={unreadSupportCount}
-              onOpenDeposit={() => setActiveNavTab('wallet')}
-              onOpenSupport={() => setShowSupportModal(true)}
-              onOpenAuth={() => setShowAuthModal(true)}
-              onOpenAdmin={handleOpenAdminPortal}
-            />
+          {/* Top User App Header */}
+          <UserHeader
+            user={currentUser}
+            unreadSupportCount={unreadSupportCount}
+            onOpenDeposit={openDepositTab}
+            onOpenSupport={() => setShowSupportModal(true)}
+            onOpenAuth={() => setShowAuthModal(true)}
+            onOpenAdmin={handleOpenAdminPortal}
+          />
 
-            {/* Main Content Area Based on Active Bottom Nav Tab */}
-            <main className="flex-1">
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.div
-                  key={`${activeNavTab}_${selectedSubGame || 'lobby'}`}
-                  layout="position"
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                >
+          {/* Main Content Area Based on Active Bottom Nav Tab */}
+          <main className="flex-1">
+            <Suspense fallback={<LazyScreenFallback />}>
+              <div key={`${activeNavTab}_${selectedSubGame || 'lobby'}`}>
                   {/* TAB: HOME / LOBBY */}
                   {activeNavTab === 'home' && !selectedSubGame && (
                     <GameLobby
@@ -668,7 +694,7 @@ function MainApp() {
                           setSelectedSubGame(gid);
                         }
                       }}
-                      onOpenDeposit={() => setActiveNavTab('wallet')}
+                      onOpenDeposit={openDepositTab}
                       onOpenAuth={() => setShowAuthModal(true)}
                       onOpenGiftCode={() => setShowGiftModal(true)}
                       onOpenReferral={() => currentUser ? setShowReferralModal(true) : setShowAuthModal(true)}
@@ -704,7 +730,7 @@ function MainApp() {
                       <K3DiceGame
                         user={currentUser}
                         onBackToLobby={() => setSelectedSubGame(null)}
-                        onOpenDeposit={() => setActiveNavTab('wallet')}
+                        onOpenDeposit={openDepositTab}
                         onOpenAuth={() => setShowAuthModal(true)}
                       />
                     </GameErrorBoundary>
@@ -715,7 +741,7 @@ function MainApp() {
                       <TrxWinGoGame
                         user={currentUser}
                         onBackToLobby={() => setSelectedSubGame(null)}
-                        onOpenDeposit={() => setActiveNavTab('wallet')}
+                        onOpenDeposit={openDepositTab}
                         onOpenAuth={() => setShowAuthModal(true)}
                       />
                     </GameErrorBoundary>
@@ -781,7 +807,7 @@ function MainApp() {
                       <GameErrorBoundary gameName="Win Go" onResetToLobby={() => setActiveNavTab('home')}>
                         <ColorPredictionGame
                           user={currentUser}
-                          onOpenDeposit={() => setActiveNavTab('wallet')}
+                          onOpenDeposit={openDepositTab}
                           onOpenAuth={() => setShowAuthModal(true)}
                         />
                       </GameErrorBoundary>
@@ -815,7 +841,7 @@ function MainApp() {
                         <AviatorGame
                           user={currentUser}
                           onBackToLobby={() => setActiveNavTab('home')}
-                          onOpenDeposit={() => setActiveNavTab('wallet')}
+                          onOpenDeposit={openDepositTab}
                           onOpenAuth={() => setShowAuthModal(true)}
                         />
                       </GameErrorBoundary>
@@ -847,7 +873,7 @@ function MainApp() {
                     <GameErrorBoundary gameName="Activity & Promotions" onResetToLobby={() => setActiveNavTab('home')}>
                       <ActivityView
                         user={currentUser}
-                        onOpenDeposit={() => setActiveNavTab('wallet')}
+                        onOpenDeposit={openDepositTab}
                         onOpenGiftCode={() => setShowGiftModal(true)}
                         onSelectGame={(gid) => {
                           setActiveNavTab('home');
@@ -896,74 +922,82 @@ function MainApp() {
                       }}
                     />
                   )}
-                </motion.div>
-              </AnimatePresence>
-            </main>
+              </div>
+            </Suspense>
+          </main>
 
-            {/* 3D Floating Official Telegram Support Widget (Above Bottom Navigation) */}
-            <TelegramFloatingWidget />
+          {/* 3D Floating Official Telegram Support Widget (Above Bottom Navigation) */}
+          <TelegramFloatingWidget />
 
-            {/* Native Bottom Navigation Bar */}
-            <BottomNav
-              activeTab={activeNavTab}
-              onChangeTab={handleTabChange}
-              unreadSupportCount={unreadSupportCount}
-              onSecretAdminTrigger={handleOpenAdminPortal}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+          {/* Native Bottom Navigation Bar */}
+          <BottomNav
+            activeTab={activeNavTab}
+            onChangeTab={handleTabChange}
+            unreadSupportCount={unreadSupportCount}
+            onSecretAdminTrigger={handleOpenAdminPortal}
+          />
+        </div>
+      )}
 
       {/* MODALS */}
       <AnimatePresence>
         {showGiftModal && currentUser && (
-          <GiftCodeModal
-            user={currentUser}
-            onClose={() => setShowGiftModal(false)}
-          />
+          <Suspense fallback={null}>
+            <GiftCodeModal
+              user={currentUser}
+              onClose={() => setShowGiftModal(false)}
+            />
+          </Suspense>
         )}
 
         {showSupportModal && (
-          <SupportChatModal
-            user={currentUser}
-            onClose={() => setShowSupportModal(false)}
-          />
+          <Suspense fallback={null}>
+            <SupportChatModal
+              user={currentUser}
+              onClose={() => setShowSupportModal(false)}
+            />
+          </Suspense>
         )}
 
         {showReferralModal && currentUser && (
-          <ReferralDashboardModal
-            user={currentUser}
-            onClose={() => setShowReferralModal(false)}
-            onOpenDeposit={() => {
-              setShowReferralModal(false);
-              setWalletInitialTab('deposit');
-              setActiveNavTab('wallet');
-            }}
-          />
+          <Suspense fallback={null}>
+            <ReferralDashboardModal
+              user={currentUser}
+              onClose={() => setShowReferralModal(false)}
+              onOpenDeposit={() => {
+                setShowReferralModal(false);
+                openDepositTab();
+              }}
+            />
+          </Suspense>
         )}
 
         {showAuthModal && currentUser && (
-          <UserAuthModal
-            onSuccess={(u) => {
-              localStorage.setItem('bingo777_active_uid', u.uid);
-              setCurrentUser(u);
-              setShowAuthModal(false);
-            }}
-            onClose={() => setShowAuthModal(false)}
-          />
+          <Suspense fallback={null}>
+            <UserAuthModal
+              onSuccess={(u) => {
+                localStorage.setItem('bingo777_active_uid', u.uid);
+                setCurrentUser(u);
+                setShowAuthModal(false);
+              }}
+              onClose={() => setShowAuthModal(false)}
+            />
+          </Suspense>
         )}
 
         {/* High-Security Hidden Admin Login Modal — strictly guarded for logged-in authorized Admins only */}
         {showAdminLogin && currentUser && store.isUserAdmin(currentUser.uid) && (
-          <AdminLoginModal
-            currentUser={currentUser}
-            onSuccess={handleAdminLoginSuccess}
-            onCancel={() => setShowAdminLogin(false)}
-            onUserBlocked={() => {
-              setCurrentUser(null);
-              setShowAdminLogin(false);
-            }}
-          />
+          <Suspense fallback={null}>
+            <AdminLoginModal
+              currentUser={currentUser}
+              onSuccess={handleAdminLoginSuccess}
+              onCancel={() => setShowAdminLogin(false)}
+              onUserBlocked={() => {
+                setCurrentUser(null);
+                setShowAdminLogin(false);
+              }}
+            />
+          </Suspense>
         )}
 
         {/* Strict 5-Device Admin Approval Gate Modal */}
@@ -1169,21 +1203,22 @@ function MainApp() {
                 </button>
               </div>
 
-              <GameBetHistorySection
-                pastRounds={store.getPastRounds()}
-                userBets={currentUser ? store.getLiveBets().filter((b) => b.uid === currentUser.uid) : []}
-                user={currentUser}
-                defaultTab="mybets"
-                onOpenDeposit={() => {
-                  setShowBetHistoryModal(false);
-                  setWalletInitialTab('deposit');
-                  setActiveNavTab('wallet');
-                }}
-                onOpenAuth={() => {
-                  setShowBetHistoryModal(false);
-                  setShowAuthModal(true);
-                }}
-              />
+              <Suspense fallback={<LazyScreenFallback />}>
+                <GameBetHistorySection
+                  pastRounds={store.getPastRounds()}
+                  userBets={currentUser ? store.getLiveBets().filter((b) => b.uid === currentUser.uid) : []}
+                  user={currentUser}
+                  defaultTab="mybets"
+                  onOpenDeposit={() => {
+                    setShowBetHistoryModal(false);
+                    openDepositTab();
+                  }}
+                  onOpenAuth={() => {
+                    setShowBetHistoryModal(false);
+                    setShowAuthModal(true);
+                  }}
+                />
+              </Suspense>
             </motion.div>
           </motion.div>
         )}

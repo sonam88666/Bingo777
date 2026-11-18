@@ -247,17 +247,27 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
   onClose,
   onContinue
 }) => {
-  if (!settlement) return null;
-
-  const isWin = settlement.isWin;
+  const isWin = Boolean(settlement?.isWin);
+  const safeResultId = settlement?.resultId ?? '';
+  const safeTotalPayout = Number(settlement?.totalPayout) || 0;
+  const safeNetProfit = Number(settlement?.netProfit) || 0;
+  const safeTotalBetAmount = Number(settlement?.totalBetAmount) || 0;
+  const safeWalletBalanceAfter = Number(settlement?.walletBalanceAfter) || 0;
+  const safeRoundPeriod = settlement?.roundPeriod ?? '';
+  const safeGameType = settlement?.gameType ?? '1min';
+  const safeWinningNumber = settlement?.winningNumber ?? 0;
+  const safeWinningColors = Array.isArray(settlement?.winningColors) ? settlement.winningColors : [];
+  const safeWinningSize = settlement?.winningSize ?? 'small';
+  const safeBets = Array.isArray(settlement?.bets) ? settlement.bets : [];
 
   // Sound, push notification, and particle trigger on mount for this unique resultId
   useEffect(() => {
+    if (!settlement || !safeResultId) return;
     if (isWin) {
       soundFx.playWinFanfare();
       soundFx.sendPushNotification(
-        `🏆 You Won ₹${settlement.totalPayout.toFixed(2)}!`,
-        `Period #${settlement.roundPeriod} (${settlement.gameType.toUpperCase()}) settled in your favor!`
+        `🏆 You Won ₹${safeTotalPayout.toFixed(2)}!`,
+        `Period #${safeRoundPeriod} (${safeGameType.toUpperCase()}) settled in your favor!`
       );
       confetti({
         particleCount: 80,
@@ -271,14 +281,15 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
     } else {
       soundFx.playLossSound();
       soundFx.sendPushNotification(
-        `Round #${settlement.roundPeriod} Result`,
-        `Winning Number: ${settlement.winningNumber} (${settlement.winningSize.toUpperCase()}). Next round is live!`
+        `Round #${safeRoundPeriod} Result`,
+        `Winning Number: ${safeWinningNumber} (${safeWinningSize.toUpperCase()}). Next round is live!`
       );
     }
-  }, [isWin, settlement.resultId, settlement.totalPayout, settlement.roundPeriod, settlement.gameType, settlement.winningNumber, settlement.winningSize]);
+  }, [settlement, isWin, safeResultId, safeTotalPayout, safeRoundPeriod, safeGameType, safeWinningNumber, safeWinningSize]);
 
   // Keyboard Escape listener
   useEffect(() => {
+    if (!settlement) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose();
@@ -286,7 +297,9 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [settlement, onClose]);
+
+  if (!settlement) return null;
 
   const handleAction = () => {
     if (onContinue) {
@@ -457,7 +470,7 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
             {isWin ? (
               <div className="flex items-center justify-center space-x-1.5 py-0.5">
                 <span className="font-mono font-black text-3xl sm:text-4xl text-amber-300 tracking-tight drop-shadow-[0_2px_8px_rgba(245,158,11,0.5)]">
-                  +₹{settlement.totalPayout.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  +₹{safeTotalPayout.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               </div>
             ) : (
@@ -473,11 +486,11 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
               {isWin ? (
                 <span className="text-emerald-400 inline-flex items-center space-x-1">
                   <TrendingUp className="w-3.5 h-3.5" />
-                  <span>Net Profit: +₹{Math.max(0, settlement.netProfit).toFixed(2)}</span>
+                  <span>Net Profit: +₹{Math.max(0, safeNetProfit).toFixed(2)}</span>
                 </span>
               ) : (
                 <span className="text-rose-400 inline-flex items-center space-x-1">
-                  <span>Deducted Amount: -₹{settlement.totalBetAmount.toFixed(2)}</span>
+                  <span>Deducted Amount: -₹{safeTotalBetAmount.toFixed(2)}</span>
                 </span>
               )}
             </div>
@@ -492,7 +505,7 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
                 <span>Round ID ({settlement.gameName || 'Win Go'}):</span>
               </span>
               <span className="font-mono font-black text-slate-200 bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-800">
-                {settlement.roundPeriod}
+                {safeRoundPeriod}
               </span>
             </div>
 
@@ -501,14 +514,14 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
               <span className="text-slate-400 font-semibold">Official Result:</span>
               <div className="flex items-center space-x-2">
                 <span className={`w-5 h-5 rounded-full font-black text-xs inline-flex items-center justify-center shadow-sm ${
-                  settlement.winningNumber === 0 ? 'bg-gradient-to-r from-rose-600 to-purple-600 text-white' :
-                  settlement.winningNumber === 5 ? 'bg-gradient-to-r from-emerald-600 to-purple-600 text-white' :
-                  settlement.winningNumber % 2 === 0 ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+                  safeWinningNumber === 0 ? 'bg-gradient-to-r from-rose-600 to-purple-600 text-white' :
+                  safeWinningNumber === 5 ? 'bg-gradient-to-r from-emerald-600 to-purple-600 text-white' :
+                  safeWinningNumber % 2 === 0 ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
                 }`}>
-                  {settlement.winningNumber}
+                  {safeWinningNumber}
                 </span>
                 <span className="font-bold text-slate-300 text-[11px]">
-                  ({settlement.winningColors.join(' + ').toUpperCase()} · {settlement.winningSize.toUpperCase()})
+                  ({(safeWinningColors.join(' + ') || 'RESULT').toUpperCase()} · {safeWinningSize.toUpperCase()})
                 </span>
               </div>
             </div>
@@ -517,29 +530,29 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
             <div className="pt-1 border-t border-slate-900 space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-slate-400 font-semibold">
-                  {settlement.bets.length > 1 ? `Selected Bets (${settlement.bets.length}):` : 'Selected Bet:'}
+                  {safeBets.length > 1 ? `Selected Bets (${safeBets.length}):` : 'Selected Bet:'}
                 </span>
                 <span className="text-slate-400 font-mono text-[11px]">
-                  Bet Amount: <strong className="text-slate-200">₹{settlement.totalBetAmount.toFixed(2)}</strong>
+                  Bet Amount: <strong className="text-slate-200">₹{safeTotalBetAmount.toFixed(2)}</strong>
                 </span>
               </div>
 
               {/* Bets list */}
               <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
-                {settlement.bets.map((b, idx) => (
+                {safeBets.map((b, idx) => (
                   <div 
                     key={b.betId || idx}
                     className="flex items-center justify-between p-1.5 rounded-lg bg-slate-900/80 border border-slate-800 text-[11px]"
                   >
                     <div className="flex items-center space-x-2">
-                      <span className="text-slate-400 capitalize">{b.betType.replace('k3_', '')}:</span>
-                      {renderBetValueBadge(b.betType, b.betValue)}
+                      <span className="text-slate-400 capitalize">{(b.betType || '').replace('k3_', '')}:</span>
+                      {renderBetValueBadge(b.betType || 'color', b.betValue || '')}
                     </div>
                     <div className="flex items-center space-x-2 font-mono">
-                      <span className="text-slate-400">₹{b.amount}</span>
+                      <span className="text-slate-400">₹{b.amount ?? 0}</span>
                       <span className="text-slate-600">&rarr;</span>
                       <span className={`font-bold ${b.status === 'won' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {b.status === 'won' ? `+₹${b.actualPayout}` : '₹0.00'}
+                        {b.status === 'won' ? `+₹${b.actualPayout ?? 0}` : '₹0.00'}
                       </span>
                     </div>
                   </div>
@@ -554,7 +567,7 @@ export const GameResultModal: React.FC<GameResultModalProps> = ({
                 <span>Final Wallet Credit:</span>
               </span>
               <span className="font-mono font-black text-slate-100 text-sm">
-                ₹{settlement.walletBalanceAfter.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ₹{safeWalletBalanceAfter.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           </div>

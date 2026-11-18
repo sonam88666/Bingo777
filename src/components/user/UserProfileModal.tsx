@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { UserRecord } from '../../types';
 import { useToast } from '../common/Toast';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface UserProfileModalProps {
   user: UserRecord;
@@ -27,14 +28,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 }) => {
   const { showToast } = useToast();
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    showToast('Copied UID to clipboard', 'info');
+  const handleCopy = async (text: string) => {
+    const copied = await copyToClipboard(text);
+    showToast(copied ? 'Copied UID to clipboard' : 'Copy not supported on this device', copied ? 'info' : 'error');
   };
 
-  const winRate = user.totalBetsCount > 0
-    ? Math.round((user.totalWonAmount / (user.totalWonAmount + user.totalLostAmount || 1)) * 100)
+  const winRate = (user.totalBetsCount || 0) > 0
+    ? Math.round(((user.totalWonAmount || 0) / ((user.totalWonAmount || 0) + (user.totalLostAmount || 0) || 1)) * 100)
     : 0;
+
+  const deviceEntries = Object.values(user.devices || {});
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
@@ -43,13 +46,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         <div className="p-4 sm:p-5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-400 via-amber-500 to-amber-700 flex items-center justify-center font-brand font-black text-slate-950 text-lg shadow-lg">
-              {user.username.substring(0, 2).toUpperCase()}
+              {(user.username || user.name || 'U').substring(0, 2).toUpperCase()}
             </div>
             <div>
               <div className="font-bold text-base text-slate-100 flex items-center space-x-2">
-                <span>{user.username}</span>
+                <span>{user.username || user.name || 'Player'}</span>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300">
-                  VIP {user.vipLevel}
+                  VIP {user.vipLevel ?? 0}
                 </span>
               </div>
               <div className="flex items-center space-x-1.5 text-xs text-slate-400">
@@ -117,39 +120,42 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             <h4 className="font-bold text-slate-300 uppercase tracking-wider text-[11px] flex items-center justify-between">
               <span>Authorized Hardware Devices</span>
               <span className="text-[10px] text-amber-400 lowercase font-normal">
-                {Object.keys(user.devices).length} device(s)
+                {deviceEntries.length} device(s)
               </span>
             </h4>
 
             <div className="space-y-2">
-              {Object.values(user.devices).map((device) => (
-                <div
-                  key={device.deviceId}
-                  className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 flex items-center justify-between"
-                >
-                  <div className="flex items-center space-x-2.5">
-                    <Smartphone className="w-4 h-4 text-slate-400" />
-                    <div>
-                      <div className="font-semibold text-slate-200 text-xs">
-                        {device.deviceName}
-                      </div>
-                      <div className="text-[10px] text-slate-500">
-                        {device.os} • {device.browser}
+              {deviceEntries.map((device) => {
+                const status = device.status || 'approved';
+                return (
+                  <div
+                    key={device.deviceId}
+                    className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 flex items-center justify-between"
+                  >
+                    <div className="flex items-center space-x-2.5">
+                      <Smartphone className="w-4 h-4 text-slate-400" />
+                      <div>
+                        <div className="font-semibold text-slate-200 text-xs">
+                          {device.deviceName || 'Registered Device'}
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          {device.os || 'Unknown OS'} • {device.browser || 'App'}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                    device.status === 'approved'
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                      : device.status === 'pending'
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                      : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                  }`}>
-                    {device.status.toUpperCase()}
-                  </span>
-                </div>
-              ))}
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      status === 'approved'
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : status === 'pending'
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    }`}>
+                      {status.toUpperCase()}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
 

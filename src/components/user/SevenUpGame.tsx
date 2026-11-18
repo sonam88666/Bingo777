@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ArrowLeft, 
   Clock, 
@@ -67,6 +67,13 @@ export const SevenUpGame: React.FC<SevenUpGameProps> = ({
     { total: 7, target: 'seven' }
   ]);
 
+  const userBetsRef = useRef(userBets);
+  userBetsRef.current = userBets;
+  const userRef = useRef(user);
+  userRef.current = user;
+  const rollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const resetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Dice icon helper
   const renderDiceIcon = (num: number) => {
     switch (num) {
@@ -79,61 +86,26 @@ export const SevenUpGame: React.FC<SevenUpGameProps> = ({
     }
   };
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 4 && prev > 1) {
-          soundFx.playCountdownTick(true);
-        }
-        if (prev <= 1) {
-          rollDice();
-          return 12;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [userBets, user]);
-
-  const rollDice = () => {
-    setIsRolling(true);
-    soundFx.playDiceRoll();
-
-    // Roll animation
-    let rollSteps = 0;
-    const interval = setInterval(() => {
-      setDie1(Math.floor(Math.random() * 6) + 1);
-      setDie2(Math.floor(Math.random() * 6) + 1);
-      rollSteps++;
-      if (rollSteps >= 10) {
-        clearInterval(interval);
-        finalizeRoll();
-      }
-    }, 120);
-  };
-
   const finalizeRoll = () => {
+    const activeBets = userBetsRef.current;
+    const activeUser = userRef.current;
     const adminSettings = store.getAdminSettings();
     let d1 = Math.floor(Math.random() * 6) + 1;
     let d2 = Math.floor(Math.random() * 6) + 1;
 
     // ZERO PLATFORM LOSS ENGINE:
     if (adminSettings.zeroPlatformLossMode) {
-      const downBet = userBets.down || 0;
-      const upBet = userBets.up || 0;
-      const sevenBet = userBets.seven || 0;
+      const downBet = activeBets.down || 0;
+      const upBet = activeBets.up || 0;
+      const sevenBet = activeBets.seven || 0;
 
       if (downBet > upBet && downBet > sevenBet) {
-        // Player bet on 2-6 (Down) -> Roll 8-12 (Up) so platform wins
         d1 = 5;
         d2 = 4;
       } else if (upBet > downBet && upBet > sevenBet) {
-        // Player bet on 8-12 (Up) -> Roll 2-6 (Down) so platform wins
         d1 = 2;
         d2 = 2;
       } else if (sevenBet > 0) {
-        // Player bet on 7 -> Roll 5 (Down) so platform wins
         d1 = 3;
         d2 = 2;
       }
@@ -154,39 +126,97 @@ export const SevenUpGame: React.FC<SevenUpGameProps> = ({
 
     // Check winnings
     let wonAmount = 0;
-    if (userBets.down > 0 && outcome === 'down') {
-      wonAmount += userBets.down * 2.0;
+    if (activeBets.down > 0 && outcome === 'down') {
+      wonAmount += activeBets.down * 2.0;
     }
-    if (userBets.seven > 0 && outcome === 'seven') {
-      wonAmount += userBets.seven * 5.0; // 5x on 7!
+    if (activeBets.seven > 0 && outcome === 'seven') {
+      wonAmount += activeBets.seven * 5.0;
     }
-    if (userBets.up > 0 && outcome === 'up') {
-      wonAmount += userBets.up * 2.0;
+    if (activeBets.up > 0 && outcome === 'up') {
+      wonAmount += activeBets.up * 2.0;
     }
 
-    if (wonAmount > 0 && user) {
+    if (wonAmount > 0 && activeUser) {
       soundFx.playWinFanfare();
       confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
-      store.updateUserBalance(user.uid, wonAmount, `7 Up 7 Down Win [Total ${total}]`);
+      store.updateUserBalance(activeUser.uid, wonAmount, `7 Up 7 Down Win [Total ${total}]`);
       showToast(`🎉 Won ₹${Math.round(wonAmount)} on ${outcome === 'seven' ? 'Lucky 7 (5X)' : outcome.toUpperCase()}!`, 'success');
     }
 
-    setTimeout(() => {
+    if (resetTimeoutRef.current) clearTimeout(resetTimeoutRef.current);
+    resetTimeoutRef.current = setTimeout(() => {
       setUserBets({ down: 0, seven: 0, up: 0 });
       setPeriod(`7U${Date.now().toString().slice(-6)}`);
     }, 2500);
   };
+
+  const rollDice = () => {
+    setIsRolling(true);
+    soundFx.playDiceRoll();
+
+    if (rollIntervalRef.current) clearInterval(rollIntervalRef.current);
+    let rollSteps = 0;
+    rollIntervalRef.current = setInterval(() => {
+      setDie1(Math.floor(Math.random() * 6) + 1);
+      setDie2(Math.floor(Math.random() * 6) + 1);
+      rollSteps++;
+      if (rollSteps >= 10) {
+        if (rollIntervalRef.current) {
+          clearInterval(rollIntervalRef.current);
+          rollIntervalRef.current = null;
+        }
+        finalizeRoll();
+      }
+    }, 120);
+  };
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 4 && prev > 1) {
+          soundFx.playCountdownTick(true);
+        }
+        if (prev <= 1) {
+          rollDice();
+          return 12;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      clearInterval(timer);
+      if (rollIntervalRef.current) {
+        clearInterval(rollIntervalRef.current);
+        rollIntervalRef.current = null;
+      }
+      if (resetTimeoutRef.current) {
+        clearTimeout(resetTimeoutRef.current);
+        resetTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const handlePlaceBet = (target: BetTarget) => {
     if (!user) {
       onOpenAuth();
       return;
     }
+    if (store.isMaintenanceActiveForUser(user.uid)) {
+      showToast('Platform is currently under maintenance.', 'error');
+      return;
+    }
+    if (store.getAdminSettings().allGamesEnabled === false || !store.isFeatureEnabled('seven_up')) {
+      showToast('7 Up 7 Down is currently paused by Master Admin.', 'error');
+      return;
+    }
     if (isRolling || countdown <= 2) {
       showToast('Betting is locked for this roll!', 'error');
       return;
     }
-    if (user.balance < selectedChip) {
+    const liveUser = store.getUser(user.uid) || user;
+    const availableBalance = Number(liveUser?.balance ?? liveUser?.wallet ?? user.balance ?? user.wallet ?? 0) || 0;
+    if (availableBalance < selectedChip) {
       showToast('Insufficient balance!', 'error');
       onOpenDeposit();
       return;
@@ -200,6 +230,8 @@ export const SevenUpGame: React.FC<SevenUpGameProps> = ({
         [target]: prev[target] + selectedChip
       }));
       showToast(`Placed ₹${selectedChip} on ${target === 'seven' ? 'Lucky 7' : target.toUpperCase()}`, 'info');
+    } else {
+      showToast('Unable to place bet right now. Check balance or account status.', 'error');
     }
   };
 

@@ -4125,7 +4125,7 @@ async function startServer() {
   // ----------------------------------------------------
   // ADMIN CLEAN DEMO TRANSACTIONS ENDPOINT
   // ----------------------------------------------------
-  app.post('/api/admin/clean-demo-transactions', (req, res) => {
+  app.post('/api/admin/clean-demo-transactions', verifyMasterAdmin, (req, res) => {
     const { adminId } = req.body;
     const realUserUids = new Set(Object.keys(serverUsers));
     const initialCount = serverTransactions.length;
@@ -4154,10 +4154,12 @@ async function startServer() {
   // ----------------------------------------------------
   // VITE DEV SERVER / STATIC ASSETS
   // ----------------------------------------------------
-  if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+  const distDirPath = path.resolve(__dirname, 'dist');
+  const distIndexPath = path.resolve(distDirPath, 'index.html');
+  if (process.env.NODE_ENV === 'production' && fs.existsSync(distIndexPath)) {
+    app.use(express.static(distDirPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(distIndexPath);
     });
   } else {
     const vite = await createViteServer({

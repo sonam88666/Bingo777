@@ -49,6 +49,14 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
     return store.subscribe(() => setTick((t) => t + 1));
   }, []);
 
+  useEffect(() => {
+    setL1Rate(adminSettings.mlmLevel1Rate ?? 1.0);
+    setL2Rate(adminSettings.mlmLevel2Rate ?? 0.5);
+    setL3Rate(adminSettings.mlmLevel3Rate ?? 0.25);
+    setMlmFeatureEnabled(adminSettings.featureMlm !== false);
+    setBonusAmt(adminSettings.referralBonusAmount ?? 120);
+  }, [adminSettings.updatedAt]);
+
   const handleSaveMlmSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     const updated = {
@@ -62,20 +70,6 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
     await apiClient.updateSettings(updated, adminId, tokenToUse).catch(() => {});
     showToast('Refer & Earn Master Settings successfully saved!', 'success');
   };
-
-  const handleSimulateGlobalMlmTurnover = () => {
-    const realReferral = referrals[0];
-    if (!realReferral) {
-      showToast('No active referrals found. Real users must invite downline players to distribute commissions.', 'info');
-      return;
-    }
-    const targetUid = realReferral.referredUid;
-    const turnover = Math.floor(1000 + Math.random() * 2000);
-    store.distributeMlmCommission(targetUid, turnover, 'Admin Live Test');
-    showToast(`⚡ Distributed ₹${turnover} turnover through real Refer & Earn 3-Tier chain!`, 'success');
-  };
-
-  const allUsers = Object.values(store.getUsers());
 
   return (
     <div className="space-y-4">
@@ -92,18 +86,9 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
             Refer & Earn Program & Team Commission Management
           </h3>
           <p className="text-xs text-slate-300">
-            Configure L1 (1%), L2 (0.5%), L3 (0.25%) commission rates, monitor referral trees, and audit Refer & Earn settlements.
+            Configure L1 ({l1Rate}%), L2 ({l2Rate}%), L3 ({l3Rate}%) commission rates, monitor referral trees, and audit Refer & Earn settlements.
           </p>
         </div>
-
-        <button
-          type="button"
-          onClick={handleSimulateGlobalMlmTurnover}
-          className="px-4 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center space-x-1.5 shadow-lg active:scale-95 transition shrink-0"
-        >
-          <Zap className="w-4 h-4 fill-slate-950" />
-          <span>Simulate Refer & Earn Turnover</span>
-        </button>
       </div>
 
       {/* Sub-Tabs Navigation */}
@@ -222,26 +207,32 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
                 </thead>
                 <tbody className="divide-y divide-slate-800/80">
                   {referrals
-                    .filter(
-                      (r) =>
-                        r.referrerUsername.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                        r.referredUsername.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                        r.referredPhone.includes(searchTerm)
-                    )
+                    .filter((r) => {
+                      const q = searchTerm.toLowerCase();
+                      const matchSearch =
+                        !q ||
+                        (r.referrerUsername || '').toLowerCase().includes(q) ||
+                        (r.referredUsername || '').toLowerCase().includes(q) ||
+                        (r.referredPhone || '').includes(searchTerm);
+                      if (!matchSearch) return false;
+                      // Direct referral records are Tier L1; filter out when viewing L2/L3-only unless all/L1 selected
+                      if (tierFilter !== 'all' && tierFilter !== 1) return false;
+                      return true;
+                    })
                     .map((ref) => (
                       <tr key={ref.id} className="hover:bg-slate-800/40 transition">
-                        <td className="p-3.5 font-bold text-amber-300">{ref.referrerUsername}</td>
+                        <td className="p-3.5 font-bold text-amber-300">{ref.referrerUsername || '-'}</td>
                         <td className="p-3.5 font-bold text-white">
-                          {ref.referredUsername}
+                          {ref.referredUsername || '-'}
                           <span className="text-[10px] text-slate-500 font-mono block">
-                            +91 {ref.referredPhone}
+                            +91 {ref.referredPhone || '-'}
                           </span>
                         </td>
                         <td className="p-3.5 font-mono text-slate-400">
-                          {new Date(ref.registeredAt).toLocaleDateString('en-IN')}
+                          {new Date(ref.registeredAt || Date.now()).toLocaleDateString('en-IN')}
                         </td>
                         <td className="p-3.5 font-mono text-cyan-300">
-                          {ref.qualifyingDaysCompleted} / {adminSettings.referralRequiredDays} Days
+                          {ref.qualifyingDaysCompleted ?? 0} / {adminSettings.referralRequiredDays ?? 10} Days
                         </td>
                         <td className="p-3.5">
                           <span
@@ -253,7 +244,7 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
                                 : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                             }`}
                           >
-                            <span>{ref.status.toUpperCase()}</span>
+                            <span>{(ref.status || 'pending').toUpperCase()}</span>
                           </span>
                         </td>
                       </tr>
@@ -284,14 +275,14 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
                 const rows = allCommissions.map((c) => [
                   c.id,
                   c.earnerUid,
-                  `"${c.sourceUsername}"`,
+                  `"${c.sourceUsername || ''}"`,
                   `L${c.level}`,
                   c.ratePercent,
                   c.betTurnover,
-                  c.commissionAmount.toFixed(2),
-                  `"${c.gameName}"`,
+                  (Number(c.commissionAmount) || 0).toFixed(2),
+                  `"${c.gameName || ''}"`,
                   c.claimed ? 'CLAIMED' : 'UNCLAIMED',
-                  new Date(c.timestamp).toISOString()
+                  new Date(c.timestamp || Date.now()).toISOString()
                 ]);
                 const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
                 const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -299,7 +290,9 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = `bingo777_mlm_commissions_${Date.now()}.csv`;
+                document.body.appendChild(a);
                 a.click();
+                document.body.removeChild(a);
                 URL.revokeObjectURL(url);
                 showToast('MLM Commission CSV Ledger downloaded!', 'success');
               }}
@@ -325,10 +318,13 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/80">
-                  {allCommissions.slice(0, 50).map((c) => (
+                  {allCommissions
+                    .filter((c) => tierFilter === 'all' || c.level === tierFilter)
+                    .slice(0, 50)
+                    .map((c) => (
                     <tr key={c.id} className="hover:bg-slate-800/40 transition">
                       <td className="p-3.5 font-mono text-amber-300 font-bold">{c.earnerUid}</td>
-                      <td className="p-3.5 font-bold text-white">{c.sourceUsername}</td>
+                      <td className="p-3.5 font-bold text-white">{c.sourceUsername || '-'}</td>
                       <td className="p-3.5">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
@@ -342,9 +338,9 @@ export const AdminMlmManager: React.FC<AdminMlmManagerProps> = ({ adminId, maste
                           L{c.level} ({c.ratePercent}%)
                         </span>
                       </td>
-                      <td className="p-3.5 text-slate-300">{c.gameName}</td>
-                      <td className="p-3.5 font-mono text-slate-400">₹{c.betTurnover.toLocaleString('en-IN')}</td>
-                      <td className="p-3.5 font-mono font-black text-emerald-400">+₹{c.commissionAmount.toFixed(2)}</td>
+                      <td className="p-3.5 text-slate-300">{c.gameName || '-'}</td>
+                      <td className="p-3.5 font-mono text-slate-400">₹{(Number(c.betTurnover) || 0).toLocaleString('en-IN')}</td>
+                      <td className="p-3.5 font-mono font-black text-emerald-400">+₹{(Number(c.commissionAmount) || 0).toFixed(2)}</td>
                       <td className="p-3.5">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${

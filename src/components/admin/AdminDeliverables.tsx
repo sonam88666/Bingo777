@@ -14,6 +14,7 @@ import {
   Key
 } from 'lucide-react';
 import { useToast } from '../common/Toast';
+import { copyToClipboard } from '../../utils/clipboard';
 
 export const CLOUD_FUNCTIONS_CODE = `/**
  * Cloud Functions for Firebase - Bingo777 Production Backend
@@ -185,7 +186,7 @@ export const ANDROID_APK_BUILD_GUIDE = `# Android APK Packaging & Autonomy Guide
 npm install @capacitor/core @capacitor/cli @capacitor/android
 
 ## Step 2: Initialize Configuration
-npx cap init "Bingo777" "com.bingo777.realpanel" --web-dir dist
+npx cap init "Bingo777" "com.bingo777.pro.game" --web-dir dist
 
 ## Step 3: Build Web Assets and Add Android Target
 npm run build
@@ -193,7 +194,7 @@ npx cap add android
 
 ## Step 4: Add Firebase Google-Services config
 1. In Firebase Console, click "Add app" > Android.
-2. Package name: com.bingo777.realpanel
+2. Package name: com.bingo777.pro.game
 3. Download \`google-services.json\` and place it in \`android/app/google-services.json\`.
 
 ## Step 5: Build Release APK
@@ -207,11 +208,15 @@ export const AdminDeliverables: React.FC = () => {
   const { showToast } = useToast();
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
 
-  const handleCopy = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedSection(label);
-    showToast(`${label} copied to clipboard!`, 'success');
-    setTimeout(() => setCopiedSection(null), 3000);
+  const handleCopy = async (text: string, label: string) => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopiedSection(label);
+      showToast(`${label} copied to clipboard!`, 'success');
+      setTimeout(() => setCopiedSection(null), 3000);
+    } else {
+      showToast('Copy failed — please copy manually', 'error');
+    }
   };
 
   const checklistItems = [
@@ -222,9 +227,9 @@ export const AdminDeliverables: React.FC = () => {
     { title: 'Production Firebase Security Rules', status: 'IMPLEMENTED', details: 'Strict database.rules.json enforcing deny-by-default, RBAC role checks, isolated $uid paths, cashier write protection' },
     { title: 'Master Admin Initialization', status: 'IMPLEMENTED', details: 'Master Key authentication gate with cryptographic audit log; Firebase custom claim token and /master_admins/<uid> mapping' },
     { title: 'Environment Variables Specification', status: 'IMPLEMENTED', details: 'VITE_FIREBASE_DATABASE_URL, VITE_FIREBASE_API_KEY, VITE_FIREBASE_PROJECT_ID (zero secret leakage on client)' },
-    { title: 'Android APK Build & Deployment Guide', status: 'IMPLEMENTED', details: 'Capacitor and Android Studio instructions with com.maanwin.realpanel package ID' },
+    { title: 'Android APK Build & Deployment Guide', status: 'IMPLEMENTED', details: 'Capacitor and Android Studio instructions with com.bingo777.pro.game package ID' },
     { title: 'Testing & Verification', status: 'TESTED', details: 'TypeScript compiler tsc --noEmit (0 errors), Vite production build (0 errors), real-time cross-client broadcast sync tested' },
-    { title: 'External Services & Data Privacy Disclosure', status: 'DOCUMENTED', details: '100% self-hosted Firebase RTDB & Auth target (bingo777-4a510-default-rtdb.firebaseio.com); zero 3rd-party trackers' }
+    { title: 'External Services & Data Privacy Disclosure', status: 'DOCUMENTED', details: '100% self-hosted Firebase RTDB & Auth target (gen-lang-client-0859410588-default-rtdb.firebaseio.com); zero 3rd-party trackers' }
   ];
 
   return (
@@ -326,7 +331,7 @@ export const AdminDeliverables: React.FC = () => {
         </h4>
         <div className="space-y-2 p-3.5 rounded-xl bg-slate-950 border border-slate-800 leading-relaxed">
           <p>
-            • <strong>Data Storage & Routing:</strong> All application data resides exclusively within your designated Firebase Realtime Database project (<code className="text-amber-300 font-mono">bingo777-4a510-default-rtdb.firebaseio.com</code>) or your private configured Firebase database instance.
+            • <strong>Data Storage & Routing:</strong> All application data resides exclusively within your designated Firebase Realtime Database project (<code className="text-amber-300 font-mono">gen-lang-client-0859410588-default-rtdb.firebaseio.com</code>) or your private configured Firebase database instance.
           </p>
           <p>
             • <strong>No Hidden Third-Party Trackers:</strong> No analytics trackers, external ads, or undocumented telemetry SDKs have been bundled.

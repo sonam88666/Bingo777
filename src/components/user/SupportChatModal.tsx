@@ -6,6 +6,7 @@ import { store } from '../../services/store';
 import { rtdb, rtdbRef, rtdbOnValue } from '../../firebase';
 import { useToast } from '../common/Toast';
 import { resolveTelegramLink } from '../common/TelegramFloatingWidget';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface SupportChatModalProps {
   user: UserRecord | null;
@@ -75,9 +76,12 @@ export const SupportChatModal: React.FC<SupportChatModalProps> = ({ user, onClos
     .replace(/^\[|\]\(.*\)$/g, '')
     .replace(/^https?:\/\/(www\.)?t\.me\//i, '@');
 
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(telegramUrl);
-    showToast('Official Telegram support link copied to clipboard!', 'success');
+  const handleCopyLink = async () => {
+    const ok = await copyToClipboard(telegramUrl);
+    showToast(
+      ok ? 'Official Telegram support link copied to clipboard!' : 'Copy failed — please copy manually',
+      ok ? 'success' : 'error'
+    );
   };
 
   return (

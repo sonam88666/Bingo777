@@ -34,12 +34,13 @@ import {
   X
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { UserRecord, DeviceRecord } from '../../types';
+import { UserRecord, DeviceRecord, LiveBet } from '../../types';
 import { store } from '../../services/store';
 import { apiClient } from '../../services/apiClient';
 import { firebaseSync } from '../../services/firebaseSync';
 import { rtdb, rtdbRef, rtdbGet, rtdbUpdate, rtdbOnValue } from '../../firebase';
 import { useToast } from '../common/Toast';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface AdminUsersProps {
   adminId: string;
@@ -173,6 +174,100 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
   // View Devices Modal State
   const [devicesModalUserUid, setDevicesModalUserUid] = useState<string | null>(null);
 
+  // User Bet Edit & Delete Modal State
+  const [editingUserBet, setEditingUserBet] = useState<LiveBet | null>(null);
+  const [editBetType, setEditBetType] = useState<LiveBet['betType']>('color');
+  const [editBetValue, setEditBetValue] = useState<string>('');
+  const [editBetAmount, setEditBetAmount] = useState<number>(0);
+  const [editBetMultiplier, setEditBetMultiplier] = useState<number>(2);
+  const [editBetPotential, setEditBetPotential] = useState<number>(0);
+  const [editBetStatus, setEditBetStatus] = useState<LiveBet['status']>('pending');
+  const [editBetActualPayout, setEditBetActualPayout] = useState<number>(0);
+  const [editBetAdjustWallet, setEditBetAdjustWallet] = useState<boolean>(true);
+  const [editBetReason, setEditBetReason] = useState<string>('');
+
+  const [deletingUserBet, setDeletingUserBet] = useState<LiveBet | null>(null);
+  const [deleteBetReverseWallet, setDeleteBetReverseWallet] = useState<boolean>(true);
+  const [deleteBetReason, setDeleteBetReason] = useState<string>('');
+
+  const openEditUserBetModal = (bet: LiveBet) => {
+    setEditingUserBet(bet);
+    setEditBetType(bet.betType);
+    setEditBetValue(bet.betValue);
+    setEditBetAmount(bet.amount);
+    setEditBetMultiplier(bet.multiplier);
+    setEditBetPotential(bet.potentialPayout || Math.round(bet.amount * bet.multiplier * 100) / 100);
+    setEditBetStatus(bet.status);
+    setEditBetActualPayout(bet.actualPayout || 0);
+    setEditBetAdjustWallet(true);
+    setEditBetReason('');
+  };
+
+  const handleSaveUserBetEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUserBet) return;
+    const res = store.adminUpdateLiveBet(
+      editingUserBet.betId,
+      {
+        betType: editBetType,
+        betValue: editBetValue,
+        amount: editBetAmount,
+        multiplier: editBetMultiplier,
+        potentialPayout: editBetPotential,
+        status: editBetStatus,
+        actualPayout: editBetActualPayout
+      },
+      adminId,
+      { adjustWallet: editBetAdjustWallet, reason: editBetReason }
+    );
+    if (!res.success) {
+      showToast(res.error || 'Failed to update bet', 'error');
+      return;
+    }
+    const delta = res.walletDelta || 0;
+    const deltaText = delta !== 0 ? ` (Wallet ${delta > 0 ? '+' : '-'}₹${Math.abs(delta).toFixed(2)})` : '';
+    showToast(`Bet updated${deltaText}`, 'success');
+    setEditingUserBet(null);
+  };
+
+  const handleConfirmDeleteUserBet = () => {
+    if (!deletingUserBet) return;
+    const res = store.adminDeleteLiveBet(deletingUserBet.betId, adminId, {
+      adjustWallet: deleteBetReverseWallet,
+      reason: deleteBetReason
+    });
+    if (!res.success) {
+      showToast(res.error || 'Failed to delete bet', 'error');
+      return;
+    }
+    const delta = res.walletDelta || 0;
+    const deltaText = delta !== 0 ? ` (Wallet ${delta > 0 ? '+' : '-'}₹${Math.abs(delta).toFixed(2)})` : '';
+    showToast(`Bet deleted${deltaText}`, 'success');
+    setDeletingUserBet(null);
+  };
+
+  const userBetEditWalletDelta = (() => {
+    if (!editingUserBet || !editBetAdjustWallet) return 0;
+    const oldWon =
+      editingUserBet.status === 'won' || (editingUserBet.actualPayout || 0) > 0
+        ? Number(editingUserBet.actualPayout || 0)
+        : 0;
+    const newActual = editBetStatus === 'lost' ? 0 : Number(editBetActualPayout) || 0;
+    const newWon = editBetStatus === 'won' || newActual > 0 ? newActual : 0;
+    const oldNet = oldWon - (Number(editingUserBet.amount) || 0);
+    const newNet = newWon - (Number(editBetAmount) || 0);
+    return Math.round((newNet - oldNet) * 100) / 100;
+  })();
+
+  const userBetDeleteWalletDelta = (() => {
+    if (!deletingUserBet || !deleteBetReverseWallet) return 0;
+    const wonCredits =
+      deletingUserBet.status === 'won' || (deletingUserBet.actualPayout || 0) > 0
+        ? Number(deletingUserBet.actualPayout || 0)
+        : 0;
+    return Math.round(((Number(deletingUserBet.amount) || 0) - wonCredits) * 100) / 100;
+  })();
+
   const handleForceFirebaseSync = async () => {
     setIsSyncingFirebase(true);
     try {
@@ -189,13 +284,9 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
     }
   };
 
-  const copyText = (value: string, label: string) => {
-    try {
-      navigator.clipboard.writeText(value);
-      showToast(`Copied ${label}: ${value}`, 'success');
-    } catch {
-      showToast(`${label}: ${value}`, 'info');
-    }
+  const copyText = async (value: string, label: string) => {
+    const ok = await copyToClipboard(value);
+    showToast(ok ? `Copied ${label}: ${value}` : `${label}: ${value}`, ok ? 'success' : 'info');
   };
 
   const usersMap = store.getUsers();
@@ -1475,25 +1566,49 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
                         userBets.map((b) => (
                           <div
                             key={b.betId}
-                            className="p-2.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between"
+                            className="p-2.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-2"
                           >
-                            <div>
-                              <div className="font-bold text-slate-800">
+                            <div className="min-w-0">
+                              <div className="font-bold text-slate-800 truncate">
                                 Period {b.roundPeriod} · Pick: {b.betValue.toUpperCase()}
                               </div>
-                              <div className="text-[11px] text-slate-400">Stake: ₹{b.amount}</div>
+                              <div className="text-[11px] text-slate-400">
+                                {b.gameType.toUpperCase()} · Stake: ₹{b.amount} ({b.multiplier}x)
+                              </div>
                             </div>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                                b.status === 'won'
-                                  ? 'bg-emerald-500 text-white'
-                                  : b.status === 'lost'
-                                  ? 'bg-rose-500 text-white'
-                                  : 'bg-amber-500 text-white'
-                              }`}
-                            >
-                              {b.status} {b.actualPayout > 0 ? `(+₹${b.actualPayout})` : ''}
-                            </span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                  b.status === 'won'
+                                    ? 'bg-emerald-500 text-white'
+                                    : b.status === 'lost'
+                                    ? 'bg-rose-500 text-white'
+                                    : 'bg-amber-500 text-white'
+                                }`}
+                              >
+                                {b.status} {b.actualPayout > 0 ? `(+₹${b.actualPayout})` : ''}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => openEditUserBetModal(b)}
+                                className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-600 transition"
+                                title="Edit Bet"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDeletingUserBet(b);
+                                  setDeleteBetReverseWallet(true);
+                                  setDeleteBetReason('');
+                                }}
+                                className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600 transition"
+                                title="Delete Bet"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
                         ))
                       ))}
@@ -2335,6 +2450,266 @@ export const AdminUsers: React.FC<AdminUsersProps> = ({ adminId, masterToken }) 
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Bet Modal */}
+      {editingUserBet && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-white border border-slate-200 rounded-3xl p-5 shadow-2xl space-y-4 text-slate-900 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-base text-slate-900">
+                  Edit Bet — {editingUserBet.username || editingUserBet.uid}
+                </h3>
+                <p className="text-[11px] text-slate-500 font-mono">
+                  Period {editingUserBet.roundPeriod} · {editingUserBet.betId}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingUserBet(null)}
+                className="text-slate-400 hover:text-slate-700 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveUserBetEdit} className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">Category</label>
+                  <select
+                    value={editBetType}
+                    onChange={(e) => setEditBetType(e.target.value as LiveBet['betType'])}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900"
+                  >
+                    <option value="color">Color</option>
+                    <option value="size">Big / Small</option>
+                    <option value="number">Number (0-9)</option>
+                    <option value="dragon_tiger">Dragon Tiger</option>
+                    <option value="k3_sum">K3 Sum</option>
+                    <option value="k3_dice">K3 Dice</option>
+                    <option value="5d_digit">5D Digit</option>
+                    <option value="crash_multiplier">Crash Multiplier</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">Pick / Selection</label>
+                  <input
+                    type="text"
+                    value={editBetValue}
+                    onChange={(e) => setEditBetValue(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">Stake Amount (₹)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    step="any"
+                    value={editBetAmount}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setEditBetAmount(val);
+                      const pot = Math.round(val * editBetMultiplier * 100) / 100;
+                      setEditBetPotential(pot);
+                      if (editBetStatus === 'won') setEditBetActualPayout(pot);
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-mono font-bold text-xs text-slate-900"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">Multiplier (x)</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step="0.1"
+                    value={editBetMultiplier}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setEditBetMultiplier(val);
+                      const pot = Math.round(editBetAmount * val * 100) / 100;
+                      setEditBetPotential(pot);
+                      if (editBetStatus === 'won') setEditBetActualPayout(pot);
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-mono font-bold text-xs text-slate-900"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">Status</label>
+                  <select
+                    value={editBetStatus}
+                    onChange={(e) => {
+                      const st = e.target.value as LiveBet['status'];
+                      setEditBetStatus(st);
+                      if (st === 'lost' || st === 'pending') {
+                        setEditBetActualPayout(0);
+                      } else if (st === 'won' && editBetActualPayout <= 0) {
+                        setEditBetActualPayout(editBetPotential || Math.round(editBetAmount * editBetMultiplier * 100) / 100);
+                      }
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-900"
+                  >
+                    <option value="pending">Pending</option>
+                    <option value="won">Won</option>
+                    <option value="lost">Lost</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">Potential (₹)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={editBetPotential}
+                    onChange={(e) => setEditBetPotential(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 font-mono font-bold text-xs text-slate-900"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 mb-1 block">Actual Payout (₹)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={editBetActualPayout}
+                    disabled={editBetStatus === 'lost'}
+                    onChange={(e) => setEditBetActualPayout(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 font-mono font-bold text-xs text-emerald-700 disabled:opacity-50"
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editBetAdjustWallet}
+                  onChange={(e) => setEditBetAdjustWallet(e.target.checked)}
+                  className="mt-0.5 rounded accent-blue-600"
+                />
+                <div className="text-xs">
+                  <div className="font-bold text-slate-800">Sync difference to User Wallet</div>
+                  <div className="text-slate-500 text-[11px]">
+                    {editBetAdjustWallet
+                      ? userBetEditWalletDelta === 0
+                        ? 'No net wallet change.'
+                        : userBetEditWalletDelta > 0
+                        ? `User wallet credited +₹${userBetEditWalletDelta.toFixed(2)}`
+                        : `User wallet debited -₹${Math.abs(userBetEditWalletDelta).toFixed(2)}`
+                      : 'Edit bet record only (wallet untouched).'}
+                  </div>
+                </div>
+              </label>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-600 mb-1 block">Audit Reason</label>
+                <input
+                  type="text"
+                  placeholder="Optional note for editing bet"
+                  value={editBetReason}
+                  onChange={(e) => setEditBetReason(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900"
+                />
+              </div>
+
+              <div className="flex gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingUserBet(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md"
+                >
+                  Save Bet Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete User Bet Confirmation Modal */}
+      {deletingUserBet && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-white border border-rose-200 rounded-3xl p-5 shadow-2xl space-y-4 text-slate-900">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-base text-rose-700">Delete User Bet?</h3>
+                <p className="text-[11px] text-slate-500 font-mono">
+                  Period {deletingUserBet.roundPeriod} · Pick {deletingUserBet.betValue.toUpperCase()} · ₹{deletingUserBet.amount}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeletingUserBet(null)}
+                className="text-slate-400 hover:text-slate-700 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <label className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deleteBetReverseWallet}
+                onChange={(e) => setDeleteBetReverseWallet(e.target.checked)}
+                className="mt-0.5 rounded accent-rose-600"
+              />
+              <div className="text-xs">
+                <div className="font-bold text-slate-800">Reverse Bet Wallet Impact</div>
+                <div className="text-slate-500 text-[11px]">
+                  {deleteBetReverseWallet
+                    ? userBetDeleteWalletDelta >= 0
+                      ? `Refunds +₹${userBetDeleteWalletDelta.toFixed(2)} stake to user wallet.`
+                      : `Deducts -₹${Math.abs(userBetDeleteWalletDelta).toFixed(2)} net win payout from user wallet.`
+                    : 'Delete record only without modifying wallet balance.'}
+                </div>
+              </div>
+            </label>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-600 mb-1 block">Reason (optional)</label>
+              <input
+                type="text"
+                placeholder="e.g. Cancelled invalid bet"
+                value={deleteBetReason}
+                onChange={(e) => setDeleteBetReason(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900"
+              />
+            </div>
+
+            <div className="flex gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeletingUserBet(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteUserBet}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md"
+              >
+                Delete Bet
+              </button>
+            </div>
           </div>
         </div>
       )}

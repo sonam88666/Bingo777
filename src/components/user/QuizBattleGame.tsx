@@ -22,7 +22,7 @@ import {
 } from '../../types';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
-import { rtdb, rtdbRef, rtdbSet, rtdbOnValue } from '../../firebase';
+import { rtdb, rtdbRef, rtdbSet, rtdbUpdate, rtdbOnValue } from '../../firebase';
 
 interface QuizBattleGameProps {
   user: UserRecord | null;
@@ -256,6 +256,15 @@ export const QuizBattleGame: React.FC<QuizBattleGameProps> = ({
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const syncedSettlementTxIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    return () => {
+      if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+        audioCtxRef.current.close().catch(() => {});
+      }
+      audioCtxRef.current = null;
+    };
+  }, []);
 
   const playVoteTone = (freq = 580) => {
     try {
@@ -538,7 +547,7 @@ export const QuizBattleGame: React.FC<QuizBattleGameProps> = ({
       return;
     }
     const liveU = store.getUser(user.uid) || (user.phone ? store.findUserByPhone(user.phone) : undefined) || user;
-    const availableBal = Math.max(liveU?.balance || 0, user.balance || 0);
+    const availableBal = Math.max(Number(liveU?.balance ?? liveU?.wallet ?? 0) || 0, Number(user.balance ?? user.wallet ?? 0) || 0);
     if (availableBal < selectedStake) {
       showToast(
         `Insufficient wallet balance (₹${availableBal.toFixed(2)}). Required: ₹${selectedStake}.`,
@@ -673,14 +682,19 @@ export const QuizBattleGame: React.FC<QuizBattleGameProps> = ({
           prev.map((item) => (item.pollId === poll.pollId ? updatedPoll : item))
         );
 
-        await rtdbSet(rtdbRef(rtdb, `activePolls/${poll.pollId}`), {
-          ...updatedPoll,
+        await rtdbUpdate(rtdbRef(rtdb, `activePolls/${poll.pollId}`), {
+          yesVotes: updatedPoll.yesVotes,
+          noVotes: updatedPoll.noVotes,
+          totalVotes: updatedPoll.totalVotes,
+          yesPool: updatedPoll.yesPool,
+          noPool: updatedPoll.noPool,
+          totalPool: updatedPoll.totalPool,
+          houseMarginAmount: updatedPoll.houseMarginAmount,
+          distributablePool: updatedPoll.distributablePool,
           status: 'APPROVED',
-          endTime: updatedPoll.closesAt,
-          votesByUid: {
-            [user.uid]: participationObj
-          }
+          endTime: updatedPoll.closesAt
         }).catch(() => {});
+        await rtdbSet(rtdbRef(rtdb, `activePolls/${poll.pollId}/votesByUid/${user.uid}`), participationObj).catch(() => {});
 
         showToast(`Bet Placed: ₹${selectedStake} on ${option}!`, 'success');
       }
@@ -688,6 +702,13 @@ export const QuizBattleGame: React.FC<QuizBattleGameProps> = ({
       setVotingPollId(null);
     }
   };
+
+  const liveWalletBalance = user
+    ? Math.max(
+        Number((store.getUser(user.uid) || user)?.balance ?? (store.getUser(user.uid) || user)?.wallet ?? 0) || 0,
+        Number(user.balance ?? user.wallet ?? 0) || 0
+      )
+    : 0;
 
   return (
     <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-4">
@@ -706,7 +727,7 @@ export const QuizBattleGame: React.FC<QuizBattleGameProps> = ({
           <div className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center space-x-2">
             <Wallet className="w-4 h-4 text-amber-400" />
             <span className="text-xs sm:text-sm font-black text-emerald-400 font-mono">
-              ₹{(user?.balance ?? 0).toFixed(2)}
+              ₹{liveWalletBalance.toFixed(2)}
             </span>
           </div>
 

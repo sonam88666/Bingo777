@@ -25,6 +25,7 @@ import { UserRecord, ReferralRecord, AdminSettings, MlmDashboardData } from '../
 import { store } from '../../services/store';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface ReferralDashboardModalProps {
   user: UserRecord;
@@ -49,11 +50,15 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
 
   const [mlmData, setMlmData] = useState<MlmDashboardData>(() => store.getMlmDashboardData(user.uid));
   const adminSettings: AdminSettings = store.getAdminSettings();
-  const referrals: ReferralRecord[] = store.getUserReferrals(user.uid);
+  const [referrals, setReferrals] = useState<ReferralRecord[]>(() => store.getUserReferrals(user.uid));
 
   useEffect(() => {
+    store.bindPendingReferrals();
+    setMlmData(store.getMlmDashboardData(user.uid));
+    setReferrals(store.getUserReferrals(user.uid));
     const unsub = store.subscribe(() => {
       setMlmData(store.getMlmDashboardData(user.uid));
+      setReferrals(store.getUserReferrals(user.uid));
     });
     return () => unsub();
   }, [user.uid]);
@@ -61,15 +66,16 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
   const referralCode = user.referralCode || 'BINGO777';
   const shareUrl = `https://www.bingo777.in/?ref=${encodeURIComponent(referralCode)}`;
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(referralCode);
-    showToast(`Referral Code "${referralCode}" copied to clipboard!`, 'info');
+  const handleCopyCode = async () => {
+    const copied = await copyToClipboard(referralCode);
+    showToast(
+      copied ? `Referral Code "${referralCode}" copied to clipboard!` : 'Copy not supported on this device',
+      copied ? 'info' : 'error'
+    );
   };
 
   const handleCopyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-    } catch {}
+    await copyToClipboard(shareUrl);
     if (typeof navigator !== 'undefined' && navigator.share) {
       try {
         await navigator.share({
@@ -105,14 +111,6 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
         showToast(res.error || 'Could not claim Refer & Earn commission', 'error');
       }
     }, 300);
-  };
-
-  const handleSimulateDownline = () => {
-    const res = store.simulateMlmDownlineTurnover(user.uid);
-    if (res.success) {
-      setMlmData(store.getMlmDashboardData(user.uid));
-      showToast(`⚡ Live Downline Turnover: ${res.summary}`, 'success');
-    }
   };
 
   const handleClaimBonus = async (ref: ReferralRecord) => {
@@ -155,12 +153,16 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
     (r) => r.status === 'pending_deposit' || r.status === 'activity_in_progress'
   ).length;
 
+  const l1Rate = Number(adminSettings.mlmLevel1Rate ?? 1.0);
+  const l2Rate = Number(adminSettings.mlmLevel2Rate ?? 0.5);
+  const l3Rate = Number(adminSettings.mlmLevel3Rate ?? 0.25);
+
   // Projected MLM Earnings Calculator math (assuming each L1 invites 3 L2, and each L2 invites 3 L3)
   const calcL2Count = calcL1Count * 3;
   const calcL3Count = calcL2Count * 3;
-  const projL1Daily = (calcL1Count * calcDailyTurnover * 1.0) / 100;
-  const projL2Daily = (calcL2Count * calcDailyTurnover * 0.5) / 100;
-  const projL3Daily = (calcL3Count * calcDailyTurnover * 0.25) / 100;
+  const projL1Daily = (calcL1Count * calcDailyTurnover * l1Rate) / 100;
+  const projL2Daily = (calcL2Count * calcDailyTurnover * l2Rate) / 100;
+  const projL3Daily = (calcL3Count * calcDailyTurnover * l3Rate) / 100;
   const projTotalDaily = projL1Daily + projL2Daily + projL3Daily;
   const projTotalMonthly = projTotalDaily * 30;
 
@@ -200,7 +202,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
               Refer & Earn Partner Center
             </h3>
             <p className="text-xs font-medium text-amber-200/90">
-              Invite friends & earn ₹{adminSettings.referralBonusAmount} direct bonus + L1 (1.0%) · L2 (0.5%) · L3 (0.25%) team rewards!
+              Invite friends & earn ₹{adminSettings.referralBonusAmount ?? 120} direct bonus + L1 ({l1Rate}%) · L2 ({l2Rate}%) · L3 ({l3Rate}%) team rewards!
             </p>
           </div>
           <button
@@ -291,19 +293,19 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                         Refer & Earn Reward Vault
                       </span>
                       <span className="text-[10px] text-slate-400 font-mono">
-                        Today: +₹{mlmData.todayCommission.toFixed(2)}
+                        Today: +₹{(Number(mlmData.todayCommission) || 0).toFixed(2)}
                       </span>
                     </div>
                     <div className="mt-1.5 flex items-baseline space-x-2">
                       <span className="font-mono font-black text-2xl sm:text-3xl text-emerald-400">
-                        ₹{mlmData.unclaimedCommission.toFixed(2)}
+                        ₹{(Number(mlmData.unclaimedCommission) || 0).toFixed(2)}
                       </span>
                       <span className="text-xs text-slate-400 font-semibold">
                         Available to Claim
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      Lifetime Earned: <strong className="text-amber-300">₹{mlmData.lifetimeCommission.toFixed(2)}</strong> · Total Withdrawn: <strong className="text-slate-200">₹{mlmData.totalClaimedCommission.toFixed(2)}</strong>
+                      Lifetime Earned: <strong className="text-amber-300">₹{(Number(mlmData.lifetimeCommission) || 0).toFixed(2)}</strong> · Total Withdrawn: <strong className="text-slate-200">₹{(Number(mlmData.totalClaimedCommission) || 0).toFixed(2)}</strong>
                     </p>
                   </div>
 
@@ -318,7 +320,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                       <span>
                         {isClaimingMlm
                           ? 'Transferring...'
-                          : `Withdraw ₹${mlmData.unclaimedCommission.toFixed(2)} to Main Wallet`}
+                          : `Withdraw ₹${(Number(mlmData.unclaimedCommission) || 0).toFixed(2)} to Main Wallet`}
                       </span>
                     </button>
                   </div>
@@ -333,7 +335,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                     <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-black text-[10px]">
                       LEVEL 1 · DIRECT
                     </span>
-                    <span className="font-mono font-black text-sm text-amber-400">1.00%</span>
+                    <span className="font-mono font-black text-sm text-amber-400">{l1Rate.toFixed(2)}%</span>
                   </div>
                   <div className="flex items-baseline justify-between pt-1">
                     <div>
@@ -345,7 +347,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                     <div className="text-right">
                       <span className="text-[10px] text-slate-500 block uppercase font-bold">Commission</span>
                       <span className="font-mono font-black text-sm text-emerald-400">
-                        ₹{mlmData.level1Members.reduce((s, m) => s + m.commissionGenerated, 0).toFixed(2)}
+                        ₹{mlmData.level1Members.reduce((s, m) => s + (Number(m.commissionGenerated) || 0), 0).toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -360,7 +362,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                     <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-black text-[10px]">
                       LEVEL 2 · SUB-TEAM
                     </span>
-                    <span className="font-mono font-black text-sm text-purple-400">0.50%</span>
+                    <span className="font-mono font-black text-sm text-purple-400">{l2Rate.toFixed(2)}%</span>
                   </div>
                   <div className="flex items-baseline justify-between pt-1">
                     <div>
@@ -372,7 +374,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                     <div className="text-right">
                       <span className="text-[10px] text-slate-500 block uppercase font-bold">Commission</span>
                       <span className="font-mono font-black text-sm text-emerald-400">
-                        ₹{mlmData.level2Members.reduce((s, m) => s + m.commissionGenerated, 0).toFixed(2)}
+                        ₹{mlmData.level2Members.reduce((s, m) => s + (Number(m.commissionGenerated) || 0), 0).toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -387,7 +389,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                     <span className="px-2 py-0.5 rounded-md bg-sky-500/20 text-sky-300 font-black text-[10px]">
                       LEVEL 3 · NETWORK
                     </span>
-                    <span className="font-mono font-black text-sm text-sky-400">0.25%</span>
+                    <span className="font-mono font-black text-sm text-sky-400">{l3Rate.toFixed(2)}%</span>
                   </div>
                   <div className="flex items-baseline justify-between pt-1">
                     <div>
@@ -399,7 +401,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                     <div className="text-right">
                       <span className="text-[10px] text-slate-500 block uppercase font-bold">Commission</span>
                       <span className="font-mono font-black text-sm text-emerald-400">
-                        ₹{mlmData.level3Members.reduce((s, m) => s + m.commissionGenerated, 0).toFixed(2)}
+                        ₹{mlmData.level3Members.reduce((s, m) => s + (Number(m.commissionGenerated) || 0), 0).toFixed(2)}
                       </span>
                     </div>
                   </div>
@@ -490,44 +492,50 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
-                  {filteredMembers.map((member) => (
-                    <div
-                      key={member.uid}
-                      className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs"
-                    >
-                      <div>
-                        <div className="flex items-center space-x-1.5">
-                          <span
-                            className={`px-1.5 py-0.2 rounded text-[9px] font-black ${
-                              member.level === 1
-                                ? 'bg-amber-500/20 text-amber-300'
-                                : member.level === 2
-                                ? 'bg-purple-500/20 text-purple-300'
-                                : 'bg-sky-500/20 text-sky-300'
-                            }`}
-                          >
-                            L{member.level}
-                          </span>
-                          <span className="font-bold text-slate-200">{member.username}</span>
-                          {member.isActiveToday && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Active Today" />
-                          )}
-                        </div>
-                        <span className="text-[10px] text-slate-500 font-mono block mt-0.5">
-                          Turnover: ₹{member.totalTurnover.toLocaleString('en-IN')}
-                        </span>
-                      </div>
-
-                      <div className="text-right">
-                        <span className="font-mono font-black text-emerald-400 text-xs block">
-                          +₹{member.commissionGenerated.toFixed(2)}
-                        </span>
-                        <span className="text-[9px] text-slate-500">
-                          {member.level === 1 ? '1.0% Rate' : member.level === 2 ? '0.5% Rate' : '0.25% Rate'}
-                        </span>
-                      </div>
+                  {filteredMembers.length === 0 ? (
+                    <div className="col-span-full p-4 rounded-xl bg-slate-950/70 border border-dashed border-slate-800 text-center text-xs text-slate-400">
+                      No referral members in this tier yet. Share your link or Refer Code ({referralCode}) — new signups appear here automatically!
                     </div>
-                  ))}
+                  ) : (
+                    filteredMembers.map((member) => (
+                      <div
+                        key={member.uid}
+                        className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs"
+                      >
+                        <div>
+                          <div className="flex items-center space-x-1.5">
+                            <span
+                              className={`px-1.5 py-0.2 rounded text-[9px] font-black ${
+                                member.level === 1
+                                  ? 'bg-amber-500/20 text-amber-300'
+                                  : member.level === 2
+                                  ? 'bg-purple-500/20 text-purple-300'
+                                  : 'bg-sky-500/20 text-sky-300'
+                              }`}
+                            >
+                              L{member.level}
+                            </span>
+                            <span className="font-bold text-slate-200">{member.username}</span>
+                            {member.isActiveToday && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Active Today" />
+                            )}
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-mono block mt-0.5">
+                            Turnover: ₹{member.totalTurnover.toLocaleString('en-IN')}
+                          </span>
+                        </div>
+
+                        <div className="text-right">
+                          <span className="font-mono font-black text-emerald-400 text-xs block">
+                            +₹{(Number(member.commissionGenerated) || 0).toFixed(2)}
+                          </span>
+                          <span className="text-[9px] text-slate-500">
+                            {member.level === 1 ? `${l1Rate}% Rate` : member.level === 2 ? `${l2Rate}% Rate` : `${l3Rate}% Rate`}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -573,7 +581,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                       <div className="text-right">
                         <div className="font-mono font-black text-emerald-400 flex items-center justify-end space-x-0.5">
                           <ArrowUpRight className="w-3 h-3" />
-                          <span>+₹{item.commissionAmount.toFixed(2)}</span>
+                          <span>+₹{(Number(item.commissionAmount) || 0).toFixed(2)}</span>
                         </div>
                         <span
                           className={`text-[9px] font-bold ${
@@ -616,7 +624,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                     </div>
                     <div className="flex items-baseline justify-between">
                       <span className="font-mono font-black text-amber-300 text-lg">
-                        ₹{user.signupBonusAmount || 120}
+                        ₹{user.signupBonusAmount || adminSettings.signupBonusAmount || 200}
                       </span>
                       <span className="text-[10px] text-slate-400">
                         {user.signupBonusStatus === 'credited'
@@ -660,7 +668,7 @@ export const ReferralDashboardModal: React.FC<ReferralDashboardModalProps> = ({
                     }}
                     className="w-full py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-black text-xs shadow-md transition active:scale-95 flex items-center justify-center space-x-1.5"
                   >
-                    <span>Make 1st UPI Deposit to Claim ₹120 + 100% Bonus &rarr;</span>
+                    <span>Make 1st UPI Deposit to Claim ₹{adminSettings.signupBonusAmount || 200} + 100% Bonus &rarr;</span>
                   </button>
                 )}
               </div>

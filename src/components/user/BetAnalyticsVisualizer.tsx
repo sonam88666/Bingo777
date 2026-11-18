@@ -7,7 +7,6 @@ import {
   Percent,
   Flame,
   Award,
-  Sparkles,
   ArrowUpRight,
   ArrowDownRight,
   PieChart as PieChartIcon,
@@ -21,8 +20,6 @@ import {
   Zap
 } from 'lucide-react';
 import { LiveBet, UserRecord } from '../../types';
-import { store } from '../../services/store';
-import { useToast } from '../common/Toast';
 
 interface BetAnalyticsVisualizerProps {
   userBets: LiveBet[];
@@ -53,7 +50,6 @@ export const BetAnalyticsVisualizer: React.FC<BetAnalyticsVisualizerProps> = ({
   onOpenDeposit,
   onOpenAuth
 }) => {
-  const { showToast } = useToast();
   const [timeframeDays, setTimeframeDays] = useState<7 | 14 | 30>(30);
   const [chartMode, setChartMode] = useState<'pnl' | 'cumulative' | 'winrate'>('pnl');
   const [gameFilter, setGameFilter] = useState<'all' | 'wingo' | 'trx'>('all');
@@ -61,16 +57,6 @@ export const BetAnalyticsVisualizer: React.FC<BetAnalyticsVisualizerProps> = ({
   const [expandedDayStr, setExpandedDayStr] = useState<string | null>(null);
   const [sortField, setSortField] = useState<'date' | 'pnl' | 'bets'>('date');
   const [sortAsc, setSortAsc] = useState(false);
-
-  // If user has very few bets or none, provide option to seed demo data
-  const handleSeedDemoData = () => {
-    if (!user) {
-      if (onOpenAuth) onOpenAuth();
-      return;
-    }
-    store.seedUserHistoricalBetsForDemo(user.uid, user.username);
-    showToast('Loaded 30-day realistic betting performance history!', 'success');
-  };
 
   // Filtered Bets by Game
   const effectiveBets = useMemo(() => {
@@ -391,17 +377,6 @@ export const BetAnalyticsVisualizer: React.FC<BetAnalyticsVisualizerProps> = ({
               {days}D
             </button>
           ))}
-          {user && effectiveBets.length < 5 && (
-            <button
-              type="button"
-              onClick={handleSeedDemoData}
-              title="Load 30 days of realistic betting history to preview visualizations"
-              className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-amber-500/40 text-amber-300 text-[11px] font-bold flex items-center space-x-1 transition active:scale-95"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>Load 30D Demo</span>
-            </button>
-          )}
         </div>
       </div>
 

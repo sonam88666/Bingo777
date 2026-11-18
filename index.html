@@ -51,32 +51,48 @@
         }
 
         // Recover automatically if a stale cached HTML references an old JS/CSS bundle hash
+        function triggerSelfHealReload() {
+          if (sessionStorage.getItem('bingo777_asset_recovered')) return;
+          sessionStorage.setItem('bingo777_asset_recovered', '1');
+          var p1 = 'serviceWorker' in navigator
+            ? navigator.serviceWorker.getRegistrations().then(function (regs) {
+                return Promise.all(regs.map(function (r) { return r.unregister(); }));
+              }).catch(function () {})
+            : Promise.resolve();
+          var p2 = 'caches' in window
+            ? caches.keys().then(function (keys) {
+                return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+              }).catch(function () {})
+            : Promise.resolve();
+          Promise.all([p1, p2]).then(function () {
+            window.location.reload();
+          });
+        }
+
         window.addEventListener(
           'error',
           function (e) {
             var target = e && e.target;
             if (target && (target.tagName === 'SCRIPT' || target.tagName === 'LINK')) {
               var src = target.src || target.href || '';
-              if (src.indexOf('/assets/') !== -1 && !sessionStorage.getItem('bingo777_asset_recovered')) {
-                sessionStorage.setItem('bingo777_asset_recovered', '1');
-                var p1 = 'serviceWorker' in navigator
-                  ? navigator.serviceWorker.getRegistrations().then(function (regs) {
-                      return Promise.all(regs.map(function (r) { return r.unregister(); }));
-                    }).catch(function () {})
-                  : Promise.resolve();
-                var p2 = 'caches' in window
-                  ? caches.keys().then(function (keys) {
-                      return Promise.all(keys.map(function (k) { return caches.delete(k); }));
-                    }).catch(function () {})
-                  : Promise.resolve();
-                Promise.all([p1, p2]).then(function () {
-                  window.location.reload();
-                });
+              if (src.indexOf('assets/') !== -1) {
+                triggerSelfHealReload();
               }
             }
           },
           true
         );
+
+        window.addEventListener('unhandledrejection', function (e) {
+          var msg = (e && e.reason && (e.reason.message || String(e.reason))) || '';
+          if (
+            msg.indexOf('Failed to fetch dynamically imported module') !== -1 ||
+            msg.indexOf('Importing a module script failed') !== -1 ||
+            msg.indexOf('ChunkLoadError') !== -1
+          ) {
+            triggerSelfHealReload();
+          }
+        });
       })();
     </script>
   </head>

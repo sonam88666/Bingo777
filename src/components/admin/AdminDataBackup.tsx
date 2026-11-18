@@ -240,7 +240,7 @@ export const AdminDataBackup: React.FC<AdminDataBackupProps> = ({ adminId }) => 
                   <span className="font-bold text-slate-100">{u.username}</span>{' '}
                   <span className="font-mono text-slate-400">({u.uid})</span>
                   <div className="text-[11px] text-slate-400">
-                    Preserved Balance: ₹{u.balance.toFixed(2)} · Phone: {u.phone}
+                    Preserved Balance: ₹{(Number(u.balance ?? u.wallet) || 0).toFixed(2)} · Phone: {u.phone}
                   </div>
                 </div>
                 <button

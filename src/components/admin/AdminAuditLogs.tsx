@@ -1,26 +1,47 @@
-import React, { useState } from 'react';
-import {
+import React, { useState, useEffect } from 'react';
+import { 
   ShieldCheck,
-  Search
+  Search,
+  RefreshCw
 } from 'lucide-react';
 import { store } from '../../services/store';
+import { firebaseSync } from '../../services/firebaseSync';
 
 export const AdminAuditLogs: React.FC = () => {
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [, setTick] = useState<number>(0);
+
+  useEffect(() => {
+    firebaseSync.pullAuditLogsFromRtdb().catch(() => {});
+    const unsub = store.subscribe(() => setTick((t) => t + 1));
+    return () => unsub();
+  }, []);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await firebaseSync.pullAuditLogsFromRtdb();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const logs = store.getAuditLogs();
 
-  const categories = ['ALL', 'AUTH', 'DEVICE', 'BALANCE', 'GAME', 'FINANCIAL', 'FEATURE', 'GIFT', 'SYSTEM'];
+  const categories = ['ALL', 'AUTH', 'DEVICE', 'BALANCE', 'GAME', 'FINANCIAL', 'FEATURE', 'GIFT', 'SETTINGS', 'SYSTEM'];
 
+  const q = searchTerm.toLowerCase().trim();
   const filtered = logs.filter((l) => {
     const matchCat = filterCategory === 'ALL' || l.category === filterCategory;
     const matchSearch =
-      searchTerm === '' ||
-      l.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      l.details.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      l.actor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (l.targetUser && l.targetUser.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (l.reason && l.reason.toLowerCase().includes(searchTerm.toLowerCase()));
+      q === '' ||
+      (l.action || '').toLowerCase().includes(q) ||
+      (l.details || '').toLowerCase().includes(q) ||
+      (l.actor || '').toLowerCase().includes(q) ||
+      (l.targetUser || '').toLowerCase().includes(q) ||
+      (l.reason || '').toLowerCase().includes(q);
     return matchCat && matchSearch;
   });
 
@@ -36,20 +57,31 @@ export const AdminAuditLogs: React.FC = () => {
             <div>
               <h3 className="font-bold text-sm text-slate-100">Immutable Security & Financial Audit Trail</h3>
               <p className="text-xs text-slate-400">
-                Records admin identity, action, affected record, reason, timestamp & outcome ({filtered.length} logs)
+                Live RTDB-synced audit log of admin identity, actions & outcomes ({filtered.length} logs)
               </p>
             </div>
           </div>
 
-          <div className="relative w-full sm:w-64">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search actor, UID, action..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
-            />
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-64">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search actor, UID, action..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-500/50 text-amber-300 text-xs font-bold flex items-center space-x-1.5 shrink-0 transition disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>Sync</span>
+            </button>
           </div>
         </div>
 

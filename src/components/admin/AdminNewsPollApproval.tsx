@@ -398,11 +398,11 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const match =
-        p.question.toLowerCase().includes(q) ||
-        p.context.toLowerCase().includes(q) ||
-        p.sourceName.toLowerCase().includes(q) ||
-        p.category.toLowerCase().includes(q) ||
-        p.pollId.toLowerCase().includes(q);
+        (p.question || '').toLowerCase().includes(q) ||
+        (p.context || '').toLowerCase().includes(q) ||
+        (p.sourceName || '').toLowerCase().includes(q) ||
+        (p.category || '').toLowerCase().includes(q) ||
+        (p.pollId || '').toLowerCase().includes(q);
       if (!match) return false;
     }
     return true;
@@ -427,7 +427,7 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Automatically discovers free public RSS feeds across 11 categories, ranks high-impact stories hourly, and generates YES/NO poll drafts. Only admin-approved polls are published to Live Quiz Battle.
+              Automatically discovers free public RSS feeds across {ALL_CATEGORIES.length} categories, ranks high-impact stories hourly, and generates YES/NO poll drafts. Only admin-approved polls are published to Live Quiz Battle.
             </p>
           </div>
 
@@ -551,7 +551,7 @@ export const AdminNewsPollApproval: React.FC<AdminNewsPollApprovalProps> = ({
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
             >
-              <option value="ALL">All 11 Categories</option>
+              <option value="ALL">All {ALL_CATEGORIES.length} Categories</option>
               {ALL_CATEGORIES.map((c) => (
                 <option key={c} value={c}>
                   {c}

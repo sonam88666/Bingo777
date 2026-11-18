@@ -10,6 +10,7 @@ import {
 import { FIREBASE_REALTIME_DATABASE_RULES_JSON } from '../../services/firebaseRules';
 import { store } from '../../services/store';
 import { useToast } from '../common/Toast';
+import { copyToClipboard } from '../../utils/clipboard';
 
 export const AdminFirebaseRules: React.FC = () => {
   const { showToast } = useToast();
@@ -20,11 +21,15 @@ export const AdminFirebaseRules: React.FC = () => {
   const [apiKey, setApiKey] = useState(currentConfig.apiKey || '');
   const [syncEnabled, setSyncEnabled] = useState(currentConfig.enabled);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(FIREBASE_REALTIME_DATABASE_RULES_JSON);
-    setCopied(true);
-    showToast('Copied database.rules.json to clipboard', 'info');
-    setTimeout(() => setCopied(false), 2500);
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(FIREBASE_REALTIME_DATABASE_RULES_JSON);
+    if (ok) {
+      setCopied(true);
+      showToast('Copied database.rules.json to clipboard', 'info');
+      setTimeout(() => setCopied(false), 2500);
+    } else {
+      showToast('Copy failed — please copy manually', 'error');
+    }
   };
 
   const handleSaveConfig = (e: React.FormEvent) => {

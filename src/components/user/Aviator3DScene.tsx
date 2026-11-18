@@ -350,6 +350,11 @@ export const Aviator3DScene: React.FC<Aviator3DSceneProps> = ({
     scene.add(contrailLine);
 
     const trailHistory: THREE.Vector3[] = [];
+    const trailPool: THREE.Vector3[] = Array.from({ length: maxTrailPoints + 2 }, () => new THREE.Vector3());
+    const _idleTargetPos = new THREE.Vector3(-4.2, -1.45, 0);
+    const _flightTargetPos = new THREE.Vector3();
+    const _desiredCamPos = new THREE.Vector3();
+    const _sideCamPos = new THREE.Vector3(0, 0.85, 11.2);
 
     // 6. Responsive ResizeObserver
     const handleResize = () => {
@@ -382,7 +387,7 @@ export const Aviator3DScene: React.FC<Aviator3DSceneProps> = ({
         flyAwayOffset = 0;
         flightElapsed = 0;
         // Plane idling on the runway ready for takeoff
-        planeGroup.position.lerp(new THREE.Vector3(-4.2, -1.45, 0), 0.14);
+        planeGroup.position.lerp(_idleTargetPos, 0.14);
         planeGroup.rotation.z = THREE.MathUtils.lerp(planeGroup.rotation.z, 0.0, 0.14);
         planeGroup.rotation.x = THREE.MathUtils.lerp(
           planeGroup.rotation.x,
@@ -424,7 +429,8 @@ export const Aviator3DScene: React.FC<Aviator3DSceneProps> = ({
         const bankRoll = Math.sin(elapsed * 1.9) * 0.11;
         const pitchUp = Math.min(0.46, 0.16 * takeoffEase + climbRatio * 0.32);
 
-        planeGroup.position.lerp(new THREE.Vector3(targetX, targetY, 0), 0.14);
+        _flightTargetPos.set(targetX, targetY, 0);
+        planeGroup.position.lerp(_flightTargetPos, 0.14);
         planeGroup.rotation.z = THREE.MathUtils.lerp(planeGroup.rotation.z, pitchUp, 0.14);
         planeGroup.rotation.x = THREE.MathUtils.lerp(planeGroup.rotation.x, bankRoll, 0.12);
 
@@ -459,18 +465,18 @@ export const Aviator3DScene: React.FC<Aviator3DSceneProps> = ({
         }
         starPosAttr.needsUpdate = true;
 
-        // Update 3D contrail ribbon behind tail
-        const tailWorldPos = new THREE.Vector3(
+        // Update 3D contrail ribbon behind tail without allocating per frame
+        const tailVec = trailHistory.length >= maxTrailPoints
+          ? (trailHistory.pop() as THREE.Vector3)
+          : (trailPool.pop() || new THREE.Vector3());
+        tailVec.set(
           planeGroup.position.x - 2.65,
           planeGroup.position.y - 0.05,
           planeGroup.position.z
         );
-        trailHistory.unshift(tailWorldPos);
-        if (trailHistory.length > maxTrailPoints) {
-          trailHistory.pop();
-        }
+        trailHistory.unshift(tailVec);
         for (let i = 0; i < maxTrailPoints; i++) {
-          const pt = trailHistory[Math.min(i, trailHistory.length - 1)] || tailWorldPos;
+          const pt = trailHistory[Math.min(i, trailHistory.length - 1)] || tailVec;
           // Drift older trail points backward with the air stream
           if (i > 0 && trailHistory[i]) {
             trailHistory[i].x -= scrollSpeed * 0.42;
@@ -494,28 +500,28 @@ export const Aviator3DScene: React.FC<Aviator3DSceneProps> = ({
 
       // Camera view positioning based on selected cameraMode
       if (camMode === 'chase') {
-        const desiredCam = new THREE.Vector3(
+        _desiredCamPos.set(
           Math.min(planeGroup.position.x - 6.2, 2.5),
           Math.max(0.2, planeGroup.position.y + 1.4),
           4.2
         );
-        camera.position.lerp(desiredCam, 0.08);
+        camera.position.lerp(_desiredCamPos, 0.08);
         camera.lookAt(
           Math.min(planeGroup.position.x + 2.5, 6),
           Math.min(planeGroup.position.y + 0.4, 5),
           0
         );
       } else if (camMode === 'drone') {
-        const desiredCam = new THREE.Vector3(
+        _desiredCamPos.set(
           Math.sin(elapsed * 0.4) * 3.5,
           3.8,
           10.5
         );
-        camera.position.lerp(desiredCam, 0.06);
+        camera.position.lerp(_desiredCamPos, 0.06);
         camera.lookAt(0, Math.max(-0.5, Math.min(2.5, planeGroup.position.y * 0.6)), 0);
       } else {
         // Default Side Broadcast View
-        camera.position.lerp(new THREE.Vector3(0, 0.85, 11.2), 0.08);
+        camera.position.lerp(_sideCamPos, 0.08);
         camera.lookAt(0, 0.35, 0);
       }
 
@@ -539,7 +545,7 @@ export const Aviator3DScene: React.FC<Aviator3DSceneProps> = ({
       envTarget?.dispose();
       renderer.dispose();
       scene.traverse((obj) => {
-        if (obj instanceof THREE.Mesh) {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.Points || obj instanceof THREE.Line) {
           obj.geometry?.dispose();
           if (Array.isArray(obj.material)) {
             obj.material.forEach((m) => m.dispose());

@@ -77,7 +77,7 @@ const DEFAULT_AUTH_CONFIG: AuthConfig = {
   minPasswordLength: 4,
   loginPageTitle: 'Player Access Portal',
   loginPageSubtitle: 'Instant Wallet & Refer & Earn Commission',
-  signupBannerText: 'Get ₹50 Signup Bonus + ₹120 Per Refer + 3-Tier Refer & Earn Commission!',
+  signupBannerText: 'Get ₹200 Signup Bonus + ₹120 Per Refer + 3-Tier Refer & Earn Commission!',
   loginButtonText: 'Access My Account',
   signupButtonText: 'Create Account & Claim Bonus',
 };

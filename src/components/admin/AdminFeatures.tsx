@@ -314,8 +314,8 @@ export const AdminFeatures: React.FC<AdminFeaturesProps> = ({ adminId, masterTok
     },
     {
       id: 'signup_bonus',
-      label: '₹120 Signup Bonus Program',
-      sub: 'New user registration bonus unlocked on 1st approved deposit',
+      label: '₹200 Signup Bonus Program',
+      sub: 'New user registration bonus unlocked immediately upon account creation',
       icon: Gift,
       iconBg: 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
     },

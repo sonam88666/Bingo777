@@ -284,11 +284,27 @@ export const AviatorGame: React.FC<AviatorGameProps> = ({
       onOpenAuth();
       return;
     }
-    const amount = station === 1 ? bet1Amount : bet2Amount;
+    if (store.isMaintenanceActiveForUser(user.uid)) {
+      showToast('Platform is currently under maintenance. Please wait.', 'error');
+      return;
+    }
+    const aviatorConfig = store.getAviatorEngineConfig();
+    if (!store.isFeatureEnabled('aviator') || !aviatorConfig.enabled) {
+      showToast('Aviator Crash is currently paused by Master Admin.', 'error');
+      return;
+    }
+    const amount = Number(station === 1 ? bet1Amount : bet2Amount);
     const autoEnabled = station === 1 ? autoCashoutEnabled1 : autoCashoutEnabled2;
     const autoMult = station === 1 ? autoCashoutMult1 : autoCashoutMult2;
 
-    if (user.balance < amount) {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showToast('Please enter a valid positive bet amount.', 'error');
+      return;
+    }
+
+    const liveUser = store.getUser(user.uid) || user;
+    const availableBalance = Number(liveUser?.balance ?? liveUser?.wallet ?? user.balance ?? user.wallet ?? 0) || 0;
+    if (availableBalance < amount) {
       showToast('Insufficient wallet balance. Please deposit.', 'error');
       return;
     }

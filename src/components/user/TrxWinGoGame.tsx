@@ -75,8 +75,24 @@ export const TrxWinGoGame: React.FC<TrxWinGoGameProps> = ({
       onOpenAuth();
       return;
     }
-    if (user.balance < betAmount) {
+    if (store.isMaintenanceActiveForUser(user.uid)) {
+      showToast('Platform is currently under maintenance.', 'error');
+      return;
+    }
+    if (!store.isFeatureEnabled('trx_wingo')) {
+      showToast('TRX Win Go is currently paused by Master Admin.', 'error');
+      return;
+    }
+    const safeAmount = Number(betAmount);
+    if (!Number.isFinite(safeAmount) || safeAmount <= 0) {
+      showToast('Please enter a valid positive bet amount.', 'error');
+      return;
+    }
+    const liveUser = store.getUser(user.uid) || user;
+    const availableBalance = Number(liveUser?.balance ?? liveUser?.wallet ?? user.balance ?? user.wallet ?? 0) || 0;
+    if (availableBalance < safeAmount) {
       showToast('Insufficient wallet balance', 'error');
+      onOpenDeposit();
       return;
     }
 
@@ -87,14 +103,16 @@ export const TrxWinGoGame: React.FC<TrxWinGoGameProps> = ({
       gameType: '1min',
       betType: selectedBetType,
       betValue: selectedBetValue,
-      amount: betAmount,
+      amount: safeAmount,
       multiplier: 1,
-      potentialPayout: betAmount * 2
+      potentialPayout: safeAmount * 2
     });
 
     if (res.success) {
       soundFx.playChipSound();
-      showToast(`TRX Bet of ₹${betAmount} placed on ${selectedBetValue.toUpperCase()}!`, 'success');
+      showToast(`TRX Bet of ₹${safeAmount} placed on ${selectedBetValue.toUpperCase()}!`, 'success');
+    } else {
+      showToast(res.error || 'Failed to place TRX bet.', 'error');
     }
   };
 

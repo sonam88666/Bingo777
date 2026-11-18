@@ -15,6 +15,7 @@ import { firebaseSync } from '../../services/firebaseSync';
 import { apiClient } from '../../services/apiClient';
 import { useToast } from '../common/Toast';
 import { rtdb, rtdbRef, rtdbUpdate } from '../../firebase';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface AdminFinancialsProps {
   adminId: string;
@@ -80,11 +81,11 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
     if (!searchTerm) return true;
     const q = searchTerm.toLowerCase();
     return (
-      d.uid.toLowerCase().includes(q) ||
-      d.username.toLowerCase().includes(q) ||
-      d.referenceId.toLowerCase().includes(q) ||
-      d.paymentMethod.toLowerCase().includes(q) ||
-      String(d.amount).includes(q) ||
+      (d.uid || '').toLowerCase().includes(q) ||
+      (d.username || '').toLowerCase().includes(q) ||
+      (d.referenceId || '').toLowerCase().includes(q) ||
+      (d.paymentMethod || '').toLowerCase().includes(q) ||
+      String(d.amount || 0).includes(q) ||
       (d.usdtAmount ? String(d.usdtAmount).includes(q) : false)
     );
   });
@@ -94,11 +95,12 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
     if (!searchTerm) return true;
     const q = searchTerm.toLowerCase();
     return (
-      w.uid.toLowerCase().includes(q) ||
-      w.username.toLowerCase().includes(q) ||
-      w.payoutMethod.toLowerCase().includes(q) ||
-      String(w.amount).includes(q) ||
-      (w.accountDetails?.usdtAddress || '').toLowerCase().includes(q)
+      (w.uid || '').toLowerCase().includes(q) ||
+      (w.username || '').toLowerCase().includes(q) ||
+      (w.payoutMethod || '').toLowerCase().includes(q) ||
+      String(w.amount || 0).includes(q) ||
+      (w.accountDetails?.usdtAddress || '').toLowerCase().includes(q) ||
+      (w.accountDetails?.upiId || '').toLowerCase().includes(q)
     );
   });
 
@@ -147,7 +149,7 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
       showToast(
         dep.paymentMethod === 'USDT'
           ? `Approved $${dep.usdtAmount || ''} USDT deposit & credited ₹${finalInrToCredit.toLocaleString('en-IN')} INR to ${dep.username} (${dep.uid})!`
-          : `Approved ₹${finalInrToCredit.toLocaleString('en-IN')} deposit for ${dep.username} (${dep.uid})! New Wallet Balance: ₹${(updatedUser?.balance || 0).toLocaleString('en-IN')}`,
+          : `Approved ₹${finalInrToCredit.toLocaleString('en-IN')} deposit for ${dep.username} (${dep.uid})! New Wallet Balance: ₹${Number(updatedUser?.balance ?? updatedUser?.wallet ?? 0).toLocaleString('en-IN')}`,
         'success'
       );
       setInspectingDeposit(null);
@@ -247,9 +249,9 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
     }
   };
 
-  const copyText = (text: string) => {
-    navigator.clipboard.writeText(text);
-    showToast('Copied to clipboard', 'info');
+  const copyText = async (text: string) => {
+    const ok = await copyToClipboard(text);
+    showToast(ok ? 'Copied to clipboard' : 'Copy failed — please copy manually', ok ? 'info' : 'error');
   };
 
   return (
@@ -381,7 +383,7 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
                             </span>
                           ) : null}
                           <span className="font-mono font-black text-amber-400 text-sm sm:text-base tabular-nums">
-                            ₹{dep.amount.toLocaleString('en-IN')}
+                            ₹{(Number(dep.amount) || 0).toLocaleString('en-IN')}
                           </span>
                         </div>
                         <div className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -514,15 +516,15 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
                             </span>
                           ) : null}
                           <span className="font-mono font-black text-amber-400 text-sm sm:text-base tabular-nums">
-                            ₹{wth.amount.toLocaleString('en-IN')}
+                            ₹{(Number(wth.amount) || 0).toLocaleString('en-IN')}
                           </span>
                         </div>
                         <div className="text-xs font-semibold text-slate-300 mt-0.5 break-all">
                           {isUsdt
-                            ? `ERC20 Address: ${wth.accountDetails.usdtAddress || '—'}`
+                            ? `ERC20 Address: ${wth.accountDetails?.usdtAddress || '—'}`
                             : isBank
-                            ? `Bank: ${wth.accountDetails.bankName || 'Bank'} (${wth.accountDetails.accountNumber || '—'})`
-                            : `UPI: ${wth.accountDetails.upiId || '—'}`}
+                            ? `Bank: ${wth.accountDetails?.bankName || 'Bank'} (${wth.accountDetails?.accountNumber || '—'})`
+                            : `UPI: ${wth.accountDetails?.upiId || '—'}`}
                         </div>
                         <div className="text-xs text-slate-400 mt-0.5">
                           {formatTimeAgo(wth.requestedAt)}
@@ -631,7 +633,7 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
               <div className="flex justify-between py-1.5 border-b border-slate-800">
                 <span className="text-slate-400">INR Wallet Credit Amount:</span>
                 <span className="font-mono font-black text-base text-emerald-400">
-                  ₹{inspectingDeposit.amount.toLocaleString('en-IN')}
+                  ₹{(Number(inspectingDeposit.amount) || 0).toLocaleString('en-IN')}
                 </span>
               </div>
               <div className="flex items-center justify-between py-1.5 border-b border-slate-800 gap-2">
@@ -743,7 +745,7 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
               <div className="flex justify-between py-1.5 border-b border-slate-800">
                 <span className="text-slate-400">Payout Amount (INR Deducted):</span>
                 <span className="font-mono font-black text-base text-amber-400">
-                  ₹{inspectingWithdrawal.amount.toLocaleString('en-IN')}
+                  ₹{(Number(inspectingWithdrawal.amount) || 0).toLocaleString('en-IN')}
                 </span>
               </div>
               {inspectingWithdrawal.usdtAmount && (
@@ -758,49 +760,49 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
                 <span className="text-slate-400">Method:</span>
                 <span className="font-bold text-slate-100">{inspectingWithdrawal.payoutMethod}</span>
               </div>
-              {inspectingWithdrawal.accountDetails.usdtAddress && (
+              {inspectingWithdrawal.accountDetails?.usdtAddress && (
                 <div className="py-1.5 border-b border-slate-800 space-y-1">
                   <span className="text-slate-400 block">Receiving USDT (ERC20) Address:</span>
                   <button
                     type="button"
-                    onClick={() => copyText(inspectingWithdrawal.accountDetails.usdtAddress || '')}
+                    onClick={() => copyText(inspectingWithdrawal.accountDetails?.usdtAddress || '')}
                     className="font-mono font-bold text-teal-300 flex items-center justify-between w-full p-2 rounded-lg bg-slate-950 border border-teal-500/30 break-all text-left"
                   >
-                    <span>{inspectingWithdrawal.accountDetails.usdtAddress}</span>
+                    <span>{inspectingWithdrawal.accountDetails?.usdtAddress}</span>
                     <Copy className="w-3.5 h-3.5 shrink-0 ml-2" />
                   </button>
                 </div>
               )}
-              {inspectingWithdrawal.accountDetails.upiId && (
+              {inspectingWithdrawal.accountDetails?.upiId && (
                 <div className="flex justify-between py-1.5 border-b border-slate-800">
                   <span className="text-slate-400">Receiving UPI ID:</span>
                   <button
                     type="button"
-                    onClick={() => copyText(inspectingWithdrawal.accountDetails.upiId || '')}
+                    onClick={() => copyText(inspectingWithdrawal.accountDetails?.upiId || '')}
                     className="font-mono font-bold text-amber-400 flex items-center space-x-1"
                   >
-                    <span>{inspectingWithdrawal.accountDetails.upiId}</span>
+                    <span>{inspectingWithdrawal.accountDetails?.upiId}</span>
                     <Copy className="w-3.5 h-3.5" />
                   </button>
                 </div>
               )}
-              {(inspectingWithdrawal.accountDetails.accountNumber || inspectingWithdrawal.accountDetails.bankName) && (
+              {(inspectingWithdrawal.accountDetails?.accountNumber || inspectingWithdrawal.accountDetails?.bankName) && (
                 <>
                   <div className="flex justify-between py-1.5 border-b border-slate-800">
                     <span className="text-slate-400">Holder / Bank:</span>
                     <span className="font-bold text-slate-100">
-                      {inspectingWithdrawal.accountDetails.holderName || inspectingWithdrawal.accountDetails.bankName || 'Bank'}
+                      {inspectingWithdrawal.accountDetails?.holderName || inspectingWithdrawal.accountDetails?.bankName || 'Bank'}
                     </span>
                   </div>
                   <div className="flex justify-between py-1.5 border-b border-slate-800">
                     <span className="text-slate-400">Account Number:</span>
                     <span className="font-mono font-bold text-slate-100">
-                      {inspectingWithdrawal.accountDetails.accountNumber}
+                      {inspectingWithdrawal.accountDetails?.accountNumber || '—'}
                     </span>
                   </div>
                   <div className="flex justify-between py-1.5 border-b border-slate-800">
                     <span className="text-slate-400">IFSC Code:</span>
-                    <span className="font-mono font-bold text-slate-100">{inspectingWithdrawal.accountDetails.ifscCode}</span>
+                    <span className="font-mono font-bold text-slate-100">{inspectingWithdrawal.accountDetails?.ifscCode || '—'}</span>
                   </div>
                 </>
               )}
@@ -902,7 +904,7 @@ export const AdminFinancials: React.FC<AdminFinancialsProps> = ({
           >
             <h4 className="font-bold text-slate-100 text-base">Reject Withdrawal & Refund</h4>
             <p className="text-xs text-slate-400">
-              ₹{rejectingWithdrawal.amount.toLocaleString('en-IN')} will be atomically refunded to{' '}
+              ₹{(Number(rejectingWithdrawal.amount) || 0).toLocaleString('en-IN')} will be atomically refunded to{' '}
               <strong className="text-slate-100">{rejectingWithdrawal.uid}</strong> wallet.
             </p>
             <div>

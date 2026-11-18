@@ -197,8 +197,10 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
 
   useEffect(() => {
     store.syncUsersWithBackend();
-    firebaseSync.pullUsersFromRtdb().catch(() => {});
-  }, [tab]);
+    if (Object.keys(store.getUsers()).length <= 2) {
+      firebaseSync.pullUsersFromRtdb().catch(() => {});
+    }
+  }, []);
 
   // Retrieve permanent device record
   const getClientDevice = (): DeviceRecord => {
@@ -350,6 +352,10 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
             [currentDeviceId]: currentDeviceEntry
           },
           referralCode: fallbackUser.referralCode || '',
+          referredBy: fallbackUser.referredBy || null,
+          referredByCode: fallbackUser.referredByCode || null,
+          referralCount: fallbackUser.referralCount || 0,
+          totalReferrals: fallbackUser.totalReferrals || fallbackUser.referralCount || 0,
           signupBonusStatus: initialWallet > 0 ? 'credited' : 'not_eligible',
           signupBonusAmount: initialWallet,
           createdAt: fallbackUser.createdAt || now,
@@ -654,9 +660,20 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       localStorage.setItem('maanwin_active_uid', finalUser.uid);
       localStorage.setItem('bingo777_last_phone', cleanPhone);
 
+      if (enteredRefCode && !finalUser.referredBy) {
+        await firebaseSync.pullUsersFromRtdb().catch(() => {});
+        store.bindPendingReferrals();
+      }
       const linkedRef = store.getAllReferrals().find((r) => r.referredUid === finalUser.uid);
       if (linkedRef) {
         await firebaseSync.pushReferralToFirestore(linkedRef).catch(() => {});
+        const referrerUser = store.getUser(linkedRef.referrerUid);
+        if (referrerUser) {
+          await rtdbUpdate(rtdbRef(rtdb, `users/${referrerUser.uid}`), {
+            referralCount: referrerUser.referralCount || 1,
+            totalReferrals: referrerUser.totalReferrals || referrerUser.referralCount || 1
+          }).catch(() => {});
+        }
       }
       await clearPendingReferralCode().catch(() => {});
       firebaseSync.attachRealtimeUserSync(finalUser.uid, cleanPhone);
@@ -793,9 +810,20 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
       localStorage.setItem('maanwin_active_uid', finalUser.uid);
       localStorage.setItem('bingo777_last_phone', cleanPhone);
 
+      if (enteredRefCode && !finalUser.referredBy) {
+        await firebaseSync.pullUsersFromRtdb().catch(() => {});
+        store.bindPendingReferrals();
+      }
       const linkedRef = store.getAllReferrals().find((r) => r.referredUid === finalUser.uid);
       if (linkedRef) {
         await firebaseSync.pushReferralToFirestore(linkedRef).catch(() => {});
+        const referrerUser = store.getUser(linkedRef.referrerUid);
+        if (referrerUser) {
+          await rtdbUpdate(rtdbRef(rtdb, `users/${referrerUser.uid}`), {
+            referralCount: referrerUser.referralCount || 1,
+            totalReferrals: referrerUser.totalReferrals || referrerUser.referralCount || 1
+          }).catch(() => {});
+        }
       }
       await clearPendingReferralCode().catch(() => {});
       firebaseSync.attachRealtimeUserSync(finalUser.uid, cleanPhone);
@@ -1069,8 +1097,9 @@ export const UserAuthModal: React.FC<UserAuthModalProps> = ({
             </div>
           )}
 
-          {/* Refer Code (Shown on Sign Up when enabled by Admin OR when auto-filled from referral link) */}
-          {tab === 'register' && (showReferralFieldOnSignup || Boolean(referralCode)) && (
+          {/* Refer Code (Shown on Sign Up OR Direct Mobile Login when auto-filled/enabled) */}
+          {((tab === 'register' && (showReferralFieldOnSignup || Boolean(referralCode))) ||
+            (tab === 'login' && loginMethod === 'direct' && Boolean(referralCode))) && (
             <div className="space-y-1.5">
               <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
                 <span className="flex items-center space-x-1.5">

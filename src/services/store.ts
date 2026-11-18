@@ -871,6 +871,7 @@ class AuthoritativeStore {
   private firebaseConfig: FirebaseConnectionConfig;
   private transactions: WalletTransaction[];
   private deletedUserUids: Set<string>;
+  private deletedBetIds: Set<string> = new Set();
   private referrals: ReferralRecord[];
   private featureModules: Record<string, FeatureModule>;
   private deletedFeaturesBackup: Record<string, FeatureModule> = {};
@@ -985,6 +986,15 @@ class AuthoritativeStore {
           ackArr.forEach((id: string) => this.acknowledgedResultIds.add(id));
         }
       }
+      const deletedBetsJson = safeStorage.getItem('bingo777_deleted_bet_ids');
+      if (deletedBetsJson) {
+        const delArr = JSON.parse(deletedBetsJson);
+        if (Array.isArray(delArr)) {
+          delArr.forEach((id: string) => {
+            if (typeof id === 'string' && id) this.deletedBetIds.add(id);
+          });
+        }
+      }
     } catch {}
 
     this.users = this.getSanitizedInitialUsers();
@@ -995,7 +1005,13 @@ class AuthoritativeStore {
     this.giftCodes = INITIAL_GIFT_CODES;
     this.supportMessages = INITIAL_SUPPORT_MESSAGES;
     this.adminSettings = { ...DEFAULT_ADMIN_SETTINGS, maintenanceMode: false };
-    this.auditLogs = INITIAL_AUDIT_LOGS;
+    try {
+      const cachedLogsJson = safeStorage.getItem('bingo777_audit_logs_cache');
+      const parsedLogs = cachedLogsJson ? JSON.parse(cachedLogsJson) : null;
+      this.auditLogs = Array.isArray(parsedLogs) && parsedLogs.length > 0 ? parsedLogs : INITIAL_AUDIT_LOGS;
+    } catch {
+      this.auditLogs = INITIAL_AUDIT_LOGS;
+    }
     this.firebaseConfig = {
       databaseUrl: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
       databaseURL: 'https://gen-lang-client-0859410588-default-rtdb.firebaseio.com',
@@ -2111,15 +2127,17 @@ class AuthoritativeStore {
 
   private saveToStorage() {
     try {
-      this.normalizeWinGoPastRounds(30);
+      if (this.pastRounds && this.pastRounds.length > 120) {
+        this.pastRounds = this.pastRounds.slice(0, 120);
+      }
       if (this.liveBets && this.liveBets.length > 150) {
         this.liveBets = this.liveBets.slice(0, 150);
       }
       if (this.transactions && this.transactions.length > 5000) {
         this.transactions = this.transactions.slice(0, 5000);
       }
-      if (this.auditLogs && this.auditLogs.length > 150) {
-        this.auditLogs = this.auditLogs.slice(0, 150);
+      if (this.auditLogs && this.auditLogs.length > 250) {
+        this.auditLogs = this.auditLogs.slice(0, 250);
       }
       safeStorage.setItem('bingo777_ack_results', JSON.stringify(Array.from(this.acknowledgedResultIds)));
     } catch {}
@@ -2154,12 +2172,331 @@ class AuthoritativeStore {
   public getReferrals(): ReferralRecord[] { return this.referrals; }
   public getAllReferrals(): ReferralRecord[] { return this.referrals; }
   public getUserReferrals(referrerUid: string): ReferralRecord[] {
-    return this.referrals.filter((r) => r.referrerUid === referrerUid);
+    const direct = this.referrals.filter((r) => r.referrerUid === referrerUid);
+    const seenReferredUids = new Set(direct.map((r) => r.referredUid));
+    const referrer = this.users[referrerUid];
+    const referrerCodeUpper = referrer?.referralCode?.trim().toUpperCase();
+
+    // Also include any referred user whose user record already carries referredBy / referredByCode
+    const extras: ReferralRecord[] = [];
+    for (const u of Object.values(this.users)) {
+      if (!u || !u.uid || u.uid === referrerUid || u.uid.startsWith('usr_demo_') || this.deletedUserUids.has(u.uid)) continue;
+      if (seenReferredUids.has(u.uid)) continue;
+      const matchesByUid = u.referredBy === referrerUid;
+      const matchesByCode = Boolean(
+        referrerCodeUpper &&
+          u.referredByCode &&
+          u.referredByCode.trim().toUpperCase() === referrerCodeUpper
+      );
+      if (matchesByUid || matchesByCode) {
+        seenReferredUids.add(u.uid);
+        extras.push({
+          id: `ref_${referrerUid}_${u.uid}`,
+          referrerUid,
+          referrerUsername: referrer?.username || `Player_${referrerUid.slice(-4)}`,
+          referredUid: u.uid,
+          referredUsername: u.username || u.name || `Player_${u.uid.slice(-4)}`,
+          referredPhone: u.phone || '',
+          referralCode: u.referredByCode || referrer?.referralCode || '',
+          registeredAt: u.createdAt || Date.now(),
+          firstDepositApprovedAt: u.firstDepositApprovedAt,
+          qualifyingDaysCompleted: 0,
+          dailyTurnover: {},
+          status: u.firstDepositApprovedAt ? 'activity_in_progress' : 'pending_deposit',
+          bonusAmount: this.adminSettings.referralBonusAmount ?? 120
+        });
+      }
+    }
+
+    return [...direct, ...extras].sort((a, b) => (b.registeredAt || 0) - (a.registeredAt || 0));
   }
   public getReferralByReferred(referredUid: string): ReferralRecord | undefined {
     return this.referrals.find((r) => r.referredUid === referredUid);
   }
   public getLiveBets(): LiveBet[] { return this.liveBets; }
+
+  public isBetDeleted(betId: string): boolean {
+    return Boolean(betId && this.deletedBetIds.has(betId));
+  }
+
+  private markBetDeleted(betId: string): void {
+    if (!betId) return;
+    this.deletedBetIds.add(betId);
+    if (this.deletedBetIds.size > 500) {
+      const trimmed = Array.from(this.deletedBetIds).slice(-500);
+      this.deletedBetIds = new Set(trimmed);
+    }
+    try {
+      safeStorage.setItem('bingo777_deleted_bet_ids', JSON.stringify(Array.from(this.deletedBetIds)));
+    } catch {}
+  }
+
+  public ingestDeletedLiveBetFromCloud(betId: string): boolean {
+    if (!betId) return false;
+    this.markBetDeleted(betId);
+    const before = this.liveBets.length;
+    this.liveBets = this.liveBets.filter((b) => b.betId !== betId);
+    if (this.liveBets.length !== before) {
+      this.saveToStorage();
+      this.safeNotifyListeners();
+      return true;
+    }
+    return false;
+  }
+
+  public adminUpdateLiveBet(
+    betId: string,
+    updates: Partial<
+      Pick<LiveBet, 'betType' | 'betValue' | 'amount' | 'multiplier' | 'potentialPayout' | 'status' | 'actualPayout'>
+    >,
+    adminId: string,
+    options?: { adjustWallet?: boolean; reason?: string }
+  ): { success: boolean; error?: string; bet?: LiveBet; walletDelta?: number } {
+    const idx = this.liveBets.findIndex((b) => b.betId === betId);
+    if (idx === -1) {
+      return { success: false, error: 'Bet record not found' };
+    }
+    const oldBet = this.liveBets[idx];
+
+    const newAmount =
+      updates.amount !== undefined
+        ? Math.round(Number(updates.amount) * 100) / 100
+        : Number(oldBet.amount) || 0;
+    if (!Number.isFinite(newAmount) || newAmount <= 0 || newAmount > 10000000) {
+      return { success: false, error: 'Stake amount must be a valid positive number' };
+    }
+
+    const newMultiplier =
+      updates.multiplier !== undefined
+        ? Math.round(Number(updates.multiplier) * 100) / 100
+        : Number(oldBet.multiplier) || 1;
+    if (!Number.isFinite(newMultiplier) || newMultiplier <= 0 || newMultiplier > 10000) {
+      return { success: false, error: 'Multiplier must be a valid positive number' };
+    }
+
+    const newStatus: LiveBet['status'] =
+      updates.status === 'pending' || updates.status === 'won' || updates.status === 'lost'
+        ? updates.status
+        : oldBet.status;
+
+    const newBetType = updates.betType || oldBet.betType;
+    const newBetValue = (updates.betValue !== undefined ? String(updates.betValue) : String(oldBet.betValue || '')).trim();
+    if (!newBetValue) {
+      return { success: false, error: 'Bet pick/selection cannot be empty' };
+    }
+
+    const newPotentialPayout =
+      updates.potentialPayout !== undefined && Number.isFinite(Number(updates.potentialPayout)) && Number(updates.potentialPayout) >= 0
+        ? Math.round(Number(updates.potentialPayout) * 100) / 100
+        : Math.round(newAmount * newMultiplier * 100) / 100;
+
+    let newActualPayout = 0;
+    if (newStatus === 'lost') {
+      newActualPayout = 0;
+    } else if (newStatus === 'pending') {
+      newActualPayout =
+        updates.actualPayout !== undefined && Number.isFinite(Number(updates.actualPayout))
+          ? Math.max(0, Math.round(Number(updates.actualPayout) * 100) / 100)
+          : 0;
+    } else {
+      if (updates.actualPayout !== undefined && Number.isFinite(Number(updates.actualPayout))) {
+        newActualPayout = Math.max(0, Math.round(Number(updates.actualPayout) * 100) / 100);
+      } else if (
+        oldBet.status === 'won' &&
+        (oldBet.actualPayout || 0) > 0 &&
+        updates.amount === undefined &&
+        updates.multiplier === undefined &&
+        updates.potentialPayout === undefined
+      ) {
+        newActualPayout = oldBet.actualPayout;
+      } else {
+        newActualPayout = newPotentialPayout;
+      }
+    }
+
+    const adjustWallet = options?.adjustWallet !== false;
+    const oldWonCredits = oldBet.status === 'won' || (oldBet.actualPayout || 0) > 0 ? Number(oldBet.actualPayout || 0) : 0;
+    const newWonCredits = newStatus === 'won' || newActualPayout > 0 ? newActualPayout : 0;
+    const oldNetImpact = oldWonCredits - (Number(oldBet.amount) || 0);
+    const newNetImpact = newWonCredits - newAmount;
+    const walletDelta = adjustWallet ? Math.round((newNetImpact - oldNetImpact) * 100) / 100 : 0;
+
+    const user = this.users[oldBet.uid] || this.getUser(oldBet.uid);
+    const reasonText = (options?.reason || '').trim();
+
+    if (walletDelta !== 0) {
+      if (user) {
+        if (walletDelta < 0 && (user.balance || 0) < Math.abs(walletDelta)) {
+          return {
+            success: false,
+            error: `Insufficient user balance (₹${(user.balance || 0).toFixed(2)}) for wallet deduction of ₹${Math.abs(walletDelta).toFixed(2)}. Uncheck "Sync Wallet Balance" to edit record only.`
+          };
+        }
+        const txRes = this.executeWalletTransaction({
+          uid: oldBet.uid,
+          type: 'admin_adjustment',
+          category: walletDelta > 0 ? 'credit' : 'debit',
+          amount: Math.abs(walletDelta),
+          referenceId: `edit_bet_${betId}_${Date.now()}`,
+          description: `Admin edited bet ${betId} (${oldBet.betValue} ₹${oldBet.amount} ${oldBet.status} → ${newBetValue} ₹${newAmount} ${newStatus})${reasonText ? ` · ${reasonText}` : ''}`
+        });
+        if (!txRes.success) {
+          return { success: false, error: txRes.error || 'Failed to sync wallet balance' };
+        }
+      } else {
+        try {
+          rtdbRunTransaction(rtdbRef(rtdb, `users/${oldBet.uid}`), (cur: any) => {
+            if (!cur || typeof cur !== 'object') return cur;
+            const prevBal = Number(cur.balance ?? cur.wallet ?? 0) || 0;
+            const nextBal = Math.max(0, Math.round((prevBal + walletDelta) * 100) / 100);
+            cur.balance = nextBal;
+            cur.wallet = nextBal;
+            cur.updatedAt = Date.now();
+            return cur;
+          }).catch(() => {});
+        } catch {}
+      }
+    }
+
+    if (user) {
+      const oldWonStat = oldBet.status === 'won' ? Number(oldBet.actualPayout || 0) : 0;
+      const newWonStat = newStatus === 'won' ? newActualPayout : 0;
+      user.totalWonAmount = Math.max(0, Math.round(((user.totalWonAmount || 0) + (newWonStat - oldWonStat)) * 100) / 100);
+
+      const oldLostStat = oldBet.status === 'lost' ? Number(oldBet.amount || 0) : 0;
+      const newLostStat = newStatus === 'lost' ? newAmount : 0;
+      user.totalLostAmount = Math.max(0, Math.round(((user.totalLostAmount || 0) + (newLostStat - oldLostStat)) * 100) / 100);
+
+      if (walletDelta === 0 && this.onUserSaved) {
+        try { this.onUserSaved(user); } catch {}
+      }
+    }
+
+    const updatedBet: LiveBet = {
+      ...oldBet,
+      betType: newBetType,
+      betValue: newBetValue,
+      amount: newAmount,
+      multiplier: newMultiplier,
+      potentialPayout: newPotentialPayout,
+      status: newStatus,
+      actualPayout: newActualPayout
+    };
+
+    this.liveBets[idx] = updatedBet;
+
+    if (this.onLiveBetSaved) {
+      try {
+        this.onLiveBetSaved(updatedBet);
+      } catch (e) {
+        console.warn('onLiveBetSaved error:', e);
+      }
+    }
+
+    this.logAudit({
+      actor: adminId,
+      category: 'GAME_CONTROL',
+      action: 'ADMIN_EDIT_USER_BET',
+      details: `Edited bet ${betId} for ${oldBet.username || oldBet.uid} (Period ${oldBet.roundPeriod}): [${oldBet.betValue} ₹${oldBet.amount} ${oldBet.status} payout ₹${oldBet.actualPayout}] → [${newBetValue} ₹${newAmount} ${newStatus} payout ₹${newActualPayout}]. Wallet delta: ${walletDelta >= 0 ? '+' : ''}₹${walletDelta.toFixed(2)}.${reasonText ? ` Reason: ${reasonText}` : ''}`,
+      targetUser: oldBet.uid,
+      affectedRecordId: betId,
+      reason: reasonText || 'Admin edited user bet',
+      outcome: 'SUCCESS'
+    });
+
+    this.saveToStorage();
+    this.notify();
+    return { success: true, bet: updatedBet, walletDelta };
+  }
+
+  public adminDeleteLiveBet(
+    betId: string,
+    adminId: string,
+    options?: { adjustWallet?: boolean; reason?: string }
+  ): { success: boolean; error?: string; walletDelta?: number } {
+    const bet = this.liveBets.find((b) => b.betId === betId);
+    if (!bet) {
+      return { success: false, error: 'Bet record not found' };
+    }
+
+    const adjustWallet = options?.adjustWallet !== false;
+    const wonCredits = bet.status === 'won' || (bet.actualPayout || 0) > 0 ? Number(bet.actualPayout || 0) : 0;
+    const reverseDelta = adjustWallet ? Math.round(((Number(bet.amount) || 0) - wonCredits) * 100) / 100 : 0;
+    const user = this.users[bet.uid] || this.getUser(bet.uid);
+    const reasonText = (options?.reason || '').trim();
+
+    if (reverseDelta !== 0) {
+      if (user) {
+        if (reverseDelta < 0 && (user.balance || 0) < Math.abs(reverseDelta)) {
+          return {
+            success: false,
+            error: `Insufficient user balance (₹${(user.balance || 0).toFixed(2)}) to reverse net winning payout of ₹${Math.abs(reverseDelta).toFixed(2)}. Uncheck "Reverse Wallet Impact" to delete bet record only.`
+          };
+        }
+        const txRes = this.executeWalletTransaction({
+          uid: bet.uid,
+          type: 'admin_adjustment',
+          category: reverseDelta > 0 ? 'credit' : 'debit',
+          amount: Math.abs(reverseDelta),
+          referenceId: `del_bet_${betId}_${Date.now()}`,
+          description: `Admin deleted bet ${betId} (${bet.betValue} ₹${bet.amount}, ${bet.status})${reasonText ? ` · ${reasonText}` : ''}`
+        });
+        if (!txRes.success) {
+          return { success: false, error: txRes.error || 'Failed to reverse wallet balance' };
+        }
+      } else {
+        try {
+          rtdbRunTransaction(rtdbRef(rtdb, `users/${bet.uid}`), (cur: any) => {
+            if (!cur || typeof cur !== 'object') return cur;
+            const prevBal = Number(cur.balance ?? cur.wallet ?? 0) || 0;
+            const nextBal = Math.max(0, Math.round((prevBal + reverseDelta) * 100) / 100);
+            cur.balance = nextBal;
+            cur.wallet = nextBal;
+            cur.updatedAt = Date.now();
+            return cur;
+          }).catch(() => {});
+        } catch {}
+      }
+    }
+
+    if (user) {
+      user.totalBetsCount = Math.max(0, (user.totalBetsCount || 0) - 1);
+      if (bet.status === 'won') {
+        user.totalWonAmount = Math.max(0, Math.round(((user.totalWonAmount || 0) - (bet.actualPayout || 0)) * 100) / 100);
+      } else if (bet.status === 'lost') {
+        user.totalLostAmount = Math.max(0, Math.round(((user.totalLostAmount || 0) - (bet.amount || 0)) * 100) / 100);
+      }
+      if (reverseDelta === 0 && this.onUserSaved) {
+        try { this.onUserSaved(user); } catch {}
+      }
+    }
+
+    this.markBetDeleted(betId);
+    this.liveBets = this.liveBets.filter((b) => b.betId !== betId);
+
+    if (this.onLiveBetDeleted) {
+      try {
+        this.onLiveBetDeleted(betId);
+      } catch (e) {
+        console.warn('onLiveBetDeleted error:', e);
+      }
+    }
+
+    this.logAudit({
+      actor: adminId,
+      category: 'GAME_CONTROL',
+      action: 'ADMIN_DELETE_USER_BET',
+      details: `Deleted bet ${betId} for ${bet.username || bet.uid} (Period ${bet.roundPeriod}, ${bet.gameType} · Pick ${bet.betValue} · Stake ₹${bet.amount} · Status ${bet.status}). Wallet reversal: ${reverseDelta >= 0 ? '+' : ''}₹${reverseDelta.toFixed(2)}.${reasonText ? ` Reason: ${reasonText}` : ''}`,
+      targetUser: bet.uid,
+      affectedRecordId: betId,
+      reason: reasonText || 'Admin deleted user bet',
+      outcome: 'SUCCESS'
+    });
+
+    this.saveToStorage();
+    this.notify();
+    return { success: true, walletDelta: reverseDelta };
+  }
   public getCurrentRound(mode?: '30s' | '1min' | '3min'): GameRound {
     if (mode && this.activeRoundsByMode[mode]) {
       return this.activeRoundsByMode[mode]!;
@@ -2306,6 +2643,72 @@ class AuthoritativeStore {
   }
   public getDeposits(): DepositRecord[] { return this.deposits; }
   public getWithdrawals(): WithdrawalRecord[] { return this.withdrawals; }
+  public getDepositsForUser(uid: string, phone?: string): DepositRecord[] {
+    const cleanPhone = this.normalizePhone(phone || this.users[uid]?.phone || '');
+    const matched = this.deposits.filter((d) => {
+      if (!d) return false;
+      if (d.uid === uid) return true;
+      if (cleanPhone && d.phone && this.normalizePhone(d.phone) === cleanPhone) return true;
+      return false;
+    });
+    const seenIds = new Set(matched.map((d) => d.id));
+    const seenRefs = new Set(matched.map((d) => (d.referenceId || '').trim().toUpperCase()).filter(Boolean));
+    // Synthesize any deposit records present in transaction ledger if missing from /deposits
+    for (const tx of this.transactions) {
+      if (!tx || tx.uid !== uid || tx.type !== 'deposit') continue;
+      const metaDepId = typeof tx.metadata?.depositId === 'string' ? tx.metadata.depositId : '';
+      const txRef = (tx.referenceId || '').trim().toUpperCase();
+      if ((metaDepId && seenIds.has(metaDepId)) || (txRef && seenRefs.has(txRef))) continue;
+      const syntheticId = metaDepId || tx.id;
+      if (seenIds.has(syntheticId)) continue;
+      seenIds.add(syntheticId);
+      matched.push({
+        id: syntheticId,
+        uid: tx.uid,
+        username: this.users[uid]?.username || `Player_${uid.slice(-4)}`,
+        phone: cleanPhone || this.users[uid]?.phone || '',
+        amount: Number(tx.amount) || 0,
+        usdtAmount: typeof tx.metadata?.usdtAmount === 'number' ? tx.metadata.usdtAmount : undefined,
+        paymentMethod: tx.metadata?.paymentMethod === 'USDT' ? 'USDT' : 'UPI',
+        referenceId: tx.referenceId || tx.id,
+        status: tx.status === 'rejected' ? 'rejected' : tx.status === 'pending' ? 'pending' : 'approved',
+        submittedAt: tx.timestamp || Date.now(),
+        reviewedAt: tx.timestamp || Date.now()
+      });
+    }
+    return matched.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
+  }
+  public getWithdrawalsForUser(uid: string, phone?: string): WithdrawalRecord[] {
+    const cleanPhone = this.normalizePhone(phone || this.users[uid]?.phone || '');
+    const matched = this.withdrawals.filter((w) => {
+      if (!w) return false;
+      if (w.uid === uid) return true;
+      if (cleanPhone && w.phone && this.normalizePhone(w.phone) === cleanPhone) return true;
+      return false;
+    });
+    const seenIds = new Set(matched.map((w) => w.id));
+    // Include withdrawal transaction entries if missing from /withdrawals node
+    for (const tx of this.transactions) {
+      if (!tx || tx.uid !== uid || tx.type !== 'withdrawal' || tx.category !== 'debit') continue;
+      const refId = tx.referenceId || tx.id;
+      if (seenIds.has(refId) || seenIds.has(tx.id)) continue;
+      seenIds.add(refId);
+      const details = (tx.metadata?.details as WithdrawalRecord['accountDetails']) || {};
+      matched.push({
+        id: refId,
+        uid: tx.uid,
+        username: this.users[uid]?.username || `Player_${uid.slice(-4)}`,
+        phone: cleanPhone || this.users[uid]?.phone || '',
+        amount: Number(tx.amount) || 0,
+        usdtAmount: typeof tx.metadata?.usdtAmount === 'number' ? tx.metadata.usdtAmount : undefined,
+        payoutMethod: (tx.metadata?.payoutMethod as WithdrawalRecord['payoutMethod']) || 'UPI',
+        accountDetails: details,
+        status: tx.status === 'completed' ? 'approved' : tx.status === 'rejected' ? 'rejected' : 'pending',
+        requestedAt: tx.timestamp || Date.now()
+      });
+    }
+    return matched.sort((a, b) => (b.requestedAt || 0) - (a.requestedAt || 0));
+  }
   public getGiftCodes(): Record<string, GiftCode> { return this.giftCodes; }
   public getSupportMessages(): ChatMessage[] { return this.supportMessages; }
   public getAdminSettings(): AdminSettings { return this.adminSettings; }
@@ -5325,10 +5728,8 @@ class AuthoritativeStore {
   public findUserByPhone(phone: string): UserRecord | undefined {
     const cleanPhone = this.normalizePhone(phone);
     if (!cleanPhone) return undefined;
-    // Also check permanent registry in case another tab registered moments ago
-    this.users = this.mergeAllStoredUsers(this.users);
     return Object.values(this.users).find(
-      (u) => this.normalizePhone(u.phone) === cleanPhone && !this.deletedUserUids.has(u.uid)
+      (u) => u && !this.deletedUserUids.has(u.uid) && this.normalizePhone(u.phone) === cleanPhone
     );
   }
 
@@ -5486,11 +5887,15 @@ class AuthoritativeStore {
     let referredByUid: string | undefined;
     const cleanRefCode = referralCode && referralCode.trim() ? referralCode.trim().toUpperCase() : undefined;
     if (cleanRefCode) {
+      const cleanRefDigits = this.normalizePhone(cleanRefCode);
       const referrer = Object.values(this.users).find(
         (u) =>
+          u &&
+          !this.deletedUserUids.has(u.uid) &&
           this.normalizePhone(u.phone) !== cleanPhone &&
           ((u.referralCode && u.referralCode.trim().toUpperCase() === cleanRefCode) ||
-            u.uid.toUpperCase() === cleanRefCode)
+            u.uid.toUpperCase() === cleanRefCode ||
+            (cleanRefDigits.length === 10 && this.normalizePhone(u.phone) === cleanRefDigits))
       );
       if (referrer) {
         referredByUid = referrer.uid;
@@ -6284,60 +6689,119 @@ class AuthoritativeStore {
   public onDepositSaved?: (dep: DepositRecord) => void;
   public onWithdrawalSaved?: (w: WithdrawalRecord) => void;
   public onLiveBetSaved?: (bet: LiveBet) => void;
+  public onLiveBetDeleted?: (betId: string) => void;
   public onReferralSaved?: (ref: ReferralRecord) => void;
   public onAdminSettingsSaved?: (settings: AdminSettings) => void;
   public onRoundSynced?: (round: GameRound) => void;
+  public onAuditLogSaved?: (log: AuditLogItem) => void;
 
   public trimPastRounds(limit: number = 30) {
     this.normalizeWinGoPastRounds(limit);
   }
 
-  public ingestCloudReferral(ref: ReferralRecord) {
-    if (!ref || !ref.id || !ref.referrerUid || !ref.referredUid) return;
-    const existingIdx = this.referrals.findIndex(
-      (r) => r.id === ref.id || (r.referrerUid === ref.referrerUid && r.referredUid === ref.referredUid)
-    );
+  public ingestCloudAuditLogsBatch(logs: AuditLogItem[]) {
+    if (!Array.isArray(logs) || logs.length === 0) return;
+    const byId = new Map<string, AuditLogItem>();
+    for (const existing of this.auditLogs) {
+      if (existing && existing.id) byId.set(existing.id, existing);
+    }
     let changed = false;
-    if (existingIdx === -1) {
-      this.referrals.unshift({
-        ...ref,
-        dailyTurnover: ref.dailyTurnover || {},
-        qualifyingDaysCompleted: Number(ref.qualifyingDaysCompleted) || 0,
-        bonusAmount: Number(ref.bonusAmount) || this.adminSettings.referralBonusAmount || 120
-      });
-      changed = true;
-    } else {
-      const existing = this.referrals[existingIdx];
-      if (
-        existing.status !== ref.status ||
-        existing.qualifyingDaysCompleted !== ref.qualifyingDaysCompleted ||
-        existing.firstDepositApprovedAt !== ref.firstDepositApprovedAt ||
-        existing.creditedAt !== ref.creditedAt
-      ) {
-        this.referrals[existingIdx] = {
-          ...existing,
-          ...ref,
-          dailyTurnover: { ...(existing.dailyTurnover || {}), ...(ref.dailyTurnover || {}) }
-        };
+    for (const item of logs) {
+      if (!item || !item.id) continue;
+      if (!byId.has(item.id)) {
         changed = true;
+      }
+      byId.set(item.id, {
+        ...item,
+        category: item.category || 'SETTINGS',
+        action: item.action || 'EVENT',
+        details: item.details || '',
+        actor: item.actor || 'System',
+        timestamp: typeof item.timestamp === 'number' ? item.timestamp : Date.now()
+      });
+    }
+    if (!changed && this.auditLogs.length > 0) return;
+    this.auditLogs = Array.from(byId.values())
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+      .slice(0, 250);
+    try {
+      safeStorage.setItem('bingo777_audit_logs_cache', JSON.stringify(this.auditLogs.slice(0, 120)));
+    } catch {}
+    this.safeNotifyListeners();
+  }
+
+  public ingestCloudReferralsBatch(refs: ReferralRecord[]) {
+    if (!Array.isArray(refs) || refs.length === 0) return;
+    let changed = false;
+    const indexById = new Map<string, number>();
+    const indexByPair = new Map<string, number>();
+    this.referrals.forEach((r, idx) => {
+      if (r.id) indexById.set(r.id, idx);
+      if (r.referrerUid && r.referredUid) indexByPair.set(`${r.referrerUid}|${r.referredUid}`, idx);
+    });
+
+    for (const ref of refs) {
+      if (!ref || !ref.id || !ref.referrerUid || !ref.referredUid) continue;
+      const existingIdx =
+        indexById.get(ref.id) ?? indexByPair.get(`${ref.referrerUid}|${ref.referredUid}`) ?? -1;
+      if (existingIdx === -1) {
+        this.referrals.unshift({
+          ...ref,
+          dailyTurnover: ref.dailyTurnover || {},
+          qualifyingDaysCompleted: Number(ref.qualifyingDaysCompleted) || 0,
+          bonusAmount: Number(ref.bonusAmount) || this.adminSettings.referralBonusAmount || 120
+        });
+        const newIdx = 0;
+        indexById.clear();
+        indexByPair.clear();
+        this.referrals.forEach((r, i) => {
+          if (r.id) indexById.set(r.id, i);
+          if (r.referrerUid && r.referredUid) indexByPair.set(`${r.referrerUid}|${r.referredUid}`, i);
+        });
+        void newIdx;
+        changed = true;
+      } else {
+        const existing = this.referrals[existingIdx];
+        if (
+          existing.status !== ref.status ||
+          existing.qualifyingDaysCompleted !== ref.qualifyingDaysCompleted ||
+          existing.firstDepositApprovedAt !== ref.firstDepositApprovedAt ||
+          existing.creditedAt !== ref.creditedAt
+        ) {
+          this.referrals[existingIdx] = {
+            ...existing,
+            ...ref,
+            dailyTurnover: { ...(existing.dailyTurnover || {}), ...(ref.dailyTurnover || {}) }
+          };
+          changed = true;
+        }
       }
     }
 
-    // Ensure referrer user has referralCount and totalReferrals synchronized
-    const referrer = this.users[ref.referrerUid];
-    if (referrer) {
-      const count = this.referrals.filter((r) => r.referrerUid === referrer.uid).length;
-      if ((referrer.referralCount || 0) < count || (referrer.totalReferrals || 0) < count) {
+    // Reconcile referrer counts in one pass
+    const countsByReferrer = new Map<string, number>();
+    for (const r of this.referrals) {
+      if (r.referrerUid) {
+        countsByReferrer.set(r.referrerUid, (countsByReferrer.get(r.referrerUid) || 0) + 1);
+      }
+    }
+    countsByReferrer.forEach((count, rUid) => {
+      const referrer = this.users[rUid];
+      if (referrer && ((referrer.referralCount || 0) < count || (referrer.totalReferrals || 0) < count)) {
         referrer.referralCount = count;
         referrer.totalReferrals = count;
         changed = true;
       }
-    }
+    });
 
     if (changed) {
       this.saveToStorage();
       this.safeNotifyListeners();
     }
+  }
+
+  public ingestCloudReferral(ref: ReferralRecord) {
+    this.ingestCloudReferralsBatch([ref]);
   }
 
   /**
@@ -6346,21 +6810,36 @@ class AuthoritativeStore {
    */
   public bindPendingReferrals() {
     const allUsers = Object.values(this.users);
+    if (allUsers.length === 0) return;
+
+    const byCode = new Map<string, UserRecord>();
+    const byUidUpper = new Map<string, UserRecord>();
+    const byPhone = new Map<string, UserRecord>();
+    for (const cand of allUsers) {
+      if (!cand || !cand.uid || this.deletedUserUids.has(cand.uid)) continue;
+      if (cand.referralCode) {
+        byCode.set(cand.referralCode.trim().toUpperCase(), cand);
+      }
+      byUidUpper.set(cand.uid.toUpperCase(), cand);
+      const cp = this.normalizePhone(cand.phone);
+      if (cp) byPhone.set(cp, cand);
+    }
+
+    const existingReferredSet = new Set(this.referrals.map((r) => r.referredUid));
     let changed = false;
 
     for (const u of allUsers) {
-      if (!u || !u.uid) continue;
+      if (!u || !u.uid || this.deletedUserUids.has(u.uid) || u.uid.startsWith('usr_demo_')) continue;
 
       // Resolve referredBy UID from referredByCode if not yet linked
       if (!u.referredBy && u.referredByCode) {
         const cleanCode = u.referredByCode.trim().toUpperCase();
-        const referrer = allUsers.find(
-          (cand) =>
-            cand.uid !== u.uid &&
-            ((cand.referralCode && cand.referralCode.trim().toUpperCase() === cleanCode) ||
-              cand.uid.toUpperCase() === cleanCode)
-        );
-        if (referrer) {
+        const cleanDigits = this.normalizePhone(cleanCode);
+        const referrer =
+          byCode.get(cleanCode) ||
+          byUidUpper.get(cleanCode) ||
+          (cleanDigits.length === 10 ? byPhone.get(cleanDigits) : undefined);
+        if (referrer && referrer.uid !== u.uid) {
           u.referredBy = referrer.uid;
           changed = true;
           if (this.onUserSaved) {
@@ -6371,8 +6850,7 @@ class AuthoritativeStore {
 
       if (u.referredBy && u.referredBy !== u.uid) {
         const referrer = this.users[u.referredBy];
-        const hasReferralDoc = this.referrals.some((r) => r.referredUid === u.uid);
-        if (referrer && !hasReferralDoc) {
+        if (referrer && !existingReferredSet.has(u.uid)) {
           const newRef: ReferralRecord = {
             id: `ref_${referrer.uid}_${u.uid}`,
             referrerUid: referrer.uid,
@@ -6389,6 +6867,7 @@ class AuthoritativeStore {
             bonusAmount: this.adminSettings.referralBonusAmount || 120
           };
           this.referrals.unshift(newRef);
+          existingReferredSet.add(u.uid);
           const nextCount = this.referrals.filter((r) => r.referrerUid === referrer.uid).length;
           referrer.referralCount = nextCount;
           referrer.totalReferrals = nextCount;
@@ -6409,116 +6888,175 @@ class AuthoritativeStore {
     }
   }
 
-  public ingestCloudRound(round: Partial<GameRound>) {
-    if (!round || !round.period || !round.gameType) return;
-    if (String(round.period).startsWith('20261013')) return;
-    const mode = round.gameType as '30s' | '1min' | '3min';
-    const target = this.activeRoundsByMode[mode];
-
-    // If cloud round is resolved and has a valid winningNumber, update pastRounds and reconcile bets
-    if (round.isResolved && typeof round.winningNumber === 'number' && round.winningNumber >= 0) {
-      this.resolvedPeriodIds.add(round.period);
-      const existingIdx = this.pastRounds.findIndex((r) => r.period === round.period && r.gameType === mode);
-      const num = round.winningNumber;
-      const winningColor: BetColor[] =
-        Array.isArray(round.winningColor) && round.winningColor.length > 0
-          ? round.winningColor
-          : num === 0
-          ? ['red', 'violet']
-          : num === 5
-          ? ['green', 'violet']
-          : num % 2 === 0
-          ? ['red']
-          : ['green'];
-      const winningSize: BetSize = round.winningSize || (num >= 5 ? 'big' : 'small');
-
-      const resolvedObj: GameRound = {
-        period: round.period,
-        gameType: mode,
-        startTime: round.startTime || this.getServerNow() - 30000,
-        endTime: round.endTime || this.getServerNow(),
-        winningNumber: num,
-        winningColor,
-        winningSize,
-        totalBetVolume: round.totalBetVolume || 0,
-        totalPayout: round.totalPayout || 0,
-        hash: round.hash || `SHA256_${round.period}`,
-        isResolved: true,
-        manualOverrideNumber: round.manualOverrideNumber ?? null
-      };
-
-      // If local active round was still on this resolved period, advance it to the next period immediately
-      if (target && target.period === round.period) {
-        const nextRound = this.generateNewRound(mode, resolvedObj.endTime);
-        this.activeRoundsByMode[mode] = nextRound;
-        if (this.currentRound.gameType === mode) {
-          this.currentRound = nextRound;
-        }
-      }
-
-      if (existingIdx >= 0) {
-        this.pastRounds[existingIdx] = resolvedObj;
-      } else {
-        this.pastRounds.unshift(resolvedObj);
-        this.normalizeWinGoPastRounds(30);
-      }
-      this.reconcilePendingBetsFromHistory();
-      this.safeNotifyListeners();
-      return;
-    }
-
-    // Active round or manual override sync
+  public ingestCloudRoundsBatch(rounds: Array<Partial<GameRound>>) {
+    if (!Array.isArray(rounds) || rounds.length === 0) return;
+    let addedResolved = false;
+    let changed = false;
     const now = this.getServerNow();
-    if (!round.isResolved && round.endTime && round.endTime > now) {
-      if (!target || target.period < round.period) {
-        const syncedActive: GameRound = {
+
+    for (const round of rounds) {
+      if (!round || !round.period || !round.gameType) continue;
+      if (String(round.period).startsWith('20261013')) continue;
+      const mode = round.gameType as '30s' | '1min' | '3min';
+      const target = this.activeRoundsByMode[mode];
+
+      if (round.isResolved && typeof round.winningNumber === 'number' && round.winningNumber >= 0) {
+        this.resolvedPeriodIds.add(round.period);
+        const existingIdx = this.pastRounds.findIndex((r) => r.period === round.period && r.gameType === mode);
+        const num = round.winningNumber;
+        const winningColor: BetColor[] =
+          Array.isArray(round.winningColor) && round.winningColor.length > 0
+            ? round.winningColor
+            : num === 0
+            ? ['red', 'violet']
+            : num === 5
+            ? ['green', 'violet']
+            : num % 2 === 0
+            ? ['red']
+            : ['green'];
+        const winningSize: BetSize = round.winningSize || (num >= 5 ? 'big' : 'small');
+
+        const resolvedObj: GameRound = {
           period: round.period,
           gameType: mode,
-          startTime: round.startTime || now,
-          endTime: round.endTime,
-          winningNumber: -1,
-          winningColor: [],
-          winningSize: 'small',
+          startTime: round.startTime || now - 30000,
+          endTime: round.endTime || now,
+          winningNumber: num,
+          winningColor,
+          winningSize,
           totalBetVolume: round.totalBetVolume || 0,
-          totalPayout: 0,
+          totalPayout: round.totalPayout || 0,
           hash: round.hash || `SHA256_${round.period}`,
-          isResolved: false,
+          isResolved: true,
           manualOverrideNumber: round.manualOverrideNumber ?? null
         };
-        this.activeRoundsByMode[mode] = syncedActive;
-        if (this.currentRound.gameType === mode) {
-          this.currentRound = syncedActive;
+
+        if (target && target.period === round.period) {
+          const nextRound = this.generateNewRound(mode, resolvedObj.endTime);
+          this.activeRoundsByMode[mode] = nextRound;
+          if (this.currentRound.gameType === mode) {
+            this.currentRound = nextRound;
+          }
+        }
+
+        if (existingIdx >= 0) {
+          this.pastRounds[existingIdx] = resolvedObj;
+        } else {
+          this.pastRounds.unshift(resolvedObj);
+          addedResolved = true;
+        }
+        changed = true;
+        continue;
+      }
+
+      if (!round.isResolved && round.endTime && round.endTime > now) {
+        if (!target || target.period < round.period) {
+          const syncedActive: GameRound = {
+            period: round.period,
+            gameType: mode,
+            startTime: round.startTime || now,
+            endTime: round.endTime,
+            winningNumber: -1,
+            winningColor: [],
+            winningSize: 'small',
+            totalBetVolume: round.totalBetVolume || 0,
+            totalPayout: 0,
+            hash: round.hash || `SHA256_${round.period}`,
+            isResolved: false,
+            manualOverrideNumber: round.manualOverrideNumber ?? null
+          };
+          this.activeRoundsByMode[mode] = syncedActive;
+          if (this.currentRound.gameType === mode) {
+            this.currentRound = syncedActive;
+          }
+          changed = true;
+        } else if (target && target.period === round.period && round.manualOverrideNumber !== undefined) {
+          target.manualOverrideNumber = round.manualOverrideNumber;
+          if (this.currentRound.period === round.period) {
+            this.currentRound.manualOverrideNumber = round.manualOverrideNumber;
+          }
+          changed = true;
         }
       } else if (target && target.period === round.period && round.manualOverrideNumber !== undefined) {
         target.manualOverrideNumber = round.manualOverrideNumber;
         if (this.currentRound.period === round.period) {
           this.currentRound.manualOverrideNumber = round.manualOverrideNumber;
         }
-      }
-    } else if (target && target.period === round.period && round.manualOverrideNumber !== undefined) {
-      target.manualOverrideNumber = round.manualOverrideNumber;
-      if (this.currentRound.period === round.period) {
-        this.currentRound.manualOverrideNumber = round.manualOverrideNumber;
+        changed = true;
       }
     }
-    this.safeNotifyListeners();
+
+    if (addedResolved) {
+      this.normalizeWinGoPastRounds(30);
+    }
+    if (changed) {
+      this.reconcilePendingBetsFromHistory();
+      this.safeNotifyListeners();
+    }
+  }
+
+  public ingestCloudRound(round: Partial<GameRound>) {
+    this.ingestCloudRoundsBatch([round]);
+  }
+
+  public ingestCloudDepositsBatch(deps: DepositRecord[]) {
+    if (!Array.isArray(deps) || deps.length === 0) return;
+    const byId = new Map<string, DepositRecord>();
+    for (const d of this.deposits) {
+      if (d && d.id) byId.set(d.id, d);
+    }
+    let changed = false;
+    for (const dep of deps) {
+      if (!dep || !dep.id || !dep.uid) continue;
+      const existing = byId.get(dep.id);
+      if (!existing) {
+        this.deposits.unshift(dep);
+        byId.set(dep.id, dep);
+        changed = true;
+      } else if (existing.status !== dep.status) {
+        existing.status = dep.status;
+        existing.reviewedAt = dep.reviewedAt;
+        existing.reviewedBy = dep.reviewedBy;
+        existing.adminNote = dep.adminNote;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.deposits.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
+      this.enforceAllUsersLedgerIntegrity();
+      this.saveToStorage();
+      this.safeNotifyListeners();
+    }
   }
 
   public ingestCloudDeposit(dep: DepositRecord) {
-    if (!dep || !dep.id || !dep.uid) return;
-    const existing = this.deposits.find((d) => d.id === dep.id);
+    this.ingestCloudDepositsBatch([dep]);
+  }
+
+  public ingestCloudWithdrawalsBatch(items: WithdrawalRecord[]) {
+    if (!Array.isArray(items) || items.length === 0) return;
+    const byId = new Map<string, WithdrawalRecord>();
+    for (const w of this.withdrawals) {
+      if (w && w.id) byId.set(w.id, w);
+    }
     let changed = false;
-    if (!existing) {
-      this.deposits.unshift(dep);
-      changed = true;
-    } else if (existing.status !== dep.status) {
-      existing.status = dep.status;
-      existing.reviewedAt = dep.reviewedAt;
-      existing.reviewedBy = dep.reviewedBy;
-      existing.adminNote = dep.adminNote;
-      changed = true;
+    for (const w of items) {
+      if (!w || !w.id || !w.uid) continue;
+      const existing = byId.get(w.id);
+      if (!existing) {
+        this.withdrawals.unshift(w);
+        byId.set(w.id, w);
+        changed = true;
+      } else if (existing.status !== w.status) {
+        existing.status = w.status;
+        existing.processedAt = w.processedAt;
+        existing.processedBy = w.processedBy;
+        existing.rejectionReason = w.rejectionReason;
+        changed = true;
+      }
     }
     if (changed) {
+      this.withdrawals.sort((a, b) => (b.requestedAt || 0) - (a.requestedAt || 0));
       this.enforceAllUsersLedgerIntegrity();
       this.saveToStorage();
       this.safeNotifyListeners();
@@ -6526,42 +7064,35 @@ class AuthoritativeStore {
   }
 
   public ingestCloudWithdrawal(w: WithdrawalRecord) {
-    if (!w || !w.id || !w.uid) return;
-    const existing = this.withdrawals.find((item) => item.id === w.id);
-    let changed = false;
-    if (!existing) {
-      this.withdrawals.unshift(w);
-      changed = true;
-    } else if (existing.status !== w.status) {
-      existing.status = w.status;
-      existing.processedAt = w.processedAt;
-      existing.processedBy = w.processedBy;
-      existing.rejectionReason = w.rejectionReason;
-      changed = true;
-    }
-    if (changed) {
-      this.enforceAllUsersLedgerIntegrity();
-      this.saveToStorage();
-      this.safeNotifyListeners();
-    }
+    this.ingestCloudWithdrawalsBatch([w]);
   }
 
-  public ingestCloudTransaction(tx: WalletTransaction) {
-    if (!tx || !tx.id || !tx.uid || this.deletedUserUids.has(tx.uid)) return;
-    const existing = this.transactions.find((t) => t.id === tx.id);
+  public ingestCloudTransactionsBatch(txs: WalletTransaction[]) {
+    if (!Array.isArray(txs) || txs.length === 0) return;
+    const byId = new Map<string, WalletTransaction>();
+    for (const t of this.transactions) {
+      if (t && t.id) byId.set(t.id, t);
+    }
+    let addedNew = false;
     let changed = false;
-    if (!existing) {
-      const seal = this.computeTransactionSeal(tx);
-      if (tx.integritySeal && tx.integritySeal !== seal) return;
-      this.transactions.unshift({
-        ...tx,
-        integritySeal: seal
-      });
+    for (const tx of txs) {
+      if (!tx || !tx.id || !tx.uid || this.deletedUserUids.has(tx.uid)) continue;
+      const existing = byId.get(tx.id);
+      if (!existing) {
+        const seal = this.computeTransactionSeal(tx);
+        if (tx.integritySeal && tx.integritySeal !== seal) continue;
+        const sealedTx = { ...tx, integritySeal: seal };
+        this.transactions.unshift(sealedTx);
+        byId.set(tx.id, sealedTx);
+        addedNew = true;
+        changed = true;
+      } else if (existing.status !== tx.status && tx.status) {
+        existing.status = tx.status;
+        changed = true;
+      }
+    }
+    if (addedNew) {
       this.sanitizeTransactionsLedger();
-      changed = true;
-    } else if (existing.status !== tx.status && tx.status) {
-      existing.status = tx.status;
-      changed = true;
     }
     if (changed) {
       this.enforceAllUsersLedgerIntegrity();
@@ -6569,6 +7100,10 @@ class AuthoritativeStore {
       this.saveToStorage();
       this.safeNotifyListeners();
     }
+  }
+
+  public ingestCloudTransaction(tx: WalletTransaction) {
+    this.ingestCloudTransactionsBatch([tx]);
   }
 
   public ingestCloudAdminSettings(incomingSettings: Partial<AdminSettings>) {
@@ -6679,8 +7214,19 @@ class AuthoritativeStore {
     this.safeNotifyListeners();
   }
 
-  public updateUserFromFirestore(userData: Partial<UserRecord> & { uid: string }) {
-    if (!userData.uid || this.deletedUserUids.has(userData.uid)) return;
+  public ingestCloudUsersBatch(usersData: Array<Partial<UserRecord> & { uid: string }>) {
+    if (!Array.isArray(usersData) || usersData.length === 0) return;
+    for (const uData of usersData) {
+      this.upsertUserFromFirestoreInternal(uData);
+    }
+    this.bindPendingReferrals();
+    this.savePermanentUsersRegistry();
+    this.saveToStorage();
+    this.notify();
+  }
+
+  private upsertUserFromFirestoreInternal(userData: Partial<UserRecord> & { uid: string }): UserRecord | undefined {
+    if (!userData.uid || this.deletedUserUids.has(userData.uid)) return undefined;
 
     const existing = this.users[userData.uid];
     const existingUpdatedAt = Number(existing?.updatedAt || 0);
@@ -6695,7 +7241,6 @@ class AuthoritativeStore {
       (existing ? this.normalizePhone(existing.phone) : '') ||
       (userData.uid.startsWith('usr_') ? this.normalizePhone(userData.uid.slice(4)) : '');
 
-    // Prevent a duplicate UID record with balance: 0 from clobbering a positive balance for the same phone or UID
     const siblingWithBalance = cleanPhone
       ? Object.values(this.users).find(
           (u) => u && u.uid !== userData.uid && this.normalizePhone(u.phone) === cleanPhone && Number(u.balance) > 0
@@ -6889,11 +7434,17 @@ class AuthoritativeStore {
         devices: userData.devices || {}
       };
     }
+    return this.users[userData.uid];
+  }
+
+  public updateUserFromFirestore(userData: Partial<UserRecord> & { uid: string }) {
+    const updated = this.upsertUserFromFirestoreInternal(userData);
+    if (!updated) return undefined;
     this.bindPendingReferrals();
     this.savePermanentUsersRegistry();
     this.saveToStorage();
     this.notify();
-    return this.users[userData.uid];
+    return updated;
   }
 
   // Financials & Device Approvals
@@ -7450,7 +8001,24 @@ class AuthoritativeStore {
 
   public approveDevice(uid: string, deviceId: string, adminId: string): boolean {
     const user = this.users[uid];
-    if (!user || !user.devices || !user.devices[deviceId]) return false;
+    if (!user || !deviceId) return false;
+    if (!user.devices || typeof user.devices !== 'object') {
+      user.devices = {};
+    }
+    const now = Date.now();
+    if (!user.devices[deviceId]) {
+      user.devices[deviceId] = {
+        deviceId,
+        deviceName: user.deviceName || user.deviceModel || 'Approved Device',
+        deviceModel: user.deviceModel || user.deviceName || 'Approved Device',
+        os: 'Android',
+        browser: 'Chrome',
+        registeredAt: now,
+        requestedAt: now,
+        lastUsedAt: now,
+        status: 'approved'
+      };
+    }
 
     // 1 Number = 1 Device Policy: Revoke any previously approved devices for this user
     Object.keys(user.devices).forEach((otherId) => {
@@ -7461,9 +8029,18 @@ class AuthoritativeStore {
     });
 
     user.devices[deviceId].status = 'approved';
-    user.devices[deviceId].approvedAt = Date.now();
+    user.devices[deviceId].approvedAt = now;
     user.devices[deviceId].approvedBy = adminId;
-    user.devices[deviceId].rejectionReason = undefined;
+    delete user.devices[deviceId].rejectionReason;
+    user.boundDeviceId = deviceId;
+    user.lastUsedDeviceId = deviceId;
+
+    rtdbUpdate(rtdbRef(rtdb, `users/${uid}`), {
+      boundDeviceId: deviceId,
+      lastUsedDeviceId: deviceId,
+      devices: user.devices,
+      updatedAt: now
+    }).catch(() => {});
 
     this.savePermanentUsersRegistry();
     if (typeof window !== 'undefined') {
@@ -8341,36 +8918,54 @@ class AuthoritativeStore {
     });
 
     const l1Uids = new Set(level1Members.map((m) => m.uid));
-    const l2Refs = this.referrals.filter((r) => l1Uids.has(r.referrerUid) && !r.referredUid.startsWith('usr_demo_'));
-    const level2Members: MlmMemberNode[] = l2Refs.map((r) => {
-      const totalTurn = Object.values(r.dailyTurnover || {}).reduce((s, v) => s + v, 0);
-      return {
-        uid: r.referredUid,
-        username: r.referredUsername,
-        phoneMasked: r.referredPhone ? `+91 ${r.referredPhone.slice(0, 2)}****${r.referredPhone.slice(-2)}` : '+91 99****00',
-        level: 2,
-        totalTurnover: totalTurn,
-        commissionGenerated: Number(((totalTurn * (this.adminSettings.mlmLevel2Rate ?? 0.5)) / 100).toFixed(2)),
-        joinedAt: r.registeredAt,
-        isActiveToday: totalTurn > 0
-      };
-    });
+    const l2Refs = Array.from(l1Uids).flatMap((l1Uid) =>
+      this.getUserReferrals(l1Uid).filter((r) => !r.referredUid.startsWith('usr_demo_') && r.referredUid !== uid)
+    );
+    const l2Seen = new Set<string>();
+    const level2Members: MlmMemberNode[] = l2Refs
+      .filter((r) => {
+        if (l2Seen.has(r.referredUid)) return false;
+        l2Seen.add(r.referredUid);
+        return true;
+      })
+      .map((r) => {
+        const totalTurn = Object.values(r.dailyTurnover || {}).reduce((s, v) => s + v, 0);
+        return {
+          uid: r.referredUid,
+          username: r.referredUsername,
+          phoneMasked: r.referredPhone ? `+91 ${r.referredPhone.slice(0, 2)}****${r.referredPhone.slice(-2)}` : '+91 99****00',
+          level: 2,
+          totalTurnover: totalTurn,
+          commissionGenerated: Number(((totalTurn * (this.adminSettings.mlmLevel2Rate ?? 0.5)) / 100).toFixed(2)),
+          joinedAt: r.registeredAt,
+          isActiveToday: totalTurn > 0
+        };
+      });
 
     const l2Uids = new Set(level2Members.map((m) => m.uid));
-    const l3Refs = this.referrals.filter((r) => l2Uids.has(r.referrerUid) && !r.referredUid.startsWith('usr_demo_'));
-    const level3Members: MlmMemberNode[] = l3Refs.map((r) => {
-      const totalTurn = Object.values(r.dailyTurnover || {}).reduce((s, v) => s + v, 0);
-      return {
-        uid: r.referredUid,
-        username: r.referredUsername,
-        phoneMasked: r.referredPhone ? `+91 ${r.referredPhone.slice(0, 2)}****${r.referredPhone.slice(-2)}` : '+91 99****00',
-        level: 3,
-        totalTurnover: totalTurn,
-        commissionGenerated: Number(((totalTurn * (this.adminSettings.mlmLevel3Rate ?? 0.25)) / 100).toFixed(2)),
-        joinedAt: r.registeredAt,
-        isActiveToday: totalTurn > 0
-      };
-    });
+    const l3Refs = Array.from(l2Uids).flatMap((l2Uid) =>
+      this.getUserReferrals(l2Uid).filter((r) => !r.referredUid.startsWith('usr_demo_') && r.referredUid !== uid)
+    );
+    const l3Seen = new Set<string>();
+    const level3Members: MlmMemberNode[] = l3Refs
+      .filter((r) => {
+        if (l3Seen.has(r.referredUid)) return false;
+        l3Seen.add(r.referredUid);
+        return true;
+      })
+      .map((r) => {
+        const totalTurn = Object.values(r.dailyTurnover || {}).reduce((s, v) => s + v, 0);
+        return {
+          uid: r.referredUid,
+          username: r.referredUsername,
+          phoneMasked: r.referredPhone ? `+91 ${r.referredPhone.slice(0, 2)}****${r.referredPhone.slice(-2)}` : '+91 99****00',
+          level: 3,
+          totalTurnover: totalTurn,
+          commissionGenerated: Number(((totalTurn * (this.adminSettings.mlmLevel3Rate ?? 0.25)) / 100).toFixed(2)),
+          joinedAt: r.registeredAt,
+          isActiveToday: totalTurn > 0
+        };
+      });
 
     return {
       referralCode: user?.referralCode || 'BINGO777',
@@ -9223,10 +9818,21 @@ class AuthoritativeStore {
   }
 
   public logAudit(log: Omit<AuditLogItem, 'id' | 'timestamp'>) {
-    const item: AuditLogItem = { ...log, id: 'log_' + Math.random().toString(36).substring(2, 9), timestamp: Date.now() };
+    const item: AuditLogItem = {
+      ...log,
+      id: 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7),
+      timestamp: Date.now()
+    };
     this.auditLogs.unshift(item);
-    if (this.auditLogs.length > 200) this.auditLogs.pop();
+    if (this.auditLogs.length > 250) this.auditLogs.pop();
+    try {
+      safeStorage.setItem('bingo777_audit_logs_cache', JSON.stringify(this.auditLogs.slice(0, 120)));
+    } catch {}
+    if (this.onAuditLogSaved) {
+      try { this.onAuditLogSaved(item); } catch {}
+    }
     this.saveToStorage();
+    this.safeNotifyListeners();
   }
 
   // --- MANUAL USER CREATION & PROFILE EDITING (MASTER ADMIN) ---

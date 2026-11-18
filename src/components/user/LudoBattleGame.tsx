@@ -1721,6 +1721,20 @@ export const LudoBattleGame: React.FC<LudoBattleGameProps> = ({
     };
   }, [room?.roomId, stopLocalMicrophone]);
 
+  useEffect(() => {
+    return () => {
+      if (soundEngineAudioCtxRef.current && soundEngineAudioCtxRef.current.state !== 'closed') {
+        soundEngineAudioCtxRef.current.close().catch(() => {});
+      }
+      soundEngineAudioCtxRef.current = null;
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {}
+      }
+    };
+  }, []);
+
   // Cross-tab & local BroadcastChannel for zero-latency voice audio & phrase sync
   useEffect(() => {
     if (!room?.roomId || typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return;

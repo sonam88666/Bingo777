@@ -27,19 +27,50 @@ import {
 } from 'firebase/firestore';
 import {
   getDatabase,
+  DatabaseReference,
   ref as rtdbRef,
-  set as rtdbSet,
+  set as rawRtdbSet,
   get as rtdbGet,
-  push as rtdbPush,
+  push as rawRtdbPush,
   onValue as rtdbOnValue,
   onChildAdded as rtdbOnChildAdded,
-  update as rtdbUpdate,
+  update as rawRtdbUpdate,
   remove as rtdbRemove,
   runTransaction as rtdbRunTransaction,
   query as rtdbQuery,
   limitToLast as rtdbLimitToLast
 } from 'firebase/database';
 import firebaseConfig from '../firebase-applet-config.json';
+
+function sanitizeForRtdb<T>(val: T): T {
+  if (val === undefined) return null as unknown as T;
+  if (val === null || typeof val !== 'object') return val;
+  if (Array.isArray(val)) {
+    return val.map((item) => (item === undefined ? null : sanitizeForRtdb(item))) as unknown as T;
+  }
+  const cleaned: Record<string, any> = {};
+  for (const [k, v] of Object.entries(val as Record<string, any>)) {
+    if (v !== undefined) {
+      cleaned[k] = sanitizeForRtdb(v);
+    }
+  }
+  return cleaned as T;
+}
+
+export function rtdbSet(reference: DatabaseReference, value: unknown): Promise<void> {
+  return rawRtdbSet(reference, sanitizeForRtdb(value));
+}
+
+export function rtdbUpdate(reference: DatabaseReference, values: object): Promise<void> {
+  return rawRtdbUpdate(reference, sanitizeForRtdb(values));
+}
+
+export function rtdbPush(reference: DatabaseReference, value?: unknown) {
+  if (arguments.length < 2) {
+    return rawRtdbPush(reference);
+  }
+  return rawRtdbPush(reference, sanitizeForRtdb(value));
+}
 
 // Suppress noisy @firebase/firestore 10s backend timeout logs when running on RTDB-primary projects
 try {
@@ -170,12 +201,9 @@ export {
   RecaptchaVerifier,
   signInWithPhoneNumber,
   rtdbRef,
-  rtdbSet,
   rtdbGet,
-  rtdbPush,
   rtdbOnValue,
   rtdbOnChildAdded,
-  rtdbUpdate,
   rtdbRemove,
   rtdbRunTransaction,
   rtdbQuery,
